@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hybrid Reasoner Search</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><i class="fa-solid fa-brain"></i> Hybrid Reasoner</h1>
+            <p class="subtitle">Semantic Search with Reasoning</p>
+        </header>
+
+        <div class="search-box">
+            <input type="text" id="queryInput" placeholder="描述你想找的小說... (例如: '主角很強但很低調的奇幻小說')" autofocus>
+            <button id="searchBtn"><i class="fa-solid fa-search"></i> 搜尋</button>
+        </div>
+
+        <div id="loading" class="hidden">
+            <div class="spinner"></div>
+            <p>正在分析語意並搜尋資料庫...</p>
+        </div>
+
+        <div id="resultsArea" class="hidden">
+            <div id="criteriaSection">
+                <h3><i class="fa-solid fa-list-check"></i> 解析條件 (Parsed Criteria)</h3>
+                <div id="criteriaTags"></div>
+            </div>
+            
+            <div id="resultsList"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

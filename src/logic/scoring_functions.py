@@ -1,0 +1,132 @@
+from typing import Any, Dict
+from src.logic.registry import ScoringRegistry
+
+@ScoringRegistry.register("keyword_match")
+def score_keyword_match(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Checks if a keyword exists in a specific field.
+    Params:
+    - field: str (e.g., 'tags', 'classification', 'name')
+    - keyword: str
+    """
+    field = params.get("field")
+    keyword = params.get("keyword", "").lower()
+    
+    if not field or field not in item:
+        return 0.0
+    
+    val = item[field]
+    
+    # Handle List (e.g. tags)
+    if isinstance(val, list):
+        # val is likely list of strings due to our DB flattening
+        # case insensitive check
+        for v in val:
+            if v and keyword in str(v).lower():
+                return 1.0
+        return 0.0
+        
+    text = str(val).lower()
+    if keyword in text:
+        return 1.0
+    return 0.0
+
+@ScoringRegistry.register("numeric_range")
+def score_numeric_range(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Checks if a value is within a range.
+    Params:
+    - field: str (e.g., 'words_total', 'click_count')
+    - min_val: float
+    - max_val: float
+    """
+    field = params.get("field")
+    if not field or field not in item:
+        return 0.0
+        
+    try:
+        val = float(item[field])
+    except (ValueError, TypeError):
+        return 0.0
+        
+    min_val = params.get("min_val")
+    max_val = params.get("max_val")
+    
+    if min_val is not None and val < min_val:
+        return 0.0
+    if max_val is not None and val > max_val:
+        return 0.0
+        
+    return 1.0
+
+@ScoringRegistry.register("status_check")
+def score_status(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Checks novel status (completed/ongoing).
+    Params:
+    - target_status: str ('completed' or 'ongoing')
+    """
+    target = params.get("target_status", "").lower()
+    current = str(item.get("publish_status", "")).lower()
+    
+    if not target:
+        return 1.0 # No preference
+        
+    return 1.0 if target == current else 0.0
+
+@ScoringRegistry.register("author_match")
+def score_author_match(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Checks if the author matches.
+    Params:
+    - author_name: str
+    """
+    target_author = params.get("author_name", "").lower()
+    item_author = str(item.get("author", "")).lower()
+    item_nickname = str(item.get("author_nickname", "")).lower()
+    
+    if target_author in item_author or target_author in item_nickname:
+        return 1.0
+    return 0.0
+
+@ScoringRegistry.register("is_free_check")
+def score_is_free(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Checks if the book is free.
+    Params:
+    - require_free: bool
+    """
+    require_free = params.get("require_free", True)
+    is_free = bool(item.get("is_free", False))
+    
+    if require_free and not is_free:
+        return 0.0
+    return 1.0
+
+@ScoringRegistry.register("age_check")
+def score_age_check(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Penalizes restricted content if user is underage or generally filters.
+    Params:
+    - allow_restricted: bool
+    """
+    allow_restricted = params.get("allow_restricted", False)
+    restricted_age = item.get("restricted_age", 0)
+    
+    if not allow_restricted and restricted_age > 0:
+        return 0.0
+    return 1.0
+
+@ScoringRegistry.register("audio_available")
+def score_audio_available(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Checks if TTS/Audio is available.
+    Params:
+    - require_audio: bool
+    """
+    require_audio = params.get("require_audio", True)
+    has_tts = bool(item.get("tts", False))
+    
+    if require_audio and not has_tts:
+        return 0.0
+    return 1.0
