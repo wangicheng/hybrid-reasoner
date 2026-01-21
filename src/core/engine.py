@@ -7,6 +7,7 @@ from src.core.database import Database
 from src.logic.registry import ScoringRegistry
 from qdrant_client.http import models as rest  # For Qdrant Filter
 import src.logic.scoring_functions 
+from src.core.explainer import generate_explanation 
 
 class HybridEngine:
     def __init__(self):
@@ -69,12 +70,10 @@ class HybridEngine:
                 keyword = params.get("keyword")
                 
                 if field == "classification" and keyword:
-                    # Assuming classification is stored as field `classification` or `classification.name`
-                    # We'll try `classification` first, or usage of `match_any` if it's a list?
-                    # Based on DB schema, it seems to be a single string often.
+                    # Use nested path for the classification name
                     conditions.append(
                         rest.FieldCondition(
-                            key="classification", 
+                            key="classification.name",  # Fixed: use nested path
                             match=rest.MatchValue(value=keyword)
                         )
                     )
@@ -217,8 +216,40 @@ class HybridEngine:
         scored_items.sort(key=lambda x: x["score"], reverse=True)
         
         # Return top N results with metadata
+        final_results = scored_items[:limit]
+
+        # --- NEW: Generate Explainability (只針對前 3 名) ---
+        # 使用 Gemini 的長 Context Window 特性，可以傳入更多資訊
+        top_n_explain = 3 
+        
+        for i, res in enumerate(final_results):
+            if i < top_n_explain:
+                item = res['item']
+                
+                # 準備 Context Chunks:
+                # 由於 Gemini 1.5 Flash 有百萬級 Token Window，
+                # 我們可以傳入完整的 intro，甚至未來可加入評論 (reviews) 或章節內容
+                chunks_to_analyze = [item.get('intro', '')]
+                
+                # 如果未來有 'reviews' 或 'chapter_1' 欄位，直接 append 進去
+                # if 'reviews' in item: chunks_to_analyze.extend(item['reviews'])
+                
+                # 呼叫 Explainer (使用新的 context_chunks 參數)
+                explanation = generate_explanation(
+                    query=user_query,
+                    book_item=item,
+                    context_chunks=chunks_to_analyze
+                )
+                
+                # 將解釋寫入結果物件
+                res['explanation'] = explanation
+            else:
+                # 第 4 名以後不生成，給個預設值或留空
+                res['explanation'] = None
+        # ------------------------------------------------
+        
         return {
             "query": user_query,
             "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-            "results": scored_items[:limit]
+            "results": final_results
         }

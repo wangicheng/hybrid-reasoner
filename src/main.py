@@ -1,83 +1,110 @@
-import argparse
-import asyncio
+"""
+Hybrid Reasoner - Main Search Interface
+
+Usage:
+    python -m src.main
+"""
+
 import sys
-import json
 from pathlib import Path
-from typing import List, Dict, Any
 
-from src.core.llm import parse_query
-from src.core.vector_store import VectorStore
-from src.core.database import Database
-from src.logic.registry import ScoringRegistry
-import src.logic.scoring_functions 
-
+# Ensure project root is in path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 from src.core.engine import HybridEngine
-from src.core.database import Database
-from src.core.vector_store import VectorStore
 
-def seed_data(db: Database, vs: VectorStore):
-    """Populates DB and VectorStore with crawled data."""
-    data_path = Path("data/books_crawled.json")
-    if not data_path.exists():
-        print("No crawled data found at data/books_crawled.json. Please run src/crawler.py first.")
+
+def print_separator(char="=", length=60):
+    print(char * length)
+
+
+def display_results(result: dict):
+    """Display search results in a user-friendly format."""
+    
+    print_separator()
+    print(f"📝 Query: {result['query']}")
+    print_separator("-")
+    
+    # Parsed Criteria
+    print("\n🔍 AI 理解 (Parsed Criteria):")
+    if result['parsed_criteria']:
+        for i, c in enumerate(result['parsed_criteria'], 1):
+            name = c.get('name', 'N/A')
+            weight = c.get('weight', 0)
+            params = c.get('parameters', {})
+            # Filter out None values from params for cleaner display
+            params_clean = {k: v for k, v in params.items() if v is not None}
+            print(f"  {i}. {name} (權重: {weight:.2f})")
+            if params_clean:
+                print(f"     參數: {params_clean}")
+    else:
+        print("  (無具體條件，純語意搜尋)")
+    
+    print_separator("-")
+    
+    # Results
+    print(f"\n📚 搜尋結果 (共 {len(result['results'])} 筆):\n")
+    
+    if not result['results']:
+        print("  沒有找到符合條件的書籍。")
         return
-
-    print("Loading crawled data...")
-    with open(data_path, "r", encoding="utf-8") as f:
-        items = json.load(f)
     
-    # Transform keys if necessary, but our DB expects dicts that roughly match
-    # Database.add_item handles extraction.
-    
-    for item in items:
-        # DB add
-        db.add_item(item)
-    
-    # Vector Seed
-    # Vector store expects items with 'id' and 'intro'/'name'
-    vs.add_items(items)
-    print(f"Seeding complete. Added {len(items)} items.")
-
-def main():
-    parser = argparse.ArgumentParser(description="Hybrid Reasoner CLI (Novels)")
-    parser.add_argument("--query", type=str, help="Natural language query")
-    parser.add_argument("--seed", action="store_true", help="Seed database with crawled data")
-    args = parser.parse_args()
-    
-    # Initialize separate instances for seeding if needed, or just let Engine handle it (Engine has its own DB/VS init)
-    # But for seeding we need direct access.
-    
-    if args.seed:
-        db = Database()
-        vs = VectorStore(collection_name="novels")
-        seed_data(db, vs)
-        if not args.query:
-            return
-
-    if not args.query:
-        print("Please provide a query with --query")
-        return
-
-    print(f"Processing query: {args.query}")
-    
-    engine = HybridEngine()
-    search_result = engine.search(args.query, limit=5)
-    
-    print(f"Parsed Criteria: {search_result['parsed_criteria']}")
-    print("\nTop Recommendations:")
-    
-    for res in search_result['results']:
+    for i, res in enumerate(result['results'], 1):
         item = res['item']
         score = res['score']
-        status = "完結" if item["publish_status"] == "completed" else "連載"
-        print(f"[{score:.4f}] {item['name']} ({status}) - {item['classification']}")
-        print(f"         Tags: {item['tags']}")
-        print(f"         Intro: {item['intro'][:50]}...")
-        print("-" * 40)
+        explanation = res.get('explanation')
+        
+        print(f"[第 {i} 名] 《{item.get('name', 'N/A')}》")
+        print(f"  作者: {item.get('author', 'N/A')}")
+        print(f"  分類: {item.get('classification', 'N/A')}")
+        print(f"  標籤: {', '.join(item.get('tags', [])) if item.get('tags') else 'N/A'}")
+        print(f"  總分: {score:.4f}")
+        
+        if explanation:
+            print(f"\n  💡 AI 推薦理由:")
+            # Wrap long explanations
+            for line in explanation.split('\n'):
+                print(f"     {line}")
+        
+        print()
 
-if __name__ == "__main__":
-    main()
+
+def main():
+    print_separator("=")
+    print("🎯 Hybrid Reasoner - 小說推薦系統")
+    print("   (輸入 'q' 或 'exit' 離開)")
+    print_separator("=")
+    
+    # Initialize Engine
+    print("\n⏳ 正在初始化搜尋引擎...")
+    engine = HybridEngine()
+    print("✅ 初始化完成！\n")
+    
+    while True:
+        try:
+            query = input("請輸入查詢 (e.g., '奇幻小說有魔法的'): ").strip()
+            
+            if not query:
+                continue
+            
+            if query.lower() in ('q', 'exit', 'quit'):
+                print("\n👋 再見！")
+                break
+            
+            print(f"\n⏳ 正在搜尋 \"{query}\"...\n")
+            
+            result = engine.search(query, limit=5)
+            display_results(result)
+            
+        except KeyboardInterrupt:
+            print("\n\n👋 再見！")
+            break
+        except Exception as e:
+            print(f"\n❌ 錯誤: {e}")
+            import traceback
+            traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()

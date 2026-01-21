@@ -4,10 +4,10 @@ from src.core.llm import parse_query
 from src.models.schemas import QueryParseResult, ScoringCriteria
 
 class TestParser(unittest.TestCase):
-    @patch("src.core.llm.genai.GenerativeModel")
-    def test_parse_query(self, mock_model_class):
+    @patch("src.core.llm.genai.Client")
+    def test_parse_query(self, mock_client_class):
         # Setup mock
-        mock_model_instance = mock_model_class.return_value
+        mock_client_instance = mock_client_class.return_value
         mock_response = MagicMock()
         
         # Mocking the text response to be valid JSON matching our schema
@@ -26,7 +26,9 @@ class TestParser(unittest.TestCase):
         }
         """
         mock_response.text = mock_json_response
-        mock_model_instance.generate_content.return_value = mock_response
+        
+        # Configure the mock to return this response when generate_content is called
+        mock_client_instance.models.generate_content.return_value = mock_response
         
         # Run function
         result = parse_query("cheap laptop")
