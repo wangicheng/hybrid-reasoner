@@ -11,11 +11,25 @@ app = FastAPI()
 class SearchRequest(BaseModel):
     query: str
 
-# Engine Instance
-engine = HybridEngine()
+# Engine Instance (Lazy Load)
+engine = None
+
+@app.on_event("startup")
+async def startup_event():
+    global engine
+    print("Initializing Hybrid Engine... (This may take a few seconds)")
+    try:
+        engine = HybridEngine()
+        print("Hybrid Engine initialized successfully!")
+    except Exception as e:
+        print(f"Failed to initialize Engine: {e}")
 
 @app.post("/api/search")
 async def search(request: SearchRequest):
+    global engine
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine is still initializing")
+        
     try:
         results = engine.search(request.query, limit=10)
         return results

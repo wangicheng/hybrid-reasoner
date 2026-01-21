@@ -5,12 +5,17 @@ Usage:
     python -m src.main
 """
 
+import os
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Ensure project root is in path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Load environment variables from .env file
+load_dotenv()
 
 from src.core.engine import HybridEngine
 
@@ -75,6 +80,14 @@ def main():
     print("🎯 Hybrid Reasoner - 小說推薦系統")
     print("   (輸入 'q' 或 'exit' 離開)")
     print_separator("=")
+
+    # Check API Key
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        print("❌ Error: GOOGLE_API_KEY not found in environment variables.")
+        print("Please set it in your .env file.")
+        return
+    print(f"✅ API Key found: {api_key[:5]}...")
     
     # Initialize Engine
     print("\n⏳ 正在初始化搜尋引擎...")

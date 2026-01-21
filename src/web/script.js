@@ -136,6 +136,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const statusIcon = item.publish_status === 'completed' ? '<i class="fa-solid fa-check-circle"></i>' : '<i class="fa-solid fa-pen-nib"></i>';
       const statusText = item.publish_status === 'completed' ? '完結' : '連載中';
 
+      // AI Explanation HTML
+      let explanationHtml = '';
+      if (res.explanation) {
+        explanationHtml = `
+          <div class="ai-explanation">
+            <div class="ai-explanation-header">
+              <i class="fa-solid fa-wand-magic-sparkles"></i> AI 推薦理由
+            </div>
+            <p class="ai-explanation-text">${res.explanation}</p>
+          </div>
+        `;
+      }
+
       card.innerHTML = `
                 <div class="card-header">
                     <div>
@@ -151,6 +164,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 <div class="tags-container">${tagsHtml}</div>
                 <p class="novel-intro">${item.intro || '無簡介...'}</p>
+                
+                ${explanationHtml}
                 
                 <button class="breakdown-toggle">顯示推理過程 <i class="fa-solid fa-chevron-down"></i></button>
                 ${breakdownHtml}

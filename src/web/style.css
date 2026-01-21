@@ -249,6 +249,54 @@ header h1 {
     font-size: 0.8rem;
 }
 
+/* AI Explanation */
+.ai-explanation {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(236, 72, 153, 0.15) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    border-radius: 0.75rem;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.ai-explanation::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #8b5cf6, #ec4899, #8b5cf6);
+    background-size: 200% 100%;
+    animation: shimmer 3s linear infinite;
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.ai-explanation-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    color: #c4b5fd;
+    margin-bottom: 0.5rem;
+}
+
+.ai-explanation-header i {
+    color: #f472b6;
+}
+
+.ai-explanation-text {
+    color: #e5e7eb;
+    line-height: 1.7;
+    margin: 0;
+    font-size: 0.95rem;
+}
+
 /* Breakdown styles */
 .breakdown-toggle {
     background: none;

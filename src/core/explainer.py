@@ -42,7 +42,10 @@ def generate_explanation(query: str, book_item: Dict[str, Any], context_chunks: 
             model=model_id,
             contents=prompt
         )
-        return response.text.strip()
+        if response.text:
+            return response.text.strip()
+        else:
+            return "無法生成解釋 (可能觸發安全過濾或無回應)。"
     except Exception as e:
         print(f"Error generating explanation with Google GenAI: {e}")
         return "Gemini 正在閱讀大量資料，暫時無法生成解釋。"
