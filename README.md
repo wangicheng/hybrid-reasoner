@@ -1,20 +1,35 @@
-# Hybrid Reasoner (Novels)
+# Hybrid Reasoner (Novels) - Ver 1.1
 
 這是一個結合 **向量檢索 (Vector Search)** 與 **規則評分 (Rule-based Scoring)** 的混合推薦系統。專案以小說推薦為範例，利用 LLM (Large Language Model) 解析使用者的自然語言查詢，將其轉換為具體的結構化搜尋條件，並結合語意相似度進行精確排序。
 
+**Ver 1.1 更新重點：**
+
+* 整合 **Google Gemini** 模型作為推理核心。
+* 新增 **Logic Push-down** 優化，提升檢索效率。
+* 新增 **Explainability**，讓系統能解釋推薦理由。
+* 全新 **Web UI** 介面與 Windows 一鍵啟動腳本。
+
 ## ✨ 特色 (Features)
 
-*   **混合檢索引擎**: 結合 Qdrant 向量資料庫與傳統欄位過濾/評分。
-*   **自然語言查詢**: 使用 OpenAI 模型解析查詢意圖 (例如: "找一本字數超過十萬字的奇幻小說")。
-*   **自動化爬蟲**: 從 MirrorFiction 抓取小說資料作為測試數據。
-*   **Web 介面**: 提供簡易的搜尋前端。
-*   **可擴充評分邏輯**: 透過 `ScoringRegistry` 輕鬆新增評分規則。
+* **混合檢索引擎**: 結合 Qdrant 向量資料庫與傳統欄位過濾/評分 (Logic Push-down supported)。
+* **自然語言查詢 (Gemini Powered)**: 使用 Google Gemini 模型解析模糊的查詢意圖 (例如: "找一本字數超過十萬字的奇幻小說")，並生成結構化搜尋條件。
+* **可解釋性 (Explainability)**: 系統不僅推薦書籍，還會告訴你*為什麼*這本書符合你的需求。
+* **自動化爬蟲**: 從 MirrorFiction 抓取小說資料作為測試數據。
+* **Modern Web UI**: 提供直觀的網頁搜尋介面。
+* **Windows 一鍵啟動**: 透過 `run_web.bat` 快速啟動服務。
 
 ## 🛠️ 安裝 (Installation)
 
-1.  **複製專案**
+1. **複製專案**
 
-2.  **建立虛擬環境 (建議)**
+    ```bash
+    git clone https://github.com/wangicheng/hybrid-reasoner.git
+    cd hybrid-reasoner
+    git checkout 1.1ver
+    ```
+
+2. **建立虛擬環境 (建議)**
+
     ```bash
     python -m venv venv
     # Windows
@@ -23,53 +38,68 @@
     source venv/bin/activate
     ```
 
-3.  **安裝依賴套件**
+3. **安裝依賴套件**
+
     ```bash
     pip install -r requirements.txt
     ```
 
 ## ⚙️ 設定 (Configuration)
 
-1.  複製 `.env.example` 為 `.env`：
+1. 複製 `.env.example` 為 `.env`：
+
     ```bash
-    cp .env.example .env
     # Windows (PowerShell)
     Copy-Item .env.example .env
     ```
 
-2.  編輯 `.env` 檔案，填入您的 OpenAI API Key：
+2. 編輯 `.env` 檔案，填入您的 **Google Gemini API Key**：
+
     ```ini
-    OPENAI_API_KEY=sk-your-key-here
-    # 如使用自定義 Endpoint 可修改
-    # OPENAI_BASE_URL=...
-    # LLM_MODEL_ID=gpt-4o
+    GOOGLE_API_KEY=your_gemini_api_key_here
+    # 如有需要可調整 Qdrant 設定
+    # QDRANT_HOST=localhost
+    # QDRANT_PORT=6333
     ```
 
 ## 🚀 快速開始 (Quick Start)
 
-### 1. 抓取資料 (Crawling)
-執行爬蟲腳本抓取 MirrorFiction 的小說資料。
-```bash
-python -m src.crawler
-# 預設會建立 data/books_crawled.json
-```
-*(注意：請先確認 `src/crawler.py` 腳本最後是否有呼叫執行的程式碼，若無則需手動執行)*
+### Windows 使用者 (推薦)
 
-### 2. 建立索引與資料庫 (Seeding)
-將抓取下來的資料寫入 Qdrant 向量資料庫與 SQLite/Memory。
+直接雙擊專案根目錄下的 **`run_web.bat`** 腳本，即可自動啟動伺服器並開啟瀏覽器。
+
+---
+
+### 手動啟動步驟
+
+#### 1. 抓取資料與初始化 (首次執行)
+
+如果是第一次執行，需要先抓取資料並建立索引：
+
 ```bash
+# 抓取資料
+python -m src.crawler
+
+# 建立索引 (Seeding)
 python -m src.main --seed
 ```
 
-### 3. 啟動 Web 服務 (Run Web Server)
-啟動 FastAPI 後端伺服器。
+#### 2. 啟動 Web 服務
+
+啟動 FastAPI 後端伺服器：
+
 ```bash
 python -m src.web_api
+# 或使用 uvicorn
+python -m uvicorn src.web_api:app --reload
 ```
+
 伺服器啟動後，請瀏覽器打開 [http://localhost:8000](http://localhost:8000) 即可看到搜尋介面。
 
-### 4. 命令列搜尋 (CLI Search)
-也可以直接透過命令列測試搜尋：
+#### 3. 命令列搜尋 (CLI Search)
+
+也可以直接透過命令列測試搜尋與解釋功能：
+
 ```bash
 python -m src.main --query "推薦幾本關於魔法與冒險的小說，字數要在20萬字以上"
 ```
@@ -77,25 +107,19 @@ python -m src.main --query "推薦幾本關於魔法與冒險的小說，字數�
 ## 📂 專案結構 (Project Structure)
 
 ```text
-c:\dev\hybrid-reasoner\
+hybrid-reasoner/
 ├── data/                 # 資料存放區 (爬蟲結果, Qdrant 儲存檔)
 ├── src/
 │   ├── core/             # 核心模組
-│   │   ├── engine.py     # 混合檢索引擎 (HybridEngine)
-│   │   ├── llm.py        # LLM 查詢解析
+│   │   ├── engine.py     # 混合檢索引擎 (Logic Push-down 實作)
+│   │   ├── llm.py        # LLM 介面 (Gemini Adapter)
 │   │   ├── vector_store.py # 向量資料庫介面
-│   │   └── database.py   # metadata 資料庫
+│   │   └── explainer.py  # 解釋生成模組
 │   ├── logic/            # 評分邏輯
-│   │   ├── scoring_functions.py # 具體的評分函數 (字數, 更新頻率等)
-│   │   └── registry.py   # 函數註冊表
 │   ├── web/              # 前端靜態檔案 (HTML/JS/CSS)
 │   ├── crawler.py        # 爬蟲程式
 │   ├── main.py           # CLI 入口
 │   └── web_api.py        # Web Server 入口
+├── run_web.bat           # Windows 啟動腳本
 └── requirements.txt      # 依賴列表
 ```
-
-## 📝 開發說明
-
-*   **新增評分規則**: 在 `src/logic/scoring_functions.py` 中新增函數，並使用 `@ScoringRegistry.register` 裝飾器註冊。
-*   **調整 LLM 解析**: 修改 `src/core/llm.py` 中的 Prompt 與 Schema 定義。
