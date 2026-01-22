@@ -175,7 +175,7 @@ class HybridEngine:
         search_terms = " ".join(parse_result.search_terms) or parse_result.original_query
         
         # Get candidates from vector store with filter applied at DB level
-        vector_results = self.vs.search(
+        vector_results, query_vector = self.vs.search(
             search_terms, 
             limit=50,
             query_filter=qdrant_filter  # Logic push-down: filter at DB level
@@ -266,5 +266,6 @@ class HybridEngine:
         return {
             "query": user_query,
             "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
+            "query_vector": query_vector,
             "results": final_results
         }

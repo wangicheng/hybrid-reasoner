@@ -2,7 +2,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
 from sentence_transformers import SentenceTransformer
 from src.config import settings
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import os
 from pathlib import Path
 
@@ -35,7 +35,7 @@ class VectorStore:
         query_text: str, 
         limit: int = 10, 
         query_filter: Optional[rest.Filter] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
         Performs semantic search with optional filtering.
         
@@ -46,7 +46,7 @@ class VectorStore:
                           Filters are applied at the database level for efficiency.
         
         Returns:
-            List of search results with id, score, and payload.
+            Tuple of (search results, query vector).
         """
         # Token limit handling (truncation)
         self.model.max_seq_length = 256
@@ -61,10 +61,12 @@ class VectorStore:
         )
         search_result = response.points
         
-        return [
+        formatted_results = [
             {"id": hit.id, "score": hit.score, "payload": hit.payload}
             for hit in search_result
         ]
+        
+        return formatted_results, vector.tolist()
 
     def add_items(self, items: List[Dict[str, Any]]):
         """

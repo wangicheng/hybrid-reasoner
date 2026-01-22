@@ -4,12 +4,15 @@ async function performSearch() {
   const query = document.getElementById('query-input').value;
   const modelId = document.getElementById('model-select').value;
   const resultsContainer = document.getElementById('results-container');
+  const interpretationBox = document.getElementById('search-interpretation');
   const loading = document.getElementById('loading');
 
   if (!query) return;
 
   // UI Reset
   resultsContainer.innerHTML = '';
+  interpretationBox.innerHTML = '';
+  interpretationBox.classList.add('hidden');
   loading.classList.remove('hidden');
 
   try {
@@ -24,6 +27,11 @@ async function performSearch() {
 
     const data = await response.json();
     loading.classList.add('hidden');
+    
+    // --- Display Search Interpretation ---
+    if (data.parsed_criteria && data.parsed_criteria.length > 0) {
+        displayInterpretation(interpretationBox, data.parsed_criteria, data.query_vector);
+    }
 
     if (data.results && data.results.length > 0) {
       data.results.forEach(result => {
@@ -38,6 +46,62 @@ async function performSearch() {
     loading.classList.add('hidden');
     resultsContainer.innerHTML = '<div style="color:red; text-align:center;">發生錯誤，請檢查後端服務是否啟動</div>';
   }
+}
+
+function displayInterpretation(container, criteriaList, queryVector) {
+    container.classList.remove('hidden');
+    
+    // Group by type for cleaner display
+    const tags = [];
+    const keywords = [];
+    let semanticQuery = null;
+
+    criteriaList.forEach(c => {
+        if (c.name === 'keyword_match') {
+            const field = c.parameters.field;
+            const kw = c.parameters.keyword;
+            if (field === 'tags') tags.push(kw);
+            else keywords.push(`${field}:${kw}`);
+        } else if (c.name === 'semantic_similarity') {
+            semanticQuery = c.parameters.query_text;
+        }
+    });
+
+    let html = `<h3><i class="fa-solid fa-robot"></i> AI 搜尋解析</h3>`;
+    html += `<div>`;
+
+    if (tags.length > 0) {
+        html += `<strong><i class="fa-solid fa-tags"></i> 鎖定標籤：</strong> `;
+        html += tags.map(t => `<span class="criteria-tag">${t}</span>`).join('');
+        html += `<br>`;
+    }
+
+    if (keywords.length > 0) {
+        html += `<strong><i class="fa-solid fa-filter"></i> 關鍵字篩選：</strong> `;
+        html += keywords.map(k => `<span class="criteria-tag">${k}</span>`).join('');
+        html += `<br>`;
+    }
+
+    if (semanticQuery) {
+        html += `<div style="margin-top:5px; font-size:0.9em; color:#555;">`;
+        html += `<strong><i class="fa-solid fa-layer-group"></i> 語意檢索：</strong> 使用向量搜尋相近內容`;
+        // Only show if it's different from tags (to avoid clutter)
+        if (tags.length === 0) {
+             html += ` ("${semanticQuery}")`;
+        }
+        html += `</div>`;
+    }
+
+    if (queryVector && queryVector.length > 0) {
+        const dim = queryVector.length;
+        const preview = queryVector.slice(0, 5).map(v => v.toFixed(3)).join(', ');
+        html += `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-size:0.85em; color:#666;">`;
+        html += `<strong><i class="fa-solid fa-location-crosshairs"></i> 向量座標：</strong> [${preview}, ...] <span style="background:#eee; padding:2px 6px; border-radius:4px; font-size:0.8em;">${dim} 維度</span>`;
+        html += `</div>`;
+    }
+
+    html += `</div>`;
+    container.innerHTML = html;
 }
 
 function createResultCard(result) {
