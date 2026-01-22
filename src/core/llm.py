@@ -42,7 +42,9 @@ def parse_query(user_query: str) -> QueryParseResult:
                                 "author_name": {"type": "string"},
                                 "require_free": {"type": "boolean"},
                                 "allow_restricted": {"type": "boolean"},
-                                "require_audio": {"type": "boolean"}
+                                "require_audio": {"type": "boolean"},
+                                "ranking_direction": {"type": "string"},
+                                "normalize_max": {"type": "number"}
                             }
                         }
                     },
@@ -66,15 +68,19 @@ def parse_query(user_query: str) -> QueryParseResult:
     
     ### Available Scoring Functions
     1. **keyword_match** (field, keyword): For attributes like 'classification', 'tags', 'name', 'author'.
-    2. **numeric_range** (field, min_val, max_val): For 'words_total', 'click_count', etc.
-    3. **status_check** (target_status): 'completed' or 'ongoing'.
-    4. **author_match** (author_name).
-    5. **is_free_check** (require_free).
-    6. **age_check** (allow_restricted).
-    7. **audio_available** (require_audio).
-    8. **semantic_similarity** (query_text): For abstract vibes/plots.
+    2. **numeric_range** (field, min_val, max_val): For HARD FILTERING on 'words_total', 'click_count', etc. Use this when the user specifies an exact range (e.g., "at least 100k words").
+    3. **numeric_ranking** (field, ranking_direction, normalize_max): For SOFT RANKING. Use this when the user implies a preference without a hard cutoff (e.g., "longer is better", "I want a very long novel"). 
+       - `ranking_direction`: 'asc' means higher values are better; 'desc' means lower values are better.
+       - `normalize_max`: A reasonable ceiling for normalization (e.g., 2000000 for words_total).
+    4. **status_check** (target_status): 'completed' or 'ongoing'.
+    5. **author_match** (author_name).
+    6. **is_free_check** (require_free).
+    7. **age_check** (allow_restricted).
+    8. **audio_available** (require_audio).
+    9. **semantic_similarity** (query_text): For abstract vibes/plots.
 
     Strategy: Map explicit intents to DB fields (keyword_match, status_check) with high confidence. Use semantic_similarity for nuances.
+    **IMPORTANT**: Distinguish between hard filters (numeric_range) and soft ranking (numeric_ranking). If the user says "I want a VERY long novel" without specifying a number, use numeric_ranking. If they say "at least 500k words", use numeric_range.
 
     ### IMPORTANT: DATASET LANGUAGE
     The underlying database uses **Traditional Chinese (繁體中文)** for all metadata (names, tags, classifications).

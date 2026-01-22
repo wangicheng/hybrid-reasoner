@@ -130,3 +130,48 @@ def score_audio_available(item: Dict[str, Any], params: Dict[str, Any]) -> float
     if require_audio and not has_tts:
         return 0.0
     return 1.0
+
+# --- Stage 5: Numeric Ranking (Soft Scoring) ---
+import math
+
+@ScoringRegistry.register("numeric_ranking")
+def score_numeric_ranking(item: Dict[str, Any], params: Dict[str, Any]) -> float:
+    """
+    Soft scoring for numeric fields using sigmoid normalization.
+    Higher/lower values get a proportionally higher score instead of a hard pass/fail.
+    
+    Params:
+    - field: str (e.g., 'words_total')
+    - ranking_direction: 'asc' (higher is better) or 'desc' (lower is better)
+    - normalize_max: float (normalization ceiling, e.g., 2000000 for words)
+    
+    Returns a score between 0.0 and 1.0.
+    """
+    field = params.get("field")
+    if not field or field not in item:
+        return 0.5  # Neutral score if field missing
+    
+    try:
+        val = float(item[field])
+    except (ValueError, TypeError):
+        return 0.5
+    
+    direction = params.get("ranking_direction", "asc")
+    normalize_max = params.get("normalize_max", 1000000)
+    
+    # Normalize to 0-1 range using sigmoid-like function
+    # For 'asc': higher values -> higher score
+    # For 'desc': lower values -> higher score
+    
+    # Shift the sigmoid center to normalize_max / 2
+    midpoint = normalize_max / 2
+    steepness = 6.0 / normalize_max  # Controls the curve steepness
+    
+    if direction == "asc":
+        # Sigmoid: 1 / (1 + exp(-steepness * (val - midpoint)))
+        score = 1.0 / (1.0 + math.exp(-steepness * (val - midpoint)))
+    else:  # desc
+        # Inverted sigmoid
+        score = 1.0 / (1.0 + math.exp(steepness * (val - midpoint)))
+    
+    return score

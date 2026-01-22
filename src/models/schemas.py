@@ -12,6 +12,9 @@ class ScoringParameters(BaseModel):
     require_free: Optional[bool] = Field(None, description="Whether to require free books")
     allow_restricted: Optional[bool] = Field(None, description="Whether to allow restricted content")
     require_audio: Optional[bool] = Field(None, description="Whether to require audio")
+    # --- Stage 5: Numeric Ranking ---
+    ranking_direction: Optional[str] = Field(None, description="For numeric_ranking: 'asc' (higher is better) or 'desc' (lower is better)")
+    normalize_max: Optional[float] = Field(None, description="For numeric_ranking: the normalization ceiling (e.g. 2000000 for words)")
 
 class ScoringCriteria(BaseModel):
     """
