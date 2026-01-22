@@ -1,187 +1,185 @@
-document.addEventListener('DOMContentLoaded', () => {
-  const searchBtn = document.getElementById('searchBtn');
-  const queryInput = document.getElementById('queryInput');
+const API_URL = "/api/search";
+
+async function performSearch() {
+  const query = document.getElementById('query-input').value;
+  const resultsContainer = document.getElementById('results-container');
   const loading = document.getElementById('loading');
-  const resultsArea = document.getElementById('resultsArea');
-  const criteriaSection = document.getElementById('criteriaSection');
-  const criteriaTags = document.getElementById('criteriaTags');
-  const resultsList = document.getElementById('resultsList');
 
-  // Allow Enter key to search
-  queryInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') performSearch();
-  });
+  if (!query) return;
 
-  searchBtn.addEventListener('click', performSearch);
+  // UI Reset
+  resultsContainer.innerHTML = '';
+  loading.classList.remove('hidden');
 
-  async function performSearch() {
-    const query = queryInput.value.trim();
-    if (!query) return;
+  try {
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query })
+    });
 
-    // UI Reset
-    loading.classList.remove('hidden');
-    resultsArea.classList.add('hidden');
-    resultsList.innerHTML = '';
-    criteriaTags.innerHTML = '';
+    const data = await response.json();
+    loading.classList.add('hidden');
 
-    try {
-      const response = await fetch('/api/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
-      });
-
-      if (!response.ok) throw new Error("Search failed");
-
-      const data = await response.json();
-      renderResults(data);
-    } catch (err) {
-      console.error(err);
-      alert("搜尋發生錯誤，請稍後再試。");
-    } finally {
-      loading.classList.add('hidden');
-      resultsArea.classList.remove('hidden');
-    }
-  }
-
-  function renderResults(data) {
-    // Render Criteria
-    if (data.parsed_criteria && data.parsed_criteria.length > 0) {
-      criteriaSection.classList.remove('hidden');
-      criteriaTags.innerHTML = ''; // Clear previous
-      data.parsed_criteria.forEach(c => {
-        const item = document.createElement('div');
-        item.className = 'criteria-item';
-
-        // Format parameters nicely
-        // specific definitions for what to show per criteria type
-        const validParamsMap = {
-          'keyword_match': ['field', 'keyword'],
-          'numeric_range': ['field', 'min_val', 'max_val'],
-          'status_check': ['target_status'],
-          'author_match': ['author_name'],
-          'is_free_check': ['require_free'],
-          'age_check': ['allow_restricted'],
-          'audio_available': ['require_audio'],
-          'semantic_similarity': ['query_text']
-        };
-
-        let paramsHtml = '';
-        if (c.parameters) {
-          const allowedKeys = validParamsMap[c.name] || Object.keys(c.parameters);
-
-          const entries = Object.entries(c.parameters).filter(([k, v]) => {
-            return v !== null && v !== undefined && allowedKeys.includes(k);
-          });
-
-          if (entries.length > 0) {
-            paramsHtml = '<div class="criteria-params">';
-            entries.forEach(([k, v]) => {
-              paramsHtml += `<span class="param-pill">${k}: ${v}</span>`;
-            });
-            paramsHtml += '</div>';
-          }
-        }
-
-        item.innerHTML = `
-            <div class="criteria-header">
-                <span class="criteria-name"><i class="fa-solid fa-filter"></i> ${c.name}</span>
-                <span class="criteria-weight">Weight: ${c.weight}</span>
-            </div>
-            <div class="criteria-desc">${c.description || ''}</div>
-            ${paramsHtml}
-        `;
-        criteriaTags.appendChild(item);
+    if (data.results && data.results.length > 0) {
+      data.results.forEach(result => {
+        resultsContainer.appendChild(createResultCard(result));
       });
     } else {
-      criteriaSection.classList.add('hidden');
+      resultsContainer.innerHTML = '<div style="text-align:center; padding:20px;">找不到符合條件的結果</div>';
     }
 
-    // Render Cards
-    if (!data.results || data.results.length === 0) {
-      resultsList.innerHTML = '<p style="text-align:center; color:#9ca3af;">找不到相關結果。</p>';
-      return;
-    }
+  } catch (error) {
+    console.error('Error:', error);
+    loading.classList.add('hidden');
+    resultsContainer.innerHTML = '<div style="color:red; text-align:center;">發生錯誤，請檢查後端服務是否啟動</div>';
+  }
+}
 
-    data.results.forEach(res => {
-      const item = res.item;
-      const score = res.score.toFixed(4);
-      const breakdown = res.breakdown;
+function createResultCard(result) {
+  const item = result.item;
+  const card = document.createElement('div');
+  card.className = 'result-card';
 
-      const card = document.createElement('div');
-      card.className = 'result-card';
+  // 1. 基本資訊與標籤
+  const tagsHtml = (item.tags || []).map(tag => `<span class="tag">#${tag}</span>`).join('');
 
-      // Generate breakdown HTML
-      let breakdownHtml = '<div class="breakdown-content">';
-      breakdownHtml += '<h4>得分詳情</h4>';
-      breakdown.forEach(b => {
-        const wScore = b.weighted_score !== undefined ? b.weighted_score.toFixed(4) : 'Error';
-        const rScore = b.raw_score !== undefined ? b.raw_score.toFixed(4) : 'N/A';
-        breakdownHtml += `
-                    <div class="score-row">
-                        <span class="score-label">${b.criteria} (W: ${b.weight}):</span>
-                        <span class="score-val">Raw: ${rScore} -> +${wScore}</span>
-                    </div>`;
-      });
-      breakdownHtml += '</div>';
+  // 2. 評分視覺化 (Breakdown Visualization)
+  // 我們將每個評分項目的 weighted_score 繪製成條狀圖
+  // 為了顯示比例，我們假設滿分是 1.0 (或根據實際總分動態調整)
+  let breakdownHtml = '<div class="score-breakdown">';
+  if (result.breakdown) {
+    result.breakdown.forEach(b => {
+      // 計算寬度百分比 (簡單起見，將 weighted_score 放大顯示，或相對於 total score)
+      // 這裡假設單項滿分貢獻約為 0.5~1.0，我們用一個視覺係數放大它以便觀察
+      const widthPercent = Math.min((b.weighted_score / result.score) * 100, 100);
+      const label = getCriteriaLabel(b);
 
-      // Tags
-      let tagsHtml = '';
-      if (item.tags && Array.isArray(item.tags)) {
-        item.tags.slice(0, 5).forEach(t => {
-          tagsHtml += `<span class="small-tag">#${t}</span>`;
-        });
-      }
-
-      const statusIcon = item.publish_status === 'completed' ? '<i class="fa-solid fa-check-circle"></i>' : '<i class="fa-solid fa-pen-nib"></i>';
-      const statusText = item.publish_status === 'completed' ? '完結' : '連載中';
-
-      // AI Explanation HTML
-      let explanationHtml = '';
-      if (res.explanation) {
-        explanationHtml = `
-          <div class="ai-explanation">
-            <div class="ai-explanation-header">
-              <i class="fa-solid fa-wand-magic-sparkles"></i> AI 推薦理由
-            </div>
-            <p class="ai-explanation-text">${res.explanation}</p>
-          </div>
-        `;
-      }
-
-      card.innerHTML = `
-                <div class="card-header">
-                    <div>
-                        <h2 class="novel-title">${item.name || '未命名'}</h2>
-                        <div class="novel-meta">
-                            <span class="meta-item"><i class="fa-solid fa-user"></i> ${item.author || '未知作者'}</span>
-                            <span class="meta-item">${statusIcon} ${statusText}</span>
-                            <span class="meta-item"><i class="fa-solid fa-layer-group"></i> ${item.classification || '一般'}</span>
-                        </div>
+      breakdownHtml += `
+                <div class="score-bar-container">
+                    <span class="score-label">${label}</span>
+                    <span style="font-size:0.8em; color:#666;">${b.weighted_score.toFixed(3)}</span>
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width: ${widthPercent}%; background-color: ${getColorForCriteria(b.criteria)}"></div>
                     </div>
-                    <div class="novel-score">${score}</div>
                 </div>
-                
-                <div class="tags-container">${tagsHtml}</div>
-                <p class="novel-intro">${item.intro || '無簡介...'}</p>
-                
-                ${explanationHtml}
-                
-                <button class="breakdown-toggle">顯示推理過程 <i class="fa-solid fa-chevron-down"></i></button>
-                ${breakdownHtml}
             `;
-
-      // Toggle Logic
-      const toggleBtn = card.querySelector('.breakdown-toggle');
-      const content = card.querySelector('.breakdown-content');
-      toggleBtn.addEventListener('click', () => {
-        const isHidden = getComputedStyle(content).display === 'none';
-        content.style.display = isHidden ? 'block' : 'none';
-        toggleBtn.querySelector('i').classList.toggle('fa-chevron-down');
-        toggleBtn.querySelector('i').classList.toggle('fa-chevron-up');
-      });
-
-      resultsList.appendChild(card);
     });
+  }
+  breakdownHtml += '</div>';
+
+  // 3. AI 解釋區塊 (Collapsible)
+  // 只有當後端有回傳 explanation 時才顯示
+  let explanationHtml = '';
+  if (result.explanation) {
+    explanationHtml = `
+            <div class="ai-explanation-box">
+                <div class="ai-header" onclick="toggleExplanation(this)">
+                    <span><i class="fa-solid fa-robot"></i> AI 推薦理由</span>
+                    <i class="fa-solid fa-chevron-down"></i>
+                </div>
+                <div class="ai-content hidden">
+                    ${result.explanation}
+                </div>
+            </div>
+        `;
+  }
+
+  card.innerHTML = `
+        <div class="card-header">
+            <div>
+                <h2 class="book-title">${item.name}</h2>
+                <div class="book-meta">
+                    <i class="fa-solid fa-user-pen"></i> ${item.author} | 
+                    <i class="fa-solid fa-book"></i> ${item.classification || '未分類'} | 
+                    <i class="fa-solid fa-pen-nib"></i> ${item.word_count ? item.word_count.toLocaleString() : '未知'}字
+                </div>
+            </div>
+            <div class="total-score">Score: ${result.score.toFixed(4)}</div>
+        </div>
+        
+        <div class="tags">${tagsHtml}</div>
+        <div class="intro">${item.intro || '暫無簡介...'}</div>
+        
+        ${breakdownHtml}
+        ${explanationHtml}
+    `;
+
+  return card;
+}
+
+// 輔助函式：切換解釋區塊顯示
+window.toggleExplanation = function (headerElement) {
+  const content = headerElement.nextElementSibling;
+  const icon = headerElement.querySelector('.fa-chevron-down') || headerElement.querySelector('.fa-chevron-up');
+
+  if (content.classList.contains('hidden')) {
+    content.classList.remove('hidden');
+    if (icon) {
+      icon.classList.remove('fa-chevron-down');
+      icon.classList.add('fa-chevron-up');
+    }
+  } else {
+    content.classList.add('hidden');
+    if (icon) {
+      icon.classList.remove('fa-chevron-up');
+      icon.classList.add('fa-chevron-down');
+    }
+  }
+}
+
+// 輔助函式：根據 breakdown 項目生成人類可讀的標籤
+function getCriteriaLabel(breakdownItem) {
+  const name = breakdownItem.criteria;
+  const params = breakdownItem.params || {};
+
+  switch (name) {
+    case 'semantic_similarity':
+      return '語意與內容相似度';
+    case 'keyword_match':
+      // 顯示具體匹配到的關鍵字
+      const keyword = params.keyword || '關鍵字';
+      const field = params.field === 'classification' ? '分類' : (params.field === 'tags' ? '標籤' : params.field || '');
+      return `${field}: ${keyword}`;
+    case 'numeric_range':
+      // 顯示具體的數值範圍
+      const min = params.min_val;
+      const max = params.max_val;
+      let rangeStr = '字數範圍';
+      if (min && max) {
+        rangeStr = `字數: ${(min / 10000).toFixed(0)}萬 - ${(max / 10000).toFixed(0)}萬`;
+      } else if (min) {
+        rangeStr = `字數 > ${(min / 10000).toFixed(0)}萬`;
+      } else if (max) {
+        rangeStr = `字數 < ${(max / 10000).toFixed(0)}萬`;
+      }
+      return rangeStr;
+    case 'status_check':
+      const status = params.target_status || '狀態';
+      return `狀態: ${status}`;
+    case 'author_match':
+      const author = params.author_name || '作者';
+      return `作者: ${author}`;
+    default:
+      return name;
+  }
+}
+
+// 輔助函式：不同評分類型給不同顏色
+function getColorForCriteria(criteriaName) {
+  switch (criteriaName) {
+    case 'semantic_similarity': return '#4a90e2'; // 藍色 (向量語意)
+    case 'numeric_range': return '#66bb6a'; // 綠色 (字數範圍)
+    case 'keyword_match': return '#9c27b0'; // 紫色 (關鍵字/標籤)
+    case 'status_check': return '#ff9800'; // 橘色 (狀態)
+    case 'author_match': return '#00bcd4'; // 青色 (作者)
+    default: return '#ab47bc'; // 預設紫色
+  }
+}
+
+// 支援按下 Enter 鍵搜尋
+document.getElementById('query-input').addEventListener('keypress', function (e) {
+  if (e.key === 'Enter') {
+    performSearch();
   }
 });
