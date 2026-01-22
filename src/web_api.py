@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+# 強制將專案根目錄加入搜尋路徑，解決 ModuleNotFoundError
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -10,6 +18,7 @@ app = FastAPI()
 # Input Model
 class SearchRequest(BaseModel):
     query: str
+    model_id: str = "gemini-1.5-flash"  # Default model
 
 # Engine Instance (Lazy Load)
 engine = None
@@ -31,6 +40,10 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=503, detail="Engine is still initializing")
         
     try:
+        # [NEW] Pass model selection to environment
+        os.environ["LLM_MODEL_ID"] = request.model_id
+        # print(f"🔄 Selected Model: {request.model_id}")
+        
         results = engine.search(request.query, limit=10)
         return results
     except Exception as e:

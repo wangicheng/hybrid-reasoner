@@ -1,108 +1,104 @@
 import os
 import json
-from google import genai
-from google.genai import types
-from src.models.schemas import QueryParseResult
+import google.generativeai as genai
+from typing import List, Optional, Dict, Any
+from src.models.schemas import QueryParseResult, Criterion
+
+# Configure API Key
+api_key = os.environ.get("GOOGLE_API_KEY")
+if api_key:
+    genai.configure(api_key=api_key)
 
 def parse_query(user_query: str) -> QueryParseResult:
     """
-    使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
+    Uses Google Gemini to parse natural language queries into structured criteria.
+    Compatible with the flexible Criterion(parameters=Dict) schema.
     """
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    model_id = os.getenv("LLM_MODEL_ID", "gemini-2.0-flash")
+    if not api_key:
+        print("⚠️ Warning: No API Key found. Returning simple keyword search.")
+        return QueryParseResult(
+            original_query=user_query,
+            search_terms=[user_query],
+            criteria=[]
+        )
 
-    client = genai.Client(api_key=api_key)
+    # Use a faster model for parsing
+    # You can change this to 'gemini-pro' or 'gemini-1.5-flash' depending on your access
+    model_name = os.getenv("LLM_MODEL_ID", "gemini-1.5-flash")
+    model = genai.GenerativeModel(model_name)
 
-    # 手動定義 Schema (避免 Pydantic 相容性問題)
-    manual_schema = {
-        "type": "object",
-        "properties": {
-            "original_query": {"type": "string"},
-            "search_terms": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "criteria": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "weight": {"type": "number"},
-                        "description": {"type": "string"},
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "field": {"type": "string"},
-                                "keyword": {"type": "string"},
-                                "min_val": {"type": "number"},
-                                "max_val": {"type": "number"},
-                                "target_status": {"type": "string"},
-                                "query_text": {"type": "string"},
-                                "author_name": {"type": "string"},
-                                "require_free": {"type": "boolean"},
-                                "allow_restricted": {"type": "boolean"},
-                                "require_audio": {"type": "boolean"}
-                            }
-                        }
-                    },
-                    "required": ["name", "weight", "parameters"]
-                }
-            }
-        },
-        "required": ["original_query", "criteria", "search_terms"]
-    }
+    prompt = f"""
+    You are a search query parser for a novel recommendation system.
+    Analyze the user's input and extract search criteria.
 
-    system_instruction = """
-    You are a web novel recommendation assistant. Your goal is to break down the user's query into weighted scoring criteria.
-    ... [Same parsing logic rules as before, omitted for brevity but implied to be known by the model] ...
-    Output a JSON object satisfying the schema.
-    """
-    # For brevity in this rewrite, I'll rely on the model's general capability or re-inject instructions if needed.
-    # To be safe and ensure high quality, I should include the full instructions.
+    ### Available Criteria (Name & Parameters):
+    1. "numeric_range":
+       - field: "words_total" (only supported field)
+       - min_val: number (optional)
+       - max_val: number (optional)
     
-    full_system_instruction = """
-    You are a web novel recommendation assistant. Your goal is to break down the user's query into weighted scoring criteria.
+    2. "status_check":
+       - target_status: "finished" or "ongoing"
     
-    ### Available Scoring Functions
-    1. **keyword_match** (field, keyword): For attributes like 'classification', 'tags', 'name', 'author'.
-    2. **numeric_range** (field, min_val, max_val): For 'words_total', 'click_count', etc.
-    3. **status_check** (target_status): 'completed' or 'ongoing'.
-    4. **author_match** (author_name).
-    5. **is_free_check** (require_free).
-    6. **age_check** (allow_restricted).
-    7. **audio_available** (require_audio).
-    8. **semantic_similarity** (query_text): For abstract vibes/plots.
+    3. "keyword_match":
+       - field: "classification" or "tags"
+       - keyword: string (e.g., "Fantasy", "Romance")
 
-    Strategy: Map explicit intents to DB fields (keyword_match, status_check) with high confidence. Use semantic_similarity for nuances.
+    4. "author_match":
+       - author_name: string
 
-    ### IMPORTANT: DATASET LANGUAGE
-    The underlying database uses **Traditional Chinese (繁體中文)** for all metadata (names, tags, classifications).
-    - For `keyword_match` on fields like `classification` or `tags`, you **MUST** output the `keyword` in Traditional Chinese.
-    - **Translate** user limits (e.g. "Fantasy" -> "奇幻", "Magic" -> "魔法", "Romance" -> "言情").
-    - If the user queries in Chinese, use the exact Chinese terms they used (or synonyms).
-    - Common Classifications: 奇幻, 言情, 都市, 玄幻, 靈異, 武俠, 科幻.
+    5. "semantic_similarity":
+       - (No parameters needed, use this when the user describes plot/theme)
+
+    ### Input:
+    "{user_query}"
+
+    ### Output Format (JSON):
+    Return ONLY a raw JSON object (no markdown formatting).
+    Structure:
+    {{
+        "search_terms": ["keyword1", "keyword2"], // Keywords for vector search
+        "criteria": [
+            {{
+                "name": "criteria_name",
+                "weight": 1.0,
+                "parameters": {{ "param_key": "param_value" }}
+            }}
+        ]
+    }}
+
+    Example: "Find completed fantasy novels over 200k words"
+    Output:
+    {{
+        "search_terms": ["fantasy novel"],
+        "criteria": [
+            {{ "name": "status_check", "parameters": {{ "target_status": "finished" }} }},
+            {{ "name": "numeric_range", "parameters": {{ "field": "words_total", "min_val": 200000 }} }},
+            {{ "name": "semantic_similarity", "parameters": {{}} }}
+        ]
+    }}
     """
 
     try:
-        response = client.models.generate_content(
-            model=model_id,
-            contents=f"User Query: {user_query}",
-            config=types.GenerateContentConfig(
-                system_instruction=full_system_instruction,
-                response_mime_type="application/json",
-                response_schema=manual_schema
-            )
-        )
+        response = model.generate_content(prompt)
+        text_content = response.text
         
-        # New SDK returns an object, we access .text or specific fields.
-        # For structured output, response.text is the JSON string.
-        if response.text:
-            result = QueryParseResult.model_validate_json(response.text)
-            return result
-        else:
-             raise ValueError("Empty response from Gemini")
+        # Clean up potential markdown code blocks (```json ... ```)
+        if "```" in text_content:
+            text_content = text_content.replace("```json", "").replace("```", "").strip()
+        
+        data = json.loads(text_content)
+        
+        # Validate and Construct (Automatic convert Dict to Pydantic models)
+        return QueryParseResult(**data, original_query=user_query)
 
     except Exception as e:
-        print(f"Error parsing query with Google GenAI: {e}")
-        return QueryParseResult(original_query=user_query, search_terms=[user_query], criteria=[])
+        print(f"❌ LLM Parsing Error: {e}")
+        # Fallback: Treat as simple keyword search with semantic similarity
+        return QueryParseResult(
+            original_query=user_query,
+            search_terms=[user_query],
+            criteria=[
+                Criterion(name="semantic_similarity", weight=1.0, parameters={})
+            ]
+        )

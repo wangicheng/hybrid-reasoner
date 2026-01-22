@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function performSearch() {
     const query = queryInput.value.trim();
+    const model = document.getElementById('modelSelect').value;
     if (!query) return;
 
     // UI Reset
@@ -28,6 +29,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          query: query,
+          model_id: model
+        })
+      });
         body: JSON.stringify({ query })
       });
 

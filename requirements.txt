@@ -5,6 +5,6 @@ pydantic
 pydantic-settings
 python-dotenv
 numpy
-google-genai
+google-generativeai
 fastapi
 uvicorn

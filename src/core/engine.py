@@ -1,16 +1,23 @@
 import asyncio
 from typing import List, Dict, Any, Tuple, Optional
 from src.core.llm import parse_query
-from src.models.schemas import QueryParseResult
+# [FIX 1] 補上 Criterion
+from src.models.schemas import QueryParseResult, Criterion
 from src.core.vector_store import VectorStore
 from src.core.database import Database
 from src.logic.registry import ScoringRegistry
 from qdrant_client.http import models as rest  # For Qdrant Filter
 import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
+import os
 
 class HybridEngine:
     def __init__(self):
+        # [DEBUG] 檢查 API KEY
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if api_key:
+             print(f"✅ API Key recognized: {api_key[:5]}...")
+             
         self.db = Database()
         self.vs = VectorStore(collection_name="novels")
 
@@ -57,10 +64,21 @@ class HybridEngine:
             elif name == "status_check":
                 target_status = params.get("target_status")
                 if target_status:
+                    # [FIX 2] 中英文狀態映射 (Mapping)
+                    # AI 常常輸出英文 "finished"，但資料庫通常存 "已完結"
+                    # 這裡做一個簡單的轉換，確保資料庫 filter 能抓到東西
+                    db_status_value = target_status
+                    if target_status.lower() in ["finished", "completed"]:
+                        db_status_value = "已完結"
+                    elif target_status.lower() in ["ongoing", "serializing"]:
+                        db_status_value = "連載中"
+                    
+                    # print(f"DEBUG: Converting status '{target_status}' -> '{db_status_value}'")
+
                     conditions.append(
                         rest.FieldCondition(
                             key="publish_status",
-                            match=rest.MatchValue(value=target_status)
+                            match=rest.MatchValue(value=db_status_value)
                         )
                     )
 
@@ -77,13 +95,14 @@ class HybridEngine:
                             match=rest.MatchValue(value=keyword)
                         )
                     )
-                # potentially handle 'tags' here too if needed, using MatchAny or similar if it's a list
 
         if not conditions:
             return None
 
         # Combine with AND logic (must meet all conditions)
         return rest.Filter(must=conditions)
+
+# 請找到 calculate_score 這個函式，然後用下面這段覆蓋它：
 
     def calculate_score(self, item: Dict[str, Any], criteria_list: List[Any], vector_score: float = 0.0) -> Tuple[float, List[Dict[str, Any]]]:
         """
@@ -93,14 +112,21 @@ class HybridEngine:
         breakdown = []
         
         for criteria in criteria_list:
-            weight = criteria.weight
-            func_name = criteria.name
-            
-            # Convert Pydantic model to dict
-            if hasattr(criteria.parameters, 'model_dump'):
-                params = criteria.parameters.model_dump()
+            # --- FIX: 終極防禦式寫法，同時支援 Pydantic 物件和 Dict ---
+            if isinstance(criteria, dict):
+                # 萬一傳進來已經是字典了
+                name = criteria.get("name")
+                weight = criteria.get("weight", 1.0)
+                params = criteria.get("parameters", {})
             else:
-                params = criteria.parameters.dict()
+                # 正常 Pydantic 物件
+                name = criteria.name
+                weight = criteria.weight
+                # 這裡最關鍵：parameters 本身已經是 Dict，不需要 .dict()，也不需要 model_dump
+                params = criteria.parameters 
+            # --------------------------------------------------------
+
+            func_name = name # 相容變數名稱
             
             score_contrib = 0.0
             raw_score = 0.0
@@ -147,12 +173,23 @@ class HybridEngine:
     def search(self, user_query: str, limit: int = 5) -> Dict[str, Any]:
         """
         Executes the full search pipeline: Parse -> Filter -> Vector Search -> Score -> Rank.
-        
-        Logic push-down: Hard constraints are pushed to Qdrant for DB-level filtering.
         """
         # 1. Parse Query
         parse_result = parse_query(user_query)
         
+        # [FIX 3] 保底機制 (Default Semantic Score)
+        # 如果解析結果中沒有包含 "semantic_similarity" (語意相似度) 的規則，
+        # 我們手動加回去，確保至少會有向量搜尋的基礎分數，不會因為總分 0 而被過濾掉。
+        has_semantic = any(c.name == "semantic_similarity" for c in parse_result.criteria)
+        if not has_semantic:
+            # print("DEBUG: Adding default semantic_similarity rule.")
+            default_semantic = Criterion(
+                name="semantic_similarity",
+                weight=1.0,
+                parameters={}
+            )
+            parse_result.criteria.append(default_semantic)
+
         # 2. Build Qdrant Filter (Logic Push-down)
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
         
@@ -179,7 +216,6 @@ class HybridEngine:
         # 2b. Structural Retrieval (Author Match)
         for criterion in parse_result.criteria:
             if criterion.name == "author_match":
-                # Ensure we handle both dict (if manually constructed) and Pydantic model
                 if hasattr(criterion.parameters, 'author_name'):
                     author_name = criterion.parameters.author_name
                 else:
@@ -192,7 +228,6 @@ class HybridEngine:
                         if b_id not in candidates_map:
                             candidates_map[b_id] = book
                             # Assign a base vector score substitute for purely structural matches
-                            # so they aren't penalized too heavily in 'semantic_similarity' checks if any
                             vector_score_map[b_id] = 0.5 
 
         candidates = list(candidates_map.values())
@@ -219,32 +254,21 @@ class HybridEngine:
         final_results = scored_items[:limit]
 
         # --- NEW: Generate Explainability (只針對前 3 名) ---
-        # 使用 Gemini 的長 Context Window 特性，可以傳入更多資訊
         top_n_explain = 3 
         
         for i, res in enumerate(final_results):
             if i < top_n_explain:
                 item = res['item']
-                
-                # 準備 Context Chunks:
-                # 由於 Gemini 1.5 Flash 有百萬級 Token Window，
-                # 我們可以傳入完整的 intro，甚至未來可加入評論 (reviews) 或章節內容
                 chunks_to_analyze = [item.get('intro', '')]
                 
-                # 如果未來有 'reviews' 或 'chapter_1' 欄位，直接 append 進去
-                # if 'reviews' in item: chunks_to_analyze.extend(item['reviews'])
-                
-                # 呼叫 Explainer (使用新的 context_chunks 參數)
                 explanation = generate_explanation(
                     query=user_query,
                     book_item=item,
                     context_chunks=chunks_to_analyze
                 )
                 
-                # 將解釋寫入結果物件
                 res['explanation'] = explanation
             else:
-                # 第 4 名以後不生成，給個預設值或留空
                 res['explanation'] = None
         # ------------------------------------------------
         

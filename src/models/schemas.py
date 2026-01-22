@@ -1,35 +1,27 @@
 from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
 
-class ScoringParameters(BaseModel):
-    field: Optional[str] = Field(None, description="Field to specific match on (e.g. tags, classification)")
-    keyword: Optional[str] = Field(None, description="Keyword to search for")
-    min_val: Optional[float] = Field(None, description="Minimum value for numeric range")
-    max_val: Optional[float] = Field(None, description="Maximum value for numeric range")
-    target_status: Optional[str] = Field(None, description="Target status (completed or ongoing)")
-    query_text: Optional[str] = Field(None, description="Text for semantic similarity")
-    author_name: Optional[str] = Field(None, description="Name of the author")
-    require_free: Optional[bool] = Field(None, description="Whether to require free books")
-    allow_restricted: Optional[bool] = Field(None, description="Whether to allow restricted content")
-    require_audio: Optional[bool] = Field(None, description="Whether to require audio")
+# --- 推薦版本：彈性高，適合快速迭代 ---
 
-class ScoringCriteria(BaseModel):
+class Criterion(BaseModel):
     """
-    Represents a single scoring factor derived from the user query.
+    Represents a single scoring factor.
     """
-    name: str = Field(..., description="Name of the scoring function to apply (e.g., 'keyword_match', 'numeric_range')")
-    weight: float = Field(..., description="Weight of this criteria (0.0 to 1.0).")
-    parameters: ScoringParameters = Field(default_factory=ScoringParameters, description="Parameters to pass to the scoring function")
-    description: Optional[str] = Field(None, description="Explanation of why this criteria was chosen")
+    name: str  # e.g., "numeric_range", "status_check", "keyword_match"
+    weight: float = 1.0
+    # 使用 Dict 保持最大彈性，不限制具體欄位名稱
+    parameters: Dict[str, Any] = Field(default_factory=dict) 
+    description: Optional[str] = None
 
 class QueryParseResult(BaseModel):
     """
     The structured result of parsing a user's natural language query.
     """
     original_query: str
-    criteria: List[ScoringCriteria]
-    search_terms: List[str] = Field(default_factory=list, description="Keywords/phrases to use for initial candidate retrieval")
+    search_terms: List[str] = Field(default_factory=list)
+    criteria: List[Criterion]
 
+# --- 書籍資料結構 (不變) ---
 class NovelItem(BaseModel):
     id: str
     name: str
