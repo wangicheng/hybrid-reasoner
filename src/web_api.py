@@ -1,15 +1,21 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import sys
+import os
+
+# Add the project root to sys.path to resolve 'src' imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.core.engine import HybridEngine
 import uvicorn
-import os
 
 app = FastAPI()
 
 # Input Model
 class SearchRequest(BaseModel):
     query: str
+    model_id: str = "gemini-2.0-flash"
 
 # Engine Instance (Lazy Load)
 engine = None
@@ -29,6 +35,9 @@ async def search(request: SearchRequest):
     global engine
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine is still initializing")
+    
+    # Set the model ID environment variable dynamically based on user selection
+    os.environ["LLM_MODEL_ID"] = request.model_id
         
     try:
         results = engine.search(request.query, limit=10)

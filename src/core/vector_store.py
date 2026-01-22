@@ -74,12 +74,32 @@ class VectorStore:
         # Batching could be added for performance
         points = []
         for item in items:
+            # --- Handle different schema structures (MirrorFiction vs Linovelib) ---
+            # 1. Author
+            author_name = ""
+            if isinstance(item.get('user'), dict):
+                # Old Schema
+                author_name = item.get('user', {}).get('name', '')
+            else:
+                # New Schema (Simple string)
+                author_name = item.get('author', '')
+
+            # 2. Tags
+            tag_names = []
+            tags_raw = item.get('tags')
+            if isinstance(tags_raw, dict) and 'data' in tags_raw:
+                # Old Schema: {'data': [{'name': 'tag1'}, ...]}
+                tag_names = [t.get('name') for t in tags_raw.get('data', [])]
+            elif isinstance(tags_raw, list):
+                # New Schema: ['tag1', 'tag2']
+                tag_names = [str(t) for t in tags_raw]
+
             # Construct rich text representation
             parts = [
                 f"Title: {item.get('name', '')}",
-                f"Author: {item.get('user', {}).get('name', '') if isinstance(item.get('user'), dict) else ''}",
+                f"Author: {author_name}",
                 f"Slogan: {item.get('slogan', '')}",
-                f"Tags: {', '.join([t.get('name') for t in item.get('tags', {}).get('data', [])] if isinstance(item.get('tags'), dict) else [])}",
+                f"Tags: {', '.join(tag_names)}",
                 f"Intro: {item.get('intro', '')}"
             ]
             text = "\n".join([p for p in parts if p.strip()])

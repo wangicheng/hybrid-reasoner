@@ -111,4 +111,58 @@ def parse_query(user_query: str) -> QueryParseResult:
 
     except Exception as e:
         print(f"Error parsing query with Google GenAI: {e}")
-        return QueryParseResult(original_query=user_query, search_terms=[user_query], criteria=[])
+        
+        # --- Enhanced Fallback Logic ---
+        # 1. Check for explicit list format (e.g., 'tag1', 'tag2') to handle rate limits gracefully
+        import re
+        from src.models.schemas import ScoringCriteria, ScoringParameters
+        
+        # Look for quoted strings or comma-separated values
+        # Regex matches content inside single or double quotes
+        quoted_matches = re.findall(r"['\"](.*?)['\"]", user_query)
+        
+        fallback_criteria = []
+        
+        if quoted_matches:
+            # If user provided quoted strings, assume they are emphatic keywords/tags
+            for tag in quoted_matches:
+                if tag.strip():
+                    fallback_criteria.append(
+                        ScoringCriteria(
+                            name="keyword_match",
+                            weight=1.0, # High weight for explicit tags
+                            parameters=ScoringParameters(field="tags", keyword=tag.strip())
+                        )
+                    )
+        
+        # If no quotes found but contains commas, maybe split by comma?
+        elif ',' in user_query or ' ' in user_query:
+            parts = [p.strip() for p in user_query.replace(',', ' ').split()]
+            # If parts look like specific tags (this is heuristic, might be risky for normal sentences)
+            # But for fallback, getting *some* keyword matches is better than pure semantic on a weird string
+            # Let's simple check if we have multiple parts
+            if len(parts) > 1:
+                # Add a few as keywords, but keep semantic similarity as primary
+                for p in parts[:5]: # Limit to first 5 to avoid noise
+                   fallback_criteria.append(
+                        ScoringCriteria(
+                            name="keyword_match",
+                            weight=0.5, 
+                            parameters=ScoringParameters(field="tags", keyword=p)
+                        )
+                    )
+
+        # Always include Semantic Similarity as a base
+        fallback_criteria.append(
+            ScoringCriteria(
+                name="semantic_similarity", 
+                weight=1.0, 
+                parameters=ScoringParameters(query_text=user_query)
+            )
+        )
+
+        return QueryParseResult(
+            original_query=user_query,
+            search_terms=quoted_matches if quoted_matches else [user_query],
+            criteria=fallback_criteria
+        )

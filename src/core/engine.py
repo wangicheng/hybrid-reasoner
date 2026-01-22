@@ -57,10 +57,17 @@ class HybridEngine:
             elif name == "status_check":
                 target_status = params.get("target_status")
                 if target_status:
+                    # Map English status to Chinese DB status
+                    status_value = target_status
+                    if target_status.lower() in ["finished", "completed"]:
+                        status_value = "已完結"
+                    elif target_status.lower() in ["ongoing", "serializing"]:
+                        status_value = "連載中"
+
                     conditions.append(
                         rest.FieldCondition(
                             key="publish_status",
-                            match=rest.MatchValue(value=target_status)
+                            match=rest.MatchValue(value=status_value)
                         )
                     )
 
@@ -77,7 +84,15 @@ class HybridEngine:
                             match=rest.MatchValue(value=keyword)
                         )
                     )
-                # potentially handle 'tags' here too if needed, using MatchAny or similar if it's a list
+                elif field == "tags" and keyword:
+                    # Handle tags (list of strings)
+                    # Qdrant 'MatchValue' on a list checks for containment
+                    conditions.append(
+                        rest.FieldCondition(
+                            key="tags",
+                            match=rest.MatchValue(value=keyword)
+                        )
+                    )
 
         if not conditions:
             return None

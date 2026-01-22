@@ -2,6 +2,7 @@ const API_URL = "/api/search";
 
 async function performSearch() {
   const query = document.getElementById('query-input').value;
+  const modelId = document.getElementById('model-select').value;
   const resultsContainer = document.getElementById('results-container');
   const loading = document.getElementById('loading');
 
@@ -15,7 +16,10 @@ async function performSearch() {
     const response = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: query })
+      body: JSON.stringify({ 
+        query: query,
+        model_id: modelId
+      })
     });
 
     const data = await response.json();
