@@ -19,7 +19,7 @@ async function performSearch() {
     const response = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         query: query,
         model_id: modelId
       })
@@ -27,10 +27,10 @@ async function performSearch() {
 
     const data = await response.json();
     loading.classList.add('hidden');
-    
+
     // --- Display Search Interpretation ---
     if (data.parsed_criteria && data.parsed_criteria.length > 0) {
-        displayInterpretation(interpretationBox, data.parsed_criteria, data.query_vector);
+      displayInterpretation(interpretationBox, data.parsed_criteria, data.query_vector);
     }
 
     if (data.results && data.results.length > 0) {
@@ -49,59 +49,59 @@ async function performSearch() {
 }
 
 function displayInterpretation(container, criteriaList, queryVector) {
-    container.classList.remove('hidden');
-    
-    // Group by type for cleaner display
-    const tags = [];
-    const keywords = [];
-    let semanticQuery = null;
+  container.classList.remove('hidden');
 
-    criteriaList.forEach(c => {
-        if (c.name === 'keyword_match') {
-            const field = c.parameters.field;
-            const kw = c.parameters.keyword;
-            if (field === 'tags') tags.push(kw);
-            else keywords.push(`${field}:${kw}`);
-        } else if (c.name === 'semantic_similarity') {
-            semanticQuery = c.parameters.query_text;
-        }
-    });
+  // Group by type for cleaner display
+  const tags = [];
+  const keywords = [];
+  let semanticQuery = null;
 
-    let html = `<h3><i class="fa-solid fa-robot"></i> AI 搜尋解析</h3>`;
-    html += `<div>`;
-
-    if (tags.length > 0) {
-        html += `<strong><i class="fa-solid fa-tags"></i> 鎖定標籤：</strong> `;
-        html += tags.map(t => `<span class="criteria-tag">${t}</span>`).join('');
-        html += `<br>`;
+  criteriaList.forEach(c => {
+    if (c.name === 'keyword_match') {
+      const field = c.parameters.field;
+      const kw = c.parameters.keyword;
+      if (field === 'tags') tags.push(kw);
+      else keywords.push(`${field}:${kw}`);
+    } else if (c.name === 'semantic_similarity') {
+      semanticQuery = c.parameters.query_text;
     }
+  });
 
-    if (keywords.length > 0) {
-        html += `<strong><i class="fa-solid fa-filter"></i> 關鍵字篩選：</strong> `;
-        html += keywords.map(k => `<span class="criteria-tag">${k}</span>`).join('');
-        html += `<br>`;
+  let html = `<h3><i class="fa-solid fa-robot"></i> AI 搜尋解析</h3>`;
+  html += `<div>`;
+
+  if (tags.length > 0) {
+    html += `<strong><i class="fa-solid fa-tags"></i> 鎖定標籤：</strong> `;
+    html += tags.map(t => `<span class="criteria-tag">${t}</span>`).join('');
+    html += `<br>`;
+  }
+
+  if (keywords.length > 0) {
+    html += `<strong><i class="fa-solid fa-filter"></i> 關鍵字篩選：</strong> `;
+    html += keywords.map(k => `<span class="criteria-tag">${k}</span>`).join('');
+    html += `<br>`;
+  }
+
+  if (semanticQuery) {
+    html += `<div style="margin-top:5px; font-size:0.9em; color:#555;">`;
+    html += `<strong><i class="fa-solid fa-layer-group"></i> 語意檢索：</strong> 使用向量搜尋相近內容`;
+    // Only show if it's different from tags (to avoid clutter)
+    if (tags.length === 0) {
+      html += ` ("${semanticQuery}")`;
     }
-
-    if (semanticQuery) {
-        html += `<div style="margin-top:5px; font-size:0.9em; color:#555;">`;
-        html += `<strong><i class="fa-solid fa-layer-group"></i> 語意檢索：</strong> 使用向量搜尋相近內容`;
-        // Only show if it's different from tags (to avoid clutter)
-        if (tags.length === 0) {
-             html += ` ("${semanticQuery}")`;
-        }
-        html += `</div>`;
-    }
-
-    if (queryVector && queryVector.length > 0) {
-        const dim = queryVector.length;
-        const preview = queryVector.slice(0, 5).map(v => v.toFixed(3)).join(', ');
-        html += `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-size:0.85em; color:#666;">`;
-        html += `<strong><i class="fa-solid fa-location-crosshairs"></i> 向量座標：</strong> [${preview}, ...] <span style="background:#eee; padding:2px 6px; border-radius:4px; font-size:0.8em;">${dim} 維度</span>`;
-        html += `</div>`;
-    }
-
     html += `</div>`;
-    container.innerHTML = html;
+  }
+
+  if (queryVector && queryVector.length > 0) {
+    const dim = queryVector.length;
+    const preview = queryVector.slice(0, 5).map(v => v.toFixed(3)).join(', ');
+    html += `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-size:0.85em; color:#666;">`;
+    html += `<strong><i class="fa-solid fa-location-crosshairs"></i> 向量座標：</strong> [${preview}, ...] <span style="background:#eee; padding:2px 6px; border-radius:4px; font-size:0.8em;">${dim} 維度</span>`;
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  container.innerHTML = html;
 }
 
 function createResultCard(result) {
@@ -140,11 +140,13 @@ function createResultCard(result) {
   // 只有當後端有回傳 explanation 時才顯示
   let explanationHtml = '';
   if (result.explanation) {
+    const criteriaCount = (result.breakdown || []).length;
     explanationHtml = `
             <div class="ai-explanation-box">
                 <div class="ai-header" onclick="toggleExplanation(this)">
                     <span><i class="fa-solid fa-robot"></i> AI 推薦理由</span>
-                    <i class="fa-solid fa-chevron-down"></i>
+                    <span style="font-size:0.8em; color:#666; margin-left:10px;">(基於 ${criteriaCount} 項評分指標分析)</span>
+                    <i class="fa-solid fa-chevron-down" style="margin-left:auto;"></i>
                 </div>
                 <div class="ai-content hidden">
                     ${result.explanation}
@@ -160,7 +162,7 @@ function createResultCard(result) {
                 <div class="book-meta">
                     <i class="fa-solid fa-user-pen"></i> ${item.author} | 
                     <i class="fa-solid fa-book"></i> ${item.classification || '未分類'} | 
-                    <i class="fa-solid fa-pen-nib"></i> ${item.word_count ? item.word_count.toLocaleString() : '未知'}字
+                    <i class="fa-solid fa-pen-nib"></i> ${item.words_total ? item.words_total.toLocaleString() : '未知'}字
                 </div>
             </div>
             <div class="total-score">Score: ${result.score.toFixed(4)}</div>

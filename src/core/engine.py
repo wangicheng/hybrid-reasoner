@@ -245,6 +245,7 @@ class HybridEngine:
         for i, res in enumerate(final_results):
             if i < top_n_explain:
                 item = res['item']
+                breakdown = res['breakdown']  # 取得該書籍的評分細節
                 
                 # 準備 Context Chunks:
                 # 由於 Gemini 1.5 Flash 有百萬級 Token Window，
@@ -254,11 +255,12 @@ class HybridEngine:
                 # 如果未來有 'reviews' 或 'chapter_1' 欄位，直接 append 進去
                 # if 'reviews' in item: chunks_to_analyze.extend(item['reviews'])
                 
-                # 呼叫 Explainer (使用新的 context_chunks 參數)
+                # 呼叫 Explainer (傳入 score_breakdown 作為評分證據)
                 explanation = generate_explanation(
                     query=user_query,
                     book_item=item,
-                    context_chunks=chunks_to_analyze
+                    context_chunks=chunks_to_analyze,
+                    score_breakdown=breakdown  # 傳入評分細節給 LLM
                 )
                 
                 # 將解釋寫入結果物件

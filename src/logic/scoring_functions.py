@@ -47,6 +47,38 @@ def score_keyword_match(item: Dict[str, Any], params: Dict[str, Any]) -> float:
     for k in keywords_to_check:
         if k in text:
             return 1.0
+            
+    # --- Fallback Logic: Logical Expansion ---
+    # If the primary field (e.g., 'classification') didn't match, 
+    # check other semantic fields like 'tags', 'name', or 'intro'.
+    # This handles cases where data is messy (e.g., Publisher in Classification field).
+    
+    # 1. Check Tags (if not already checked)
+    if field != "tags" and "tags" in item:
+        tags = item["tags"]
+        if isinstance(tags, list):
+            for t in tags:
+                t_str = str(t).lower()
+                for k in keywords_to_check:
+                    if k in t_str:
+                        return 0.8 # Fallback match gets slightly lower score
+        
+    # 2. Check Name/Title
+    if field != "name" and "name" in item:
+        name_str = str(item["name"]).lower()
+        for k in keywords_to_check:
+            if k in name_str:
+                return 0.8
+                
+    # 3. Check Intro (if it's a genre/subject keyword, it likely appears in intro)
+    if field != "intro" and "intro" in item and item["intro"]:
+        intro_str = str(item["intro"]).lower()
+        # Only check if keyword is significant length to avoid false positives in long text
+        if len(keyword) >= 2: 
+            for k in keywords_to_check:
+                if k in intro_str:
+                    return 0.6 # Intro match is weaker evidence
+    
     return 0.0
 
 @ScoringRegistry.register("numeric_range")
@@ -89,6 +121,12 @@ def score_status(item: Dict[str, Any], params: Dict[str, Any]) -> float:
     
     if not target:
         return 1.0 # No preference
+        
+    # Map English to Chinese
+    if target in ["finished", "completed"]:
+        target = "已完結"
+    elif target in ["ongoing", "serializing"]:
+        target = "連載中"
         
     return 1.0 if target == current else 0.0
 
