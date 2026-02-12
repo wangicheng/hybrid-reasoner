@@ -3,13 +3,26 @@ import json
 from google import genai
 from google.genai import types
 from src.models.schemas import QueryParseResult
+from src.core.api_utils import retry_on_rate_limit, _is_retryable
+
+# 可用模型清單 (依優先順序排列，當前模型失敗時自動切換)
+FALLBACK_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash-lite", "gemma-3-27b-it"]
 
 def parse_query(user_query: str) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
+    支援多模型 fallback：當主要模型遇到配額限制時，自動嘗試下一個模型。
     """
     api_key = os.environ.get("GOOGLE_API_KEY")
-    model_id = os.getenv("LLM_MODEL_ID", "gemini-2.0-flash")
+    selected_model = os.getenv("LLM_MODEL_ID", "").strip()
+
+    # 建立模型嘗試順序：使用者選擇的模型優先，其餘作為 fallback
+    if selected_model and selected_model in FALLBACK_MODELS:
+        models_to_try = [selected_model] + [m for m in FALLBACK_MODELS if m != selected_model]
+    elif selected_model:
+        models_to_try = [selected_model] + FALLBACK_MODELS
+    else:
+        models_to_try = FALLBACK_MODELS
 
     client = genai.Client(api_key=api_key)
 
@@ -80,7 +93,9 @@ def parse_query(user_query: str) -> QueryParseResult:
     9. **semantic_similarity** (query_text): For abstract vibes/plots.
 
     Strategy: Map explicit intents to DB fields (keyword_match, status_check) with high confidence. Use semantic_similarity for nuances.
-    **IMPORTANT**: Distinguish between hard filters (numeric_range) and soft ranking (numeric_ranking). If the user says "I want a VERY long novel" without specifying a number, use numeric_ranking. If they say "at least 500k words", use numeric_range.
+    **CRITICAL**: Use `keyword_match` ONLY for concrete genres/categories (e.g. 'Fantasy', 'Romance') or explicit tags. 
+    - **NEVER** use `keyword_match` for descriptive adjectives (e.g. 'exciting', 'sad', 'funny', 'detailed', 'good plot'). Use `semantic_similarity` for these instead.
+    - If the user says "I want a VERY long novel" without specifying a number, use numeric_ranking. If they say "at least 500k words", use numeric_range.
 
     ### IMPORTANT: DATASET LANGUAGE
     The underlying database uses **Traditional Chinese (繁體中文)** for all metadata (names, tags, classifications).
@@ -90,27 +105,116 @@ def parse_query(user_query: str) -> QueryParseResult:
     - Common Classifications: 奇幻, 言情, 都市, 玄幻, 靈異, 武俠, 科幻.
     """
 
-    try:
-        response = client.models.generate_content(
-            model=model_id,
-            contents=f"User Query: {user_query}",
-            config=types.GenerateContentConfig(
-                system_instruction=full_system_instruction,
-                response_mime_type="application/json",
-                response_schema=manual_schema
-            )
-        )
+    # --- 模型 Fallback 迴圈 ---
+    last_exception = None
+    for model_id in models_to_try:
+        print(f"[llm] 嘗試使用模型: {model_id}")
         
-        # New SDK returns an object, we access .text or specific fields.
-        # For structured output, response.text is the JSON string.
-        if response.text:
-            result = QueryParseResult.model_validate_json(response.text)
-            return result
-        else:
-             raise ValueError("Empty response from Gemini")
+        @retry_on_rate_limit(max_retries=2, base_delay=5.0)
+        def _call_api():
+            import re as _re
+            # Gemma 3 (and potentially others) might not support system_instruction or JSON mode
+            final_prompt = f"User Query: {user_query}"
+            is_gemma = "gemma" in model_id.lower()
 
-    except Exception as e:
-        print(f"Error parsing query with Google GenAI: {e}")
+            if is_gemma:
+                # Gemma doesn't support JSON mode — skip response_mime_type/response_schema
+                config_args = {}
+                # Prepend instruction to content and explicitly ask for JSON
+                final_contents = (
+                    f"{full_system_instruction}\n\n"
+                    f"Task: Parse this query:\n{final_prompt}\n\n"
+                    "IMPORTANT: Output ONLY valid JSON (no markdown, no explanation)."
+                )
+            else:
+                # Standard Gemini behavior with JSON mode
+                config_args = {
+                    "response_mime_type": "application/json",
+                    "response_schema": manual_schema,
+                    "system_instruction": full_system_instruction,
+                }
+                final_contents = final_prompt
+
+            response = client.models.generate_content(
+                model=model_id,
+                contents=final_contents,
+                config=types.GenerateContentConfig(**config_args)
+            )
+            if response.text:
+                raw_text = response.text.strip()
+                # Strip markdown code fences (```json ... ``` or ``` ... ```)
+                raw_text = _re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
+                raw_text = _re.sub(r"\n?```\s*$", "", raw_text)
+                raw_text = raw_text.strip()
+
+                # Parse JSON generically first to handle list vs object
+                parsed = json.loads(raw_text)
+
+                if isinstance(parsed, list):
+                    # Gemma may return a bare list of criteria objects
+                    # Check if items look like criteria (have "name"/"function" + "weight"/"parameters")
+                    criteria_list = []
+                    for item in parsed:
+                        if isinstance(item, dict):
+                            # Normalize: Gemma might use "function" instead of "name"
+                            if "function" in item and "name" not in item:
+                                item["name"] = item.pop("function")
+                            
+                            # Ensure "parameters" exists
+                            if "parameters" not in item:
+                                item["parameters"] = {}
+                            
+                            # Move top-level parameter fields into parameters dict if present
+                            # List of known parameters from ScoringParameters schema
+                            known_params = [
+                                "field", "keyword", "min_val", "max_val", "target_status", 
+                                "query_text", "author_name", "require_free", "allow_restricted", 
+                                "require_audio", "ranking_direction", "normalize_max"
+                            ]
+                            for param in known_params:
+                                if param in item:
+                                    # If param is at top level, move it to parameters
+                                    # But prefer existing value in parameters if present (unlikely if structure is flat)
+                                    if param not in item["parameters"]:
+                                        item["parameters"][param] = item.pop(param)
+                                    else:
+                                        # Duplicate? Just remove top level
+                                        item.pop(param)
+                                        
+                            # Ensure "weight" exists (default to 0.8 for soft match)
+                            if "weight" not in item:
+                                item["weight"] = 0.8
+
+                            criteria_list.append(item)
+
+                    parsed = {
+                        "original_query": user_query,
+                        "search_terms": [user_query],
+                        "criteria": criteria_list
+                    }
+
+                return QueryParseResult.model_validate(parsed)
+            else:
+                raise ValueError("Empty response from Gemini")
+
+        try:
+            result = _call_api()
+            print(f"[llm] 成功使用模型: {model_id}")
+            return result
+        except Exception as e:
+            last_exception = e
+            if _is_retryable(e):
+                print(f"[llm] 模型 {model_id} 配額受限，嘗試下一個模型...")
+                continue
+            else:
+                # 非配額錯誤 (如模型不存在)，也嘗試下一個
+                print(f"[llm] 模型 {model_id} 發生錯誤: {e}，嘗試下一個模型...")
+                continue
+
+    # 所有模型都失敗，進入 fallback 邏輯
+    if last_exception:
+        e = last_exception
+        print(f"[llm] 所有模型皆失敗，最後錯誤: {e}")
         
         # --- Enhanced Fallback Logic ---
         # 1. Check for explicit list format (e.g., 'tag1', 'tag2') to handle rate limits gracefully

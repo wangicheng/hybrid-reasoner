@@ -1,6 +1,15 @@
 from typing import Any, Dict
 from src.logic.registry import ScoringRegistry
 
+# Common synonyms for tag matching
+SYNONYM_MAP = {
+    "女同性戀": ["GL", "百合", "女同", "Lesbian"],
+    "男同性戀": ["BL", "耽美", "男同", "Gay"],
+    "情慾": ["H", "R18", "色情", "肉", "高H"],
+    "肉文": ["H", "R18", "情慾", "高H"],
+    "18禁": ["H", "R18", "情慾", "高H"],
+}
+
 @ScoringRegistry.register("keyword_match")
 def score_keyword_match(item: Dict[str, Any], params: Dict[str, Any]) -> float:
     """
@@ -17,18 +26,27 @@ def score_keyword_match(item: Dict[str, Any], params: Dict[str, Any]) -> float:
     
     val = item[field]
     
+    # Expand keyword with synonyms
+    keywords_to_check = [keyword]
+    if keyword in SYNONYM_MAP:
+        keywords_to_check.extend([s.lower() for s in SYNONYM_MAP[keyword]])
+    
     # Handle List (e.g. tags)
     if isinstance(val, list):
         # val is likely list of strings due to our DB flattening
-        # case insensitive check
+        # check if ANY keyword matches ANY tag
         for v in val:
-            if v and keyword in str(v).lower():
-                return 1.0
+            v_str = str(v).lower()
+            if not v_str: continue
+            for k in keywords_to_check:
+                if k in v_str:
+                    return 1.0
         return 0.0
         
     text = str(val).lower()
-    if keyword in text:
-        return 1.0
+    for k in keywords_to_check:
+        if k in text:
+            return 1.0
     return 0.0
 
 @ScoringRegistry.register("numeric_range")

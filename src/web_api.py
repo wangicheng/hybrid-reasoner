@@ -15,7 +15,7 @@ app = FastAPI()
 # Input Model
 class SearchRequest(BaseModel):
     query: str
-    model_id: str = "gemini-2.0-flash"
+    model_id: str = "gemini-3-flash-preview"
 
 # Engine Instance (Lazy Load)
 engine = None
@@ -27,8 +27,18 @@ async def startup_event():
     try:
         engine = HybridEngine()
         print("Hybrid Engine initialized successfully!")
+    except RuntimeError as e:
+        if "already accessed by another instance" in str(e):
+            print(f"\n{'='*60}")
+            print(f"ERROR: Qdrant storage is locked by another process!")
+            print(f"Please kill other Python processes first:")
+            print(f"  taskkill /F /IM python.exe")
+            print(f"Then restart this application.")
+            print(f"{'='*60}\n")
+        raise
     except Exception as e:
-        print(f"Failed to initialize Engine: {e}")
+        print(f"FATAL: Failed to initialize Engine: {e}")
+        raise
 
 @app.post("/api/search")
 async def search(request: SearchRequest):

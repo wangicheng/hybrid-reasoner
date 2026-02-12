@@ -73,6 +73,11 @@ class HybridEngine:
 
             # 3. Keyword Match (e.g. Classification)
             elif name == "keyword_match":
+                # Only apply hard filter if confidence/weight is very high (>= 0.9)
+                # This prevents "soft" keywords (adjectives) from becoming strict filters
+                if criteria.weight < 0.9:
+                    continue
+
                 field = params.get("field")
                 keyword = params.get("keyword")
                 
@@ -217,15 +222,15 @@ class HybridEngine:
         for item in candidates:
             v_score = vector_score_map.get(str(item["id"]), 0.0)
             score, breakdown = self.calculate_score(item, parse_result.criteria, vector_score=v_score)
-            
-            if score > 0:
-                scored_type = {
-                    "item": item,
-                    "score": score,
-                    "vector_score": v_score,
-                    "breakdown": breakdown
-                }
-                scored_items.append(scored_type)
+
+            # 不再過濾 score <= 0 的結果，確保純語意搜尋也能回傳候選結果
+            scored_type = {
+                "item": item,
+                "score": score,
+                "vector_score": v_score,
+                "breakdown": breakdown
+            }
+            scored_items.append(scored_type)
             
         # 4. Rank
         scored_items.sort(key=lambda x: x["score"], reverse=True)
