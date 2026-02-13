@@ -124,10 +124,10 @@ class HybridEngine:
             
             score_contrib = 0.0
             raw_score = 0.0
+            reason_msg = ""
             
-            # Handle special semantic similarity logic
+            # 1. Handle Vector Score (Special Case)
             if func_name == "semantic_similarity":
-                # Direct use of retrieval score
                 raw_score = vector_score
                 score_contrib = vector_score * weight
                 total_score += score_contrib
@@ -136,13 +136,13 @@ class HybridEngine:
                     "weight": weight,
                     "raw_score": raw_score,
                     "weighted_score": score_contrib,
-                    "reason": "Vector similarity score"
+                    "reason": f"語意相似度 (Score: {raw_score:.3f})"
                 })
                 continue
                 
+            # 2. Handle Regular Scoring Functions
             func = ScoringRegistry.get(func_name)
             if not func:
-                # print(f"Warning: Function '{func_name}' not found.")
                 breakdown.append({
                     "criteria": func_name,
                     "weight": weight,
@@ -150,7 +150,18 @@ class HybridEngine:
                 })
                 continue
                 
-            raw_score = func(item, params)
+            # --- 關鍵修改：處理 Tuple 回傳值 ---
+            result = func(item, params)
+            
+            if isinstance(result, tuple):
+                raw_score, reason_msg = result
+            else:
+                raw_score = float(result)
+                if raw_score >= 1.0: reason_msg = "符合條件"
+                elif raw_score <= 0.0: reason_msg = "未符合條件"
+                else: reason_msg = f"評分: {raw_score:.2f}"
+            # --------------------------------
+
             score_contrib = raw_score * weight
             total_score += score_contrib
             
@@ -159,7 +170,8 @@ class HybridEngine:
                 "weight": weight,
                 "raw_score": raw_score,
                 "weighted_score": score_contrib,
-                "params": params
+                "params": params,
+                "reason": reason_msg
             })
             
         return total_score, breakdown
