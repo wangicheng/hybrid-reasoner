@@ -154,15 +154,16 @@ function createResultCard(result) {
   let breakdownHtml = '<div class="score-breakdown">';
   if (result.breakdown) {
     result.breakdown.forEach(b => {
-      // 計算寬度百分比 (簡單起見，將 weighted_score 放大顯示，或相對於 total score)
-      // 這裡假設單項滿分貢獻約為 0.5~1.0，我們用一個視覺係數放大它以便觀察
-      const widthPercent = Math.min((b.weighted_score / result.score) * 100, 100);
+      const originalScore = b.normalized_score !== undefined ? b.normalized_score : b.raw_score;
+
+      // 以單項 0~1 的 originalScore 作為百分比顯示
+      const widthPercent = Math.min(originalScore * 100, 100);
       const label = getCriteriaLabel(b);
 
       breakdownHtml += `
                 <div class="score-bar-container">
                     <span class="score-label">${label}</span>
-                    <span style="font-size:0.8em; color:#666;">${b.weighted_score.toFixed(3)}</span>
+                    <span style="font-size:0.8em; color:#666;">${originalScore.toFixed(3)}</span>
                     <div class="progress-track">
                         <div class="progress-fill" style="width: ${widthPercent}%; background-color: ${getColorForCriteria(b.criteria)}"></div>
                     </div>
