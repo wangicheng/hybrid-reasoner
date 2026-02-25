@@ -112,7 +112,32 @@ function displayInterpretation(container, criteriaList, queryVector) {
   }
 
   html += `</div>`;
+
+  // 加入顯示原始 Payload 的按鈕和區塊
+  const payloadJson = JSON.stringify(criteriaList, null, 2);
+  html += `
+    <div style="margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 10px;">
+      <div onclick="togglePayload(this)" style="cursor: pointer; color: var(--primary-color); font-size: 0.9em; display: inline-block;">
+        <i class="fa-solid fa-code"></i> <span class="toggle-text">顯示查詢 Payload JSON</span>
+      </div>
+      <pre class="raw-payload hidden" style="background: #282c34; color: #abb2bf; padding: 12px; border-radius: 6px; font-size: 0.85em; overflow-x: auto; margin-top: 10px; max-height: 300px;">${payloadJson}</pre>
+    </div>
+  `;
+
   container.innerHTML = html;
+}
+
+// 輔助函式：切換 Payload 顯示
+window.togglePayload = function (element) {
+  const pre = element.nextElementSibling;
+  const textSpan = element.querySelector('.toggle-text');
+  if (pre.classList.contains('hidden')) {
+    pre.classList.remove('hidden');
+    textSpan.innerText = '隱藏查詢 Payload JSON';
+  } else {
+    pre.classList.add('hidden');
+    textSpan.innerText = '顯示查詢 Payload JSON';
+  }
 }
 
 function createResultCard(result) {
