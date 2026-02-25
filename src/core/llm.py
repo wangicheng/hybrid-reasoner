@@ -92,8 +92,24 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
             # Fix Weight
             if "weight" not in item:
                 item["weight"] = 0.5 # Default weight
+            else:
+                try:
+                    item["weight"] = float(item["weight"])
+                except:
+                    item["weight"] = 0.5
 
             valid_criteria.append(item)
+            
+    # 等比縮放權重使總和為 1
+    if valid_criteria:
+        total_weight = sum(item.get("weight", 0.0) for item in valid_criteria)
+        if total_weight > 0:
+            for item in valid_criteria:
+                item["weight"] = item["weight"] / total_weight
+        else:
+            eq_weight = 1.0 / len(valid_criteria)
+            for item in valid_criteria:
+                item["weight"] = eq_weight
     
     final_result["criteria"] = valid_criteria
     return final_result
