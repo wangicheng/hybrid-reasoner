@@ -129,13 +129,20 @@ def score_status(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple[float, s
     if not target:
         return 1.0, "無狀態限制"
         
-    if target == "completed" and "完結" in current:
+    # Standardize comparison logic
+    is_target_completed = target in ["completed", "finished", "已完結", "完結"]
+    is_target_ongoing = target in ["ongoing", "serializing", "連載中", "連載"]
+    
+    is_current_completed = any(x in current for x in ["completed", "finished", "完結"])
+    is_current_ongoing = any(x in current for x in ["ongoing", "serializing", "連載"])
+
+    if is_target_completed and is_current_completed:
          return 1.0, f"狀態符合 (已完結)"
-    if target == current:
-         return 1.0, f"狀態符合 ({current})"
+    if is_target_ongoing and is_current_ongoing:
+         return 1.0, f"狀態符合 (連載中)"
          
-    # 簡單比對
-    if target in current or current in target:
+    # Fallback to simple matching
+    if target == current or target in current or current in target:
         return 1.0, f"狀態符合 ({current})"
         
     return 0.0, f"狀態不符 (需求: {target}, 實際: {current})"

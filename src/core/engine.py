@@ -50,12 +50,19 @@ class HybridEngine:
             elif name == "status_check":
                 target_status = params.get("target_status")
                 if target_status:
-                    status_value = target_status
                     if target_status.lower() in ["finished", "completed"]:
-                        status_value = "已完結"
+                        possible_values = ["completed", "已完結", "完結"]
                     elif target_status.lower() in ["ongoing", "serializing"]:
-                        status_value = "連載中"
-                    conditions.append(rest.FieldCondition(key="publish_status", match=rest.MatchValue(value=status_value)))
+                        possible_values = ["ongoing", "連載中", "連載"]
+                    else:
+                        possible_values = [target_status]
+                    
+                    # Create an OR condition for all possible status mappings
+                    should_conds = [
+                        rest.FieldCondition(key="publish_status", match=rest.MatchValue(value=v))
+                        for v in possible_values
+                    ]
+                    conditions.append(rest.Filter(should=should_conds))
 
             # 3. Keyword Match (Smart Filter: classification OR tags 聯防)
             elif name == "keyword_match":
