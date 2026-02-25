@@ -82,7 +82,12 @@ def score_keyword_match(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple[f
         # Only check if keyword is significant length to avoid false positives in long text
         if len(keyword) >= 2: 
             for k in keywords_to_check:
-                if k in intro_str:
+                idx = intro_str.find(k)
+                if idx != -1:
+                    # 【否定句檢查】檢查關鍵字前面 5 個字有沒有否定詞
+                    prefix = intro_str[max(0, idx-5):idx]
+                    if any(neg in prefix for neg in ["不是", "非", "沒有", "並非"]):
+                        return 0.0, f"簡介中提及 '{k}' 但疑似為否定句"
                     return 0.6, f"從簡介中找到 '{k}' (原搜尋欄位: '{field}')"
     
     return 0.0, f"內容不包含 '{keyword}'"

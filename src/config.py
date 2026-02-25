@@ -9,7 +9,7 @@ load_dotenv()
 class Settings(BaseSettings):
     OPENAI_API_KEY: str = "sk-placeholder"
     OPENAI_BASE_URL: str = "https://opencode.ai/zen/v1"
-    LLM_MODEL_ID: str = "big-pickle"
+    LLM_MODEL_ID: str = "gemma-3-27b-it"
     QDRANT_PATH: str = "data/qdrant_storage"
     DB_PATH: str = "hybrid_reasoner.db"
     

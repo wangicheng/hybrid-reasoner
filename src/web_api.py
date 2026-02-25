@@ -15,7 +15,7 @@ app = FastAPI()
 # Input Model
 class SearchRequest(BaseModel):
     query: str
-    model_id: str = "gemini-3-flash-preview"
+    model_id: str = "gemma-3-27b-it"
 
 # Engine Instance (Lazy Load)
 engine = None

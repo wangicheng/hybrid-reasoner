@@ -34,7 +34,8 @@ class VectorStore:
         self, 
         query_text: str, 
         limit: int = 10, 
-        query_filter: Optional[rest.Filter] = None
+        query_filter: Optional[rest.Filter] = None,
+        with_payload: bool = True
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
         Performs semantic search with optional filtering.
@@ -44,6 +45,7 @@ class VectorStore:
             limit: Maximum number of results to return.
             query_filter: Optional Qdrant Filter object for logic push-down.
                           Filters are applied at the database level for efficiency.
+            with_payload: Whether to return the payload with the results.
         
         Returns:
             Tuple of (search results, query vector).
@@ -57,7 +59,8 @@ class VectorStore:
             collection_name=self.collection_name,
             query=vector,
             query_filter=query_filter,  # Logic push-down: filter at DB level
-            limit=limit
+            limit=limit,
+            with_payload=with_payload
         )
         search_result = response.points
         

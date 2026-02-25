@@ -33,6 +33,17 @@ async function performSearch() {
       displayInterpretation(interpretationBox, data.parsed_criteria, data.query_vector);
     }
 
+    // --- 延伸推薦提示 (Relaxed Search Notice) ---
+    if (data.is_relaxed) {
+      const relaxedNotice = document.createElement('div');
+      relaxedNotice.className = 'relaxed-notice';
+      relaxedNotice.innerHTML = `
+        <i class="fa-solid fa-lightbulb"></i>
+        <span>找不到完全符合篩選條件的書籍，已為您擴大搜尋範圍，以下為延伸推薦結果。</span>
+      `;
+      resultsContainer.appendChild(relaxedNotice);
+    }
+
     if (data.results && data.results.length > 0) {
       data.results.forEach(result => {
         resultsContainer.appendChild(createResultCard(result));

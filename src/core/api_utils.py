@@ -51,6 +51,13 @@ def _is_retryable(exc: Exception) -> bool:
         return True
     if "503" in error_str or "UNAVAILABLE" in error_str:
         return True
+    # Add network-level errors
+    if "[WinError 10053]" in error_str:
+        return True
+    if "[Errno 11001]" in error_str: # getaddrinfo failed
+        return True
+    if "Connection aborted" in error_str:
+        return True
     return False
 
 

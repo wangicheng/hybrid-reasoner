@@ -4,7 +4,7 @@ from google import genai
 from src.core.api_utils import retry_on_rate_limit, _is_retryable
 
 # 可用模型清單 (與 llm.py 保持一致)
-FALLBACK_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash-lite", "gemma-3-27b-it"]
+FALLBACK_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
 
 def generate_explanation(
     query: str, 
@@ -85,7 +85,7 @@ def generate_explanation(
             evidence_text = "\n".join(lines)
 
     prompt = f"""
-    任務：你是一位專業的小說推薦顧問。請根據[系統評分證據]與[書籍內容]，解釋這本書為何適合使用者的查詢。
+    任務：你是一位誠實的小說推薦顧問。請分析[書籍資料]是否真的符合[使用者查詢]。
 
     [使用者查詢]
     "{query}"
@@ -102,39 +102,54 @@ def generate_explanation(
     {context_text}
 
     [撰寫要求]
-    1. **必須提及評分證據**：例如「這本書不僅符合您對『奇幻』類型的要求...」或「字數達 XX 萬字，滿足閱讀份量...」。
-    2. **結合內容**：引用簡介中的情節或描述來佐證推薦。
-    3. **語氣親切**：像書店店員一樣推薦，約 100-150 字。
+    1. **誠實核對**：首先判斷這本書的內容是否真的符合使用者的核心需求？
+       - 如果符合：請熱情推薦，並引用簡介內容證明。
+       - **如果不符合**（例如使用者找「火星文」但這本書只是書名有「火」）：**請直接指出系統可能誤判**，並說明這本書實際是在講什麼。
+       - **絕對禁止瞎掰**：不要為了湊合查詢而發明書中沒有的情節或文字遊戲。
+    2. **必須提及評分證據**：例如「這本書不僅符合您對『奇幻』類型的要求...」或說明系統為何選中此書。
+    3. **語氣**：
+       - 符合時：「這本書非常適合您...」，約 100-150 字。
+       - 不符合時：「雖然系統因為書名關鍵字推薦了這本，但細看內容，這其實是一本關於...的故事，可能不是您要找的類型。」，約 50-100 字。
     """
 
-    # --- 模型 Fallback 迴圈 ---
+    # --- 模型 Fallback 迴圈 (含 Gemma 積極重試) ---
     last_exception = None
     for model_id in models_to_try:
         print(f"[explainer] 嘗試使用模型: {model_id}")
         
-        @retry_on_rate_limit(max_retries=2, base_delay=5.0)
-        def _call_api():
-            response = client.models.generate_content(
-                model=model_id,
-                contents=prompt
-            )
-            if response.text:
-                return response.text.strip()
-            else:
-                return "無法生成解釋 (可能觸發安全過濾或無回應)。"
+        is_gemma = "gemma" in model_id.lower()
+        # Gemma 積極重試：遇到任何錯誤都多試幾次
+        max_attempts = 3 if is_gemma else 1
+        
+        for attempt in range(max_attempts):
+            try:
+                @retry_on_rate_limit(max_retries=2, base_delay=5.0)
+                def _call_api():
+                    response = client.models.generate_content(
+                        model=model_id,
+                        contents=prompt
+                    )
+                    if response.text:
+                        return response.text.strip()
+                    else:
+                        return "無法生成解釋 (可能觸發安全過濾或無回應)。"
 
-        try:
-            result = _call_api()
-            print(f"[explainer] 成功使用模型: {model_id}")
-            return result
-        except Exception as e:
-            last_exception = e
-            if _is_retryable(e):
-                print(f"[explainer] 模型 {model_id} 配額受限，嘗試下一個模型...")
-                continue
-            else:
-                print(f"[explainer] 模型 {model_id} 發生錯誤: {e}，嘗試下一個模型...")
-                continue
+                result = _call_api()
+                print(f"[explainer] 成功使用模型: {model_id}")
+                return result
+            except Exception as e:
+                last_exception = e
+                if is_gemma:
+                    print(f"[explainer] 模型 {model_id} 發生錯誤 (Attempt {attempt+1}/{max_attempts}): {e}")
+                    if attempt < max_attempts - 1:
+                        import time
+                        time.sleep(2)
+                        continue
+                else:
+                    print(f"[explainer] 模型 {model_id} 發生錯誤: {e}")
+                
+                # 跳出內層迴圈，嘗試下一個模型
+                break
 
     # 所有模型都失敗
     print(f"[explainer] 所有模型皆失敗，最後錯誤: {last_exception}")

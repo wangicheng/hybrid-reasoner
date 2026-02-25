@@ -32,6 +32,9 @@ class QueryParseResult(BaseModel):
     original_query: str
     criteria: List[ScoringCriteria]
     search_terms: List[str] = Field(default_factory=list, description="Keywords/phrases to use for initial candidate retrieval")
+    generated_keywords: List[str] = Field(default_factory=list, description="LLM-generated domain-specific keywords for dynamic query expansion")
+    # HyDE 核心：讓 LLM 寫一段「夢想中的書籍簡介」
+    hypothetical_intro: str = Field(default="", description="A generated hypothetical novel introduction based on the query.")
 
 class NovelItem(BaseModel):
     id: str
