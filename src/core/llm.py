@@ -5,6 +5,7 @@ from google import genai
 from google.genai import types
 from src.models.schemas import QueryParseResult
 from src.core.api_utils import retry_on_rate_limit, _is_retryable
+from src.core.keyword_extractor import KeywordExtractor
 
 # 可用模型清單 (依優先順序排列，當前模型失敗時自動切換)
 FALLBACK_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
@@ -133,6 +134,20 @@ def parse_query(user_query: str) -> QueryParseResult:
 
     client = genai.Client(api_key=api_key)
 
+    # --- Pre-computation: Auto-Extract Keywords ---
+    # Using KeyBERT + TF-IDF to guide the LLM
+    try:
+        extractor = KeywordExtractor()
+        extracted_keywords = extractor.hybrid_extract(user_query, top_k=6)
+        print(f"[llm] Pre-extracted Keywords: {extracted_keywords}")
+    except Exception as e:
+        print(f"[llm] Keyword extraction failed: {e}")
+        extracted_keywords = []
+
+    keyword_hint = ""
+    if extracted_keywords:
+        keyword_hint = f"\n\n[Hints]\nThe following keywords were statistically extracted from the query. You may use them as a reference for `search_terms` or `generated_keywords` if relevant:\n{json.dumps(extracted_keywords, ensure_ascii=False)}"
+
     # 手動定義 Schema (保留原有的 schema 定義)
     manual_schema = {
         "type": "object",
@@ -236,7 +251,7 @@ def parse_query(user_query: str) -> QueryParseResult:
                 @retry_on_rate_limit(max_retries=2, base_delay=5.0)
                 def _do_generate():
                     import re as _re
-                    final_prompt = f"User Query: {user_query}"
+                    final_prompt = f"User Query: {user_query}{keyword_hint}"
                     
                     if is_gemma:
                         config_args = {}
