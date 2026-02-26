@@ -1,6 +1,7 @@
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
-from sentence_transformers import SentenceTransformer
+from google import genai
+from google.genai import types
 from src.config import settings
 from typing import List, Dict, Any, Optional, Tuple
 import os
@@ -15,7 +16,12 @@ class VectorStore:
             path.mkdir(parents=True, exist_ok=True)
             self.client = QdrantClient(path=str(path.resolve()))
         self.collection_name = collection_name
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Initialize Google GenAI client
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        self.genai_client = genai.Client(api_key=api_key)
+        self.embedding_model = "gemini-embedding-001"
+        
         self._ensure_collection()
 
     def _ensure_collection(self):
@@ -25,7 +31,7 @@ class VectorStore:
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=rest.VectorParams(
-                    size=384, # all-MiniLM-L6-v2 dimension
+                    size=3072, # gemini-embedding-001 dimension
                     distance=rest.Distance.COSINE
                 )
             )
@@ -50,10 +56,13 @@ class VectorStore:
         Returns:
             Tuple of (search results, query vector).
         """
-        # Token limit handling (truncation)
-        self.model.max_seq_length = 256
-        
-        vector = self.model.encode(query_text)
+        # Embed query text using text-embedding-004
+        embed_response = self.genai_client.models.embed_content(
+            model=self.embedding_model,
+            contents=query_text,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+        )
+        vector = embed_response.embeddings[0].values
         
         response = self.client.query_points(
             collection_name=self.collection_name,
@@ -69,15 +78,15 @@ class VectorStore:
             for hit in search_result
         ]
         
-        return formatted_results, vector.tolist()
+        return formatted_results, vector
 
     def add_items(self, items: List[Dict[str, Any]]):
         """
-        Embeds and adds items to Qdrant.
-        Expects items to have 'id' and 'text_content' (or similar) to embed.
+        Embeds and adds items to Qdrant in batches.
         """
-        # Batching could be added for performance
-        points = []
+        valid_items = []
+        texts_to_embed = []
+        
         for item in items:
             # --- Handle different schema structures (MirrorFiction vs Linovelib) ---
             # 1. Author
@@ -100,12 +109,14 @@ class VectorStore:
                 tag_names = [str(t) for t in tags_raw]
 
             # Construct rich text representation
+            content_snippet = item.get('content', '')[:500] # 擷取代表性內文
             parts = [
-                f"Title: {item.get('name', '')}",
-                f"Author: {author_name}",
-                f"Slogan: {item.get('slogan', '')}",
-                f"Tags: {', '.join(tag_names)}",
-                f"Intro: {item.get('intro', '')}"
+                f"書名: {item.get('name', '')}",
+                f"作者: {author_name}",
+                f"標語: {item.get('slogan', '')}",
+                f"標籤: {', '.join(tag_names)}",
+                f"簡介: {item.get('intro', '')}",
+                f"內文片段: {content_snippet}"
             ]
             text = "\n".join([p for p in parts if p.strip()])
             
@@ -114,15 +125,83 @@ class VectorStore:
             if not text:
                 continue
                 
-            vector = self.model.encode(text)
-            points.append(rest.PointStruct(
-                id=item["id"],
-                vector=vector,
-                payload=item
-            ))
+            texts_to_embed.append(text)
+            valid_items.append(item)
             
-        if points:
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points
-            )
+        # --- RESUME LOGIC ---
+        # Fetch existing IDs in the collection to skip them
+        existing_ids = set()
+        try:
+            scroll_point = None
+            while True:
+                response = self.client.scroll(
+                    collection_name=self.collection_name,
+                    offset=scroll_point,
+                    limit=1000,
+                    with_payload=False,
+                    with_vectors=False
+                )
+                points, scroll_point = response
+                existing_ids.update(p.id for p in points)
+                if scroll_point is None:
+                    break
+        except Exception:
+            pass # Collection might be empty or missing
+            
+        print(f"  [Resume] Found {len(existing_ids)} existing items in Qdrant. Skipping...")
+
+        batch_size = 50
+        import time
+        from google.genai.errors import ClientError
+        
+        for i in range(0, len(texts_to_embed), batch_size):
+            batch_texts = []
+            batch_items = []
+            
+            # Filter batch items that are not already in DB
+            for text, item in zip(texts_to_embed[i:i+batch_size], valid_items[i:i+batch_size]):
+                if item["id"] not in existing_ids:
+                    batch_texts.append(text)
+                    batch_items.append(item)
+                    
+            if not batch_texts:
+                continue # Skip batch if all items are already embedded
+            
+            # Simple retry logic for rate limit
+            max_retries = 3
+            response = None
+            for attempt in range(max_retries):
+                try:
+                    response = self.genai_client.models.embed_content(
+                        model=self.embedding_model,
+                        contents=batch_texts,
+                        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                    )
+                    break
+                except ClientError as e:
+                    if e.code == 429 and attempt < max_retries - 1:
+                        print(f"Rate limit hit during ingestion, waiting 30 seconds... (Attempt {attempt+1})")
+                        time.sleep(30)
+                    else:
+                        raise e
+                        
+            if not response:
+                continue
+            
+            points = []
+            for item, embedding in zip(batch_items, response.embeddings):
+                points.append(rest.PointStruct(
+                    id=item["id"],
+                    vector=embedding.values,
+                    payload=item
+                ))
+                
+            if points:
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=points
+                )
+            
+            # Avoid hitting rate limits rapidly
+            if i + batch_size < len(texts_to_embed) and batch_texts:
+                time.sleep(2)
