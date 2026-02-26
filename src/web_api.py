@@ -50,7 +50,7 @@ async def search(request: SearchRequest):
     os.environ["LLM_MODEL_ID"] = request.model_id
         
     try:
-        results = engine.search(request.query, limit=10)
+        results = await engine.search(request.query, limit=10)
         return results
     except Exception as e:
         import traceback

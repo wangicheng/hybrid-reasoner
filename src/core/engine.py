@@ -8,11 +8,13 @@ from src.logic.registry import ScoringRegistry
 from qdrant_client.http import models as rest
 import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
+from src.core.reranker import Reranker
 
 class HybridEngine:
     def __init__(self):
         self.db = Database()
         self.vs = VectorStore(collection_name="novels")
+        self.reranker = Reranker() # Initialize reranker
 
     def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
         """
@@ -186,7 +188,7 @@ class HybridEngine:
             
         return total_score, breakdown
 
-    def search(self, user_query: str, limit: int = 5) -> Dict[str, Any]:
+    async def search(self, user_query: str, limit: int = 5) -> Dict[str, Any]:
         """
         Executes the full search pipeline.
         """
@@ -247,14 +249,17 @@ class HybridEngine:
                 if hit.get('payload'):
                     payload_map[bid] = hit['payload']
         
-        # 2b. Structural Retrieval (Author Match)
+        # 3. Structural Retrieval (Author Match)
         # ... (Author match logic remains same) ...
         for criterion in parse_result.criteria:
             if criterion.name == "author_match":
+                # Handle parameter extraction more safely
                 if hasattr(criterion.parameters, 'author_name'):
                     author_name = criterion.parameters.author_name
-                else:
+                elif isinstance(criterion.parameters, dict):
                     author_name = criterion.parameters.get("author_name")
+                else: 
+                    author_name = None
                 
                 if author_name:
                     author_books = self.db.search_by_author(author_name)
@@ -267,37 +272,104 @@ class HybridEngine:
 
         candidates = list(candidates_map.values())
 
-        # 3. Scoring
+        # 4. Reranking (Cross-Encoder)
+        # 用 Cross-Encoder 重新評分 Top-50，提升語意準確度
+        if candidates:
+            print(f"[Engine] 🔄 Reranking {len(candidates)} candidates...")
+            candidates = self.reranker.rerank(user_query, candidates, top_k=50) # Keep all, resort by rerank_score
+            
+            # Map rerank scores back to vector_score_map to influence final scoring
+            # But we normalize them first (rerank scores are logits, roughly -10 to 10)
+            # Simple sigmoid-like normalization or just linear scaling if we know range
+            # For now, let's just use rerank_score as a strong booster if available
+            for item in candidates:
+                if "rerank_score" in item:
+                    # Replace vector score with sigmoid of rerank score for better 0-1 range
+                    # Sigmoid: 1 / (1 + exp(-x))
+                    import math
+                    try:
+                        logit = item["rerank_score"]
+                        sigmoid_score = 1 / (1 + math.exp(-logit))
+                        vector_score_map[str(item["id"])] = sigmoid_score
+                        # print(f"  - {item['title'][:10]}: {logit:.2f} -> {sigmoid_score:.2f}")
+                    except OverflowError:
+                        vector_score_map[str(item["id"])] = 0.0 if item["rerank_score"] < 0 else 1.0
+
+
+        # 5. Scoring & Explainability
         scored_items = []
         for item in candidates:
             v_score = vector_score_map.get(str(item["id"]), 0.0)
-            score, breakdown = self.calculate_score(item, parse_result.criteria, vector_score=v_score)
+            
+            # Calculate final hybrid score (Rule + Vector/Rerank)
+            score_val, breakdown = self.calculate_score(item, parse_result.criteria, vector_score=v_score)
+
+            # Convert score_val (which might be tuple or float) to float
+            if isinstance(score_val, tuple):
+                 final_score = float(score_val[0])
+            else:
+                 final_score = float(score_val)
 
             scored_items.append({
                 "item": item,
-                "score": score,
+                "score": final_score,
                 "vector_score": v_score,
                 "breakdown": breakdown,
                 "payload": payload_map.get(str(item["id"]), {}) # 傳遞 payload
             })
             
-        # 4. Rank
-        scored_items.sort(key=lambda x: x["score"], reverse=True)
+        # 6. Final Rank
+        # Sort by final hybrid score
+        scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
         
         # 【新增】放寬搜尋的最低語意門檻：過濾掉向量分數太低的雜訊
-        if is_relaxed:
-            scored_items = [r for r in scored_items if r['vector_score'] > 0.6]
-            if not scored_items:
-                print("[Engine] ℹ️ 放寬搜尋後仍無足夠相關結果，回傳空結果。")
-                return {
-                    "query": user_query,
-                    "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-                    "query_vector": query_vector,
-                    "results": [],
-                    "is_relaxed": is_relaxed,
-                    "message": "資料庫中無相關書籍，請嘗試其他搜尋條件。"
-                }
+        # 如果有經過 Rerank (且是放寬模式)，分數通常會比較極端 (接近0或1)，門檻可以設低一點
+        if candidates and isinstance(candidates[0], dict) and candidates[0].get("rerank_score") is not None:
+             threshold = 0.01 
+        else:
+             threshold = 0.6
         
+        if is_relaxed:
+            scored_items = [r for r in scored_items if float(r['vector_score']) > threshold]
+            
+        if not scored_items:
+            print("[Engine] ℹ️ 無足夠相關結果，回傳空結果。")
+            return {
+                "query": user_query,
+                "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
+                "query_vector": query_vector, # Debug 用
+                "results": [],
+                "is_relaxed": is_relaxed,
+                "message": "資料庫中無相關書籍，請嘗試其他搜尋條件。"
+            }
+        
+        top_items = scored_items[:limit]
+        
+        # 7. Generate Explanation (LLM)
+        # 只解釋第一名
+        explanation = " (無解釋)"
+        try:
+             # 如果有 Rerank 分數，傳給解釋器參考會更好，但目前先維持原樣
+             # 這裡我們只傳入最終贏家給解釋器
+             # 注意：generate_explanation 需要 QueryParseResult (Pydantic model)
+             from src.core.explainer import generate_explanation 
+             explanation_awaitable = generate_explanation(top_items[0], parse_result)
+             if asyncio.iscoroutine(explanation_awaitable):
+                explanation = await explanation_awaitable
+             else:
+                explanation = explanation_awaitable
+        except Exception as e:
+            print(f"[Engine] Explainer Error: {e}")
+            explanation = f"解釋生成失敗: {str(e)}"
+
+        return {
+            "query": user_query,
+            "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
+            "query_vector": query_vector, # Debug 用
+            "results": top_items,
+            "explanation": explanation,
+            "is_relaxed": is_relaxed
+        }
         final_results = scored_items[:limit]
 
         # --- 5. Explainability ---

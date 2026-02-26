@@ -134,19 +134,9 @@ def parse_query(user_query: str) -> QueryParseResult:
 
     client = genai.Client(api_key=api_key)
 
-    # --- Pre-computation: Auto-Extract Keywords ---
-    # Using KeyBERT + TF-IDF to guide the LLM
-    try:
-        extractor = KeywordExtractor()
-        extracted_keywords = extractor.hybrid_extract(user_query, top_k=6)
-        print(f"[llm] Pre-extracted Keywords: {extracted_keywords}")
-    except Exception as e:
-        print(f"[llm] Keyword extraction failed: {e}")
-        extracted_keywords = []
-
-    keyword_hint = ""
-    if extracted_keywords:
-        keyword_hint = f"\n\n[Hints]\nThe following keywords were statistically extracted from the query. You may use them as a reference for `search_terms` or `generated_keywords` if relevant:\n{json.dumps(extracted_keywords, ensure_ascii=False)}"
+    # 之前嘗試過用 NER (KeyBERT) 輔助提示 LLM，但效果不佳 (太瑣碎)。
+    # 現在改回純 LLM 理解，但保留 KeywordExtractor 程式碼以備不時之需 (fallback logic)。
+    # Extractor is NOT used here to prompt the LLM.
 
     # 手動定義 Schema (保留原有的 schema 定義)
     manual_schema = {
@@ -251,7 +241,7 @@ def parse_query(user_query: str) -> QueryParseResult:
                 @retry_on_rate_limit(max_retries=2, base_delay=5.0)
                 def _do_generate():
                     import re as _re
-                    final_prompt = f"User Query: {user_query}{keyword_hint}"
+                    final_prompt = f"User Query: {user_query}"
                     
                     if is_gemma:
                         config_args = {}
