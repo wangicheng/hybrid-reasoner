@@ -8,32 +8,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 class KeywordExtractor:
     _instance = None
     _model = None
-    
-    # 擴充停用詞表 (濾除無意義的搜尋指令)
-    STOPWORDS = {
-        '的', '了', '和', '是', '就', '都', '而', '及', '與', '著', '或', 
-        '一個', '沒有', '我們', '你們', '他們', 
-        '找', '一本', '想', '要', '有', '甚麼', '什麼', '推薦', '小說', 
-        '字數', '超過', '萬字', '以上', '最好', '主角', '求', '請', '有沒有'
-    }
-
-    # 擴充自定義詞典 (確保特定名詞不被切斷)
-    CUSTOM_DICT = [
-        "廢柴", "逆襲", "廢柴逆襲", "系統", "系統流", "金手指", 
-        "穿越", "重生", "轉生", "異世界", "龍傲天", "扮豬吃虎",
-        "十萬字", "百萬字", "奇幻", "玄幻", "輕小說"
-    ]
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(KeywordExtractor, cls).__new__(cls)
             # Initialize jieba
             jieba.initialize()
-            
-            # Load custom dictionary
-            for word in cls.CUSTOM_DICT:
-                jieba.add_word(word)
-                
             # Explicitly load a multilingual or Chinese model better suited for keywords
             # If the project uses a specific model, we should match it, but 'paraphrase-multilingual' is safer for mixed
             # However, to avoid downloading large new models, we may want to reuse the one from VectorStore if possible.
@@ -49,8 +29,11 @@ class KeywordExtractor:
         if not text:
             return []
             
-        # 1. Candidate Selection
-        candidates = [w for w in jieba.cut(text) if len(w) > 1 and w not in self.STOPWORDS]
+        # 1. Candidate Selection (Jieba)
+        # Combine jieba.cut (segmentation) with POS filtering could be better, but keep it simple first.
+        # Adding simple stopword filtering
+        stopwords = {'的', '了', '和', '是', '就', '都', '而', '及', '與', '著', '或', '一個', '沒有', '我們', '你們', '他們', '找', '一本', '想', '要', '有', '甚麼', '什麼', '推薦', '小說'}
+        candidates = [w for w in jieba.cut(text) if len(w) > 1 and w not in stopwords]
         
         # Remove duplicates while preserving order
         candidates = list(dict.fromkeys(candidates))
@@ -86,12 +69,7 @@ class KeywordExtractor:
         Extracts keywords using Jieba's TF-IDF algorithm. Good for catching specific nouns.
         """
         # Enhance with custom stopwords if needed
-        raw_tfidf = jieba.analyse.extract_tags(text, topK=top_k * 2) # Grab more first
-        
-        # Filter stopwords from TF-IDF results
-        filtered = [w for w in raw_tfidf if w not in self.STOPWORDS]
-        
-        return filtered[:top_k]
+        return jieba.analyse.extract_tags(text, topK=top_k)
 
     def extract_textrank(self, text: str, top_k: int = 5) -> List[str]:
         return jieba.analyse.textrank(text, topK=top_k)

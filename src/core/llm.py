@@ -116,13 +116,14 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
     return final_result
 
 
-def parse_query(user_query: str) -> QueryParseResult:
+def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
     支援多模型 fallback：當主要模型遇到配額限制或錯誤時，自動嘗試下一個模型。
     """
     api_key = os.environ.get("GOOGLE_API_KEY")
-    selected_model = os.getenv("LLM_MODEL_ID", "").strip()
+    # If model_id provides, use it; otherwise fallback to env or default
+    selected_model = model_id or os.getenv("LLM_MODEL_ID", "").strip()
 
     # 建立模型嘗試順序
     if selected_model and selected_model in FALLBACK_MODELS:

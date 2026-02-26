@@ -188,12 +188,17 @@ class HybridEngine:
             
         return total_score, breakdown
 
-    async def search(self, user_query: str, limit: int = 5) -> Dict[str, Any]:
+    async def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Executes the full search pipeline.
+        
+        Args:
+            user_query: The natural language query from user.
+            limit: Maximum number of results to return.
+            model_id: Optional LLM model ID to use for parsing. If not provided, uses default from env or config.
         """
         # 1. Parse Query
-        parse_result = parse_query(user_query)
+        parse_result = parse_query(user_query, model_id=model_id)
         
         # 2. Build Qdrant Filter
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
@@ -249,7 +254,23 @@ class HybridEngine:
                 if hit.get('payload'):
                     payload_map[bid] = hit['payload']
         
-        # 3. Structural Retrieval (Author Match)
+        # 3. Structural Retrieval (Title & Author Match)
+        # 3a. Title Match (Newly Added for Exact Title Search)
+        # Utilizes search_terms to find exact book matches
+        for term in parse_result.search_terms:
+            if len(term) < 2: continue # Skip single chars
+            title_matches = self.db.search_by_title_fuzzy(term)
+            for book in title_matches:
+                b_id = str(book["id"])
+                # Only add if robust match (e.g. term is significant part of title)
+                # For now, trust the keyword search but assign high score
+                if b_id not in candidates_map:
+                    print(f"[Engine] 📖 Title Match found: {book['name']} (term: {term})")
+                    candidates_map[b_id] = book
+                    # Assign max vector score for direct title match
+                    vector_score_map[b_id] = 1.0 
+
+        # 3b. Author Match
         # ... (Author match logic remains same) ...
         for criterion in parse_result.criteria:
             if criterion.name == "author_match":
@@ -349,11 +370,16 @@ class HybridEngine:
         # 只解釋第一名
         explanation = " (無解釋)"
         try:
-             # 如果有 Rerank 分數，傳給解釋器參考會更好，但目前先維持原樣
-             # 這裡我們只傳入最終贏家給解釋器
-             # 注意：generate_explanation 需要 QueryParseResult (Pydantic model)
+             # Fix for API compatibility: explainer expects (query, item, context_chunks=None, score_breakdown=None)
+             # But here we were passing (item, parse_result).
              from src.core.explainer import generate_explanation 
-             explanation_awaitable = generate_explanation(top_items[0], parse_result)
+             
+             winner = top_items[0]
+             explanation_awaitable = generate_explanation(
+                 query=user_query,
+                 book_item=winner['item'],
+                 score_breakdown=winner['breakdown']
+             )
              if asyncio.iscoroutine(explanation_awaitable):
                 explanation = await explanation_awaitable
              else:

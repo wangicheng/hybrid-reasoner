@@ -46,11 +46,8 @@ async def search(request: SearchRequest):
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine is still initializing")
     
-    # Set the model ID environment variable dynamically based on user selection
-    os.environ["LLM_MODEL_ID"] = request.model_id
-        
     try:
-        results = await engine.search(request.query, limit=10)
+        results = await engine.search(request.query, limit=10, model_id=request.model_id)
         return results
     except Exception as e:
         import traceback
