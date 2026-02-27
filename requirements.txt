@@ -1,6 +1,5 @@
 openai
 qdrant-client
-sentence-transformers
 pydantic
 pydantic-settings
 python-dotenv
