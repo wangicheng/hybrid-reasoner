@@ -1,0 +1,79 @@
+=== Data Ingestion Script ===
+Loading data from c:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\data\books_crawled.json...
+Loaded 2000 items.
+
+Initializing Database and VectorStore...
+
+--- Step 1: SQLite Ingestion ---
+Ingesting 2000 items into SQLite...
+  SQLite: 500/2000 items ingested.
+  SQLite: 1000/2000 items ingested.
+  SQLite: 1500/2000 items ingested.
+  SQLite: 2000/2000 items ingested.
+SQLite ingestion complete. Total: 2000 items.
+
+--- Step 2: Qdrant Ingestion ---
+Ingesting 2000 items into Qdrant (batch size: 100)...
+  Qdrant: 100/2000 items ingested.
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "c:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\src\scripts\ingest_data.py", line 89, in <module>
+    main()
+    ~~~~^^
+  File "c:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\src\scripts\ingest_data.py", line 83, in main
+    ingest_to_qdrant(vs, items)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "c:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\src\scripts\ingest_data.py", line 52, in ingest_to_qdrant
+    vs.add_items(batch)
+    ~~~~~~~~~~~~^^^^^^^
+  File "c:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\src\core\vector_store.py", line 138, in add_items
+    response = self.genai_client.models.embed_content(
+        model=self.embedding_model,
+        contents=batch_texts,
+        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+    )
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\google\genai\models.py", line 5482, in embed_content
+    return self._embed_content(model=model, contents=contents, config=config)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\google\genai\models.py", line 4482, in _embed_content
+    response = self._api_client.request(
+        'post', path, request_dict, http_options
+    )
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\google\genai\_api_client.py", line 1396, in request
+    response = self._request(http_request, http_options, stream=False)
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\google\genai\_api_client.py", line 1232, in _request
+    return self._retry(self._request_once, http_request, stream)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\tenacity\__init__.py", line 470, in __call__
+    do = self.iter(retry_state=retry_state)
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\tenacity\__init__.py", line 371, in iter
+    result = action(retry_state)
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\tenacity\__init__.py", line 413, in exc_check
+    raise retry_exc.reraise()
+          ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\tenacity\__init__.py", line 184, in reraise
+    raise self.last_attempt.result()
+          ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\sean\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\sean\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\tenacity\__init__.py", line 473, in __call__
+    result = fn(*args, **kwargs)
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\google\genai\_api_client.py", line 1209, in _request_once
+    errors.APIError.raise_for_response(response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\google\genai\errors.py", line 134, in raise_for_response
+    cls.raise_error(response.status_code, response_json, response)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\google\genai\errors.py", line 159, in raise_error
+    raise ClientError(status_code, response_json, response)
+google.genai.errors.ClientError: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/embed_content_free_tier_requests, limit: 100, model: gemini-embedding-1.0\nPlease retry in 25.602823048s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/embed_content_free_tier_requests', 'quotaId': 'EmbedContentRequestsPerMinutePerUserPerProjectPerModel-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-embedding-1.0'}, 'quotaValue': '100'}]}, {'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '25s'}]}}
+Exception ignored in: <function QdrantClient.__del__ at 0x00000275238D6340>
+Traceback (most recent call last):
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\qdrant_client\qdrant_client.py", line 169, in __del__
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\qdrant_client\qdrant_client.py", line 178, in close
+  File "C:\Users\sean\桌面\mlgb_project\hybrid-reasoner-1.2.1ver\venv\Lib\site-packages\qdrant_client\local\qdrant_local.py", line 85, in close
+ImportError: sys.meta_path is None, Python is likely shutting down
