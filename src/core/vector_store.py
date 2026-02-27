@@ -167,24 +167,22 @@ class VectorStore:
             if not batch_texts:
                 continue # Skip batch if all items are already embedded
             
-            # Simple retry logic for rate limit
-            max_retries = 3
-            response = None
-            for attempt in range(max_retries):
-                try:
-                    response = self.genai_client.models.embed_content(
-                        model=self.embedding_model,
-                        contents=batch_texts,
-                        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-                    )
-                    break
-                except ClientError as e:
-                    if e.code == 429 and attempt < max_retries - 1:
-                        print(f"Rate limit hit during ingestion, waiting 30 seconds... (Attempt {attempt+1})")
-                        time.sleep(30)
-                    else:
-                        raise e
-                        
+            from src.core.api_utils import retry_on_rate_limit
+            
+            @retry_on_rate_limit(max_retries=3, base_delay=10.0)
+            def _embed():
+                return self.genai_client.models.embed_content(
+                    model=self.embedding_model,
+                    contents=batch_texts,
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                )
+                
+            try:
+                response = _embed()
+            except Exception as e:
+                print(f"Failed to embed batch after retries: {e}")
+                continue
+                
             if not response:
                 continue
             

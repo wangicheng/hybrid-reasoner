@@ -70,7 +70,7 @@ class HybridEngine:
                     field = params.get("field")
                     keyword = params.get("keyword")
                     # 清理 LLM 可能產生的空格 (e.g. "網 遊" -> "網遊")
-                    if keyword and isinstance(keyword, str):
+                    if field in ["classification", "tags"] and keyword and isinstance(keyword, str):
                         keyword = keyword.replace(" ", "")
                     
                     # 【核心修改】：如果是找分類或標籤，採取寬鬆策略 (Classification OR Tags)
@@ -137,6 +137,7 @@ class HybridEngine:
         
         breakdown.append({
             "criteria": "semantic_similarity",
+            "label": "語意與內容相似度",
             "weight": sem_weight,
             "raw_score": vector_score,       # 顯示原始分供參考
             "normalized_score": normalized_v_score, # 顯示拉伸後的分數
@@ -175,8 +176,31 @@ class HybridEngine:
             score_contrib = raw_score * weight
             total_score += score_contrib
             
+            # 產生人類可讀的標籤
+            label = func_name
+            if func_name == "keyword_match":
+                field = params.get("field", "")
+                field_str = "分類" if field == "classification" else ("標籤" if field == "tags" else field)
+                label = f"{field_str}: {params.get('keyword', '關鍵字')}"
+            elif func_name == "numeric_range":
+                min_v = params.get("min_val")
+                max_v = params.get("max_val")
+                if min_v and max_v:
+                    label = f"字數: {int(min_v/10000)}萬-{int(max_v/10000)}萬"
+                elif min_v:
+                    label = f"字數 > {int(min_v/10000)}萬"
+                elif max_v:
+                    label = f"字數 < {int(max_v/10000)}萬"
+                else:
+                    label = "字數範圍"
+            elif func_name == "status_check":
+                label = f"狀態: {params.get('target_status', '狀態')}"
+            elif func_name == "author_match":
+                label = f"作者: {params.get('author_name', '作者')}"
+
             breakdown.append({
                 "criteria": func_name,
+                "label": label,
                 "weight": weight,
                 "raw_score": raw_score,
                 "weighted_score": score_contrib,
@@ -186,13 +210,28 @@ class HybridEngine:
             
         return total_score, breakdown
 
-    def search(self, user_query: str, limit: int = 5) -> Dict[str, Any]:
+    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Executes the full search pipeline.
         """
         # 1. Parse Query
-        parse_result = parse_query(user_query)
+        parse_result = parse_query(user_query, model_id=model_id)
         
+        try:
+            return self._execute_search(user_query, parse_result, limit)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {
+                "query": user_query,
+                "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
+                "query_vector": [],
+                "results": [],
+                "is_relaxed": False,
+                "error": str(e)
+            }
+
+    def _execute_search(self, user_query: str, parse_result: Any, limit: int) -> Dict[str, Any]:
         # 2. Build Qdrant Filter
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
         

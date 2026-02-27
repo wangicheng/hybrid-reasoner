@@ -28,9 +28,20 @@ async function performSearch() {
     const data = await response.json();
     loading.classList.add('hidden');
 
+    if (!response.ok) {
+      throw new Error(data.detail || '伺服器發生錯誤');
+    }
+
     // --- Display Search Interpretation ---
     if (data.parsed_criteria && data.parsed_criteria.length > 0) {
       displayInterpretation(interpretationBox, data.parsed_criteria, data.query_vector);
+    }
+
+    if (data.error) {
+      const errorNotice = document.createElement('div');
+      errorNotice.style.cssText = "color: #d32f2f; background: #ffebee; padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;";
+      errorNotice.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> 檢索過程發生部分錯誤：${data.error}`;
+      resultsContainer.appendChild(errorNotice);
     }
 
     // --- 延伸推薦提示 (Relaxed Search Notice) ---
@@ -55,7 +66,7 @@ async function performSearch() {
   } catch (error) {
     console.error('Error:', error);
     loading.classList.add('hidden');
-    resultsContainer.innerHTML = '<div style="color:red; text-align:center;">發生錯誤，請檢查後端服務是否啟動</div>';
+    resultsContainer.innerHTML = `<div style="color:#d32f2f; background: #ffebee; padding: 15px; border-radius: 8px; text-align:center;"><i class="fa-solid fa-triangle-exclamation"></i> ${error.message || '發生錯誤，請檢查後端服務是否啟動'}</div>`;
   }
 }
 
@@ -158,7 +169,7 @@ function createResultCard(result) {
 
       // 以單項 0~1 的 originalScore 作為百分比顯示
       const widthPercent = Math.min(originalScore * 100, 100);
-      const label = getCriteriaLabel(b);
+      const label = b.label || b.criteria;
 
       breakdownHtml += `
                 <div class="score-bar-container">
@@ -232,43 +243,6 @@ window.toggleExplanation = function (headerElement) {
       icon.classList.remove('fa-chevron-up');
       icon.classList.add('fa-chevron-down');
     }
-  }
-}
-
-// 輔助函式：根據 breakdown 項目生成人類可讀的標籤
-function getCriteriaLabel(breakdownItem) {
-  const name = breakdownItem.criteria;
-  const params = breakdownItem.params || {};
-
-  switch (name) {
-    case 'semantic_similarity':
-      return '語意與內容相似度';
-    case 'keyword_match':
-      // 顯示具體匹配到的關鍵字
-      const keyword = params.keyword || '關鍵字';
-      const field = params.field === 'classification' ? '分類' : (params.field === 'tags' ? '標籤' : params.field || '');
-      return `${field}: ${keyword}`;
-    case 'numeric_range':
-      // 顯示具體的數值範圍
-      const min = params.min_val;
-      const max = params.max_val;
-      let rangeStr = '字數範圍';
-      if (min && max) {
-        rangeStr = `字數: ${(min / 10000).toFixed(0)}萬 - ${(max / 10000).toFixed(0)}萬`;
-      } else if (min) {
-        rangeStr = `字數 > ${(min / 10000).toFixed(0)}萬`;
-      } else if (max) {
-        rangeStr = `字數 < ${(max / 10000).toFixed(0)}萬`;
-      }
-      return rangeStr;
-    case 'status_check':
-      const status = params.target_status || '狀態';
-      return `狀態: ${status}`;
-    case 'author_match':
-      const author = params.author_name || '作者';
-      return `作者: ${author}`;
-    default:
-      return name;
   }
 }
 
