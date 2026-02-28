@@ -228,11 +228,25 @@ def score_numeric_ranking(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple
     midpoint = normalize_max / 2
     steepness = 6.0 / normalize_max
     
+    # Sigmoid overflow fix
+    def safe_sigmoid(x):
+        if x > 700:
+            return 1.0
+        if x < -700:
+            return 0.0
+        return 1.0 / (1.0 + math.exp(-x))
+
     if direction == "asc":
-        score = 1.0 / (1.0 + math.exp(-steepness * (val - midpoint)))
-        reason = f"數值 {int(val)} 較高 (傾向正面)"
+        # exp(-x), if (val - midpoint) is very positive, -x is very negative -> result ~1.0
+        # if (val - midpoint) is very negative, -x is very positive -> result ~0.0
+        x = steepness * (val - midpoint)
+        score = safe_sigmoid(x)
+        reason = f"數值 {int(val)} (高於平均)"
     else:
-        score = 1.0 / (1.0 + math.exp(steepness * (val - midpoint)))
-        reason = f"數值 {int(val)} 較低 (傾向正面)"
+        # For desc, we want higher score for lower values.
+        # Use negative x so safe_sigmoid handles inversion if x is positive (val > mid)
+        x = -steepness * (val - midpoint)
+        score = safe_sigmoid(x)
+        reason = f"數值 {int(val)} (低於平均)"
     
     return score, reason

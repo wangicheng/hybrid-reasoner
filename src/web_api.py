@@ -47,7 +47,7 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=503, detail="Engine is still initializing")
     
     try:
-        results = engine.search(request.query, limit=10, model_id=request.model_id)
+        results = await engine.search(request.query, limit=10, model_id=request.model_id)
         return results
     except Exception as e:
         import traceback

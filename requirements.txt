@@ -7,3 +7,4 @@ numpy
 google-genai
 fastapi
 uvicorn
+jieba

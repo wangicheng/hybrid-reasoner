@@ -134,6 +134,30 @@ class Database:
             items.append(d)
         return items
 
+    def search_by_title_fuzzy(self, keyword: str) -> List[Dict[str, Any]]:
+        """
+        Scan table for title that contains the keyword.
+        """
+        if not keyword:
+            return []
+            
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        pattern = f"%{keyword}%"
+        cursor.execute("SELECT * FROM novels WHERE name LIKE ?", (pattern,))
+        rows = cursor.fetchall()
+        conn.close()
+        
+        items = []
+        for row in rows:
+            d = dict(row)
+            d["tags"] = json.loads(d["tags"]) if d["tags"] else []
+            d["attributes"] = json.loads(d["attributes"]) if d["attributes"] else {}
+            items.append(d)
+        return items
+
     def search_by_author(self, author_name: str) -> List[Dict[str, Any]]:
         """
         Search for novels by author name or nickname.

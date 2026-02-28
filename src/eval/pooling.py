@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import random
+import asyncio
 from typing import List, Dict, Any
 from pathlib import Path
 
@@ -49,6 +50,8 @@ class PoolGenerator:
             print(f"  Running {engine_name}...")
             # 每個 Engine 抽取 Top-K (關閉 AI 解釋以節省 API 成本)
             response = engine.search(query, limit=self.k, explain=False)
+            if asyncio.iscoroutine(response):
+                response = asyncio.run(response)
             
             # 從回傳中拿出 results
             results = response.get("results", [])

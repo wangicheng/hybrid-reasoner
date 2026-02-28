@@ -8,11 +8,13 @@ from src.logic.registry import ScoringRegistry
 from qdrant_client.http import models as rest
 import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
+from src.core.reranker import Reranker
 
 class BaseEngine:
     def __init__(self, db=None, vs=None):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
+        self.reranker = Reranker()
 
     def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
         """
@@ -101,6 +103,9 @@ class ExactMatchEngine(BaseEngine):
     純粹使用 LLM 解析出的硬性條件，轉化為 Qdrant Filter 進行過濾。
     這代表了最傳統的「標籤勾選+字數過濾」網站體驗。不比較語意，純看是否命中條件。
     """
+    def __init__(self, db=None, vs=None):
+        super().__init__(db, vs)
+
     def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         parse_result = parse_query(user_query, model_id=model_id)
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
@@ -149,7 +154,19 @@ class PureVectorEngine(BaseEngine):
     2. 純語意向量搜尋 (Pure Vector Search Baseline)
     不使用 LLM，完全用使用者的原句產生 Embedding，進行 Qdrant Cosine Similarity 搜尋。
     """
+    def __init__(self, db=None, vs=None):
+        super().__init__(db, vs)
+
     def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
+        """
+        Executes the full search pipeline.
+        
+        Args:
+            user_query: The natural language query from user.
+            limit: Maximum number of results to return.
+            model_id: Optional LLM model ID to use for parsing. If not provided, uses default from env or config.
+            explain: Whether to generate an explanation.
+        """
         try:
             vector_results, query_vector = self.vs.search(
                 user_query, # 完全使用使用者的原始字串
@@ -192,6 +209,9 @@ class FilteredVectorEngine(BaseEngine):
     使用 LLM 萃取硬性條件 (Filter)，並結合查詢內容的向量與 Qdrant 搜尋。
     取出 Top-K 後，不執行我們自訂的「多維度條件（Criteria）逐條計分」。
     """
+    def __init__(self, db=None, vs=None):
+        super().__init__(db, vs)
+
     def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         parse_result = parse_query(user_query, model_id=model_id)
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
@@ -240,6 +260,9 @@ class HybridReasonerEngine(BaseEngine):
     4. 深度推理混合引擎 (Hybrid Reasoner Engine) —— 現有的實驗組 (Proposed Method)
     包含 Filter、向量、局部取回後的多維度條件逐條加權計分，與可解釋性生成。
     """
+    def __init__(self, db=None, vs=None):
+        super().__init__(db, vs)
+
     def _normalize_vector_score(self, raw_score: float) -> float:
         """將 Qdrant 的 Cosine Score 拉伸到 0.0~1.0"""
         min_threshold = 0.35
@@ -342,25 +365,14 @@ class HybridReasonerEngine(BaseEngine):
             
         return total_score, breakdown
 
-    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
+    async def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
+        """
+        Executes the full search pipeline.
+        """
+        # 1. Parse Query
         parse_result = parse_query(user_query, model_id=model_id)
         
-        try:
-            return self._execute_search(user_query, parse_result, limit, explain)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return {
-                "query": user_query,
-                "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-                "query_vector": [],
-                "results": [],
-                "is_relaxed": False,
-                "error": str(e),
-                "engine": "HybridReasonerEngine"
-            }
-
-    def _execute_search(self, user_query: str, parse_result: Any, limit: int, explain: bool = True) -> Dict[str, Any]:
+        # 2. Build Qdrant Filter
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
         
         base_terms = " ".join(parse_result.search_terms) or parse_result.original_query
@@ -407,12 +419,32 @@ class HybridReasonerEngine(BaseEngine):
                 if hit.get('payload'):
                     payload_map[bid] = hit['payload']
         
+        # 3. Structural Retrieval (Title & Author Match)
+        # 3a. Title Match (Newly Added for Exact Title Search)
+        # Utilizes search_terms to find exact book matches
+        for term in parse_result.search_terms:
+            if len(term) < 2: continue # Skip single chars
+            title_matches = self.db.search_by_title_fuzzy(term)
+            for book in title_matches:
+                b_id = str(book["id"])
+                # Only add if robust match (e.g. term is significant part of title)
+                # For now, trust the keyword search but assign high score
+                if b_id not in candidates_map:
+                    print(f"[Engine] 📖 Title Match found: {book['name']} (term: {term})")
+                    candidates_map[b_id] = book
+                    # Assign max vector score for direct title match
+                    vector_score_map[b_id] = 1.0 
+
+        # 3b. Author Match
         for criterion in parse_result.criteria:
             if criterion.name == "author_match":
+                # Handle parameter extraction more safely
                 if hasattr(criterion.parameters, 'author_name'):
                     author_name = criterion.parameters.author_name
-                else:
+                elif isinstance(criterion.parameters, dict):
                     author_name = criterion.parameters.get("author_name")
+                else: 
+                    author_name = None
                 
                 if author_name:
                     author_books = self.db.search_by_author(author_name)
@@ -424,35 +456,61 @@ class HybridReasonerEngine(BaseEngine):
 
         candidates = list(candidates_map.values())
 
+        # 4. Scoring
         scored_items = []
         for item in candidates:
             v_score = vector_score_map.get(str(item["id"]), 0.0)
-            score, breakdown = self.calculate_score(item, parse_result.criteria, vector_score=v_score)
+            
+            # Calculate final hybrid score (Rule + Vector/Rerank)
+            score_val, breakdown = self.calculate_score(item, parse_result.criteria, vector_score=v_score)
+
+            final_score = float(score_val)
 
             scored_items.append({
                 "item": item,
-                "score": score,
+                "score": final_score,
                 "vector_score": v_score,
                 "breakdown": breakdown,
                 "payload": payload_map.get(str(item["id"]), {}) 
             })
             
-        scored_items.sort(key=lambda x: x["score"], reverse=True)
+        # 5. Rerank (Optional)
+        if self.reranker and scored_items:
+            rerank_query = user_query
+            if parse_result.search_terms:
+                rerank_query = " ".join(parse_result.search_terms)
+            
+            reranked_scores = self.reranker.rerank(rerank_query, [item['item'] for item in scored_items])
+            for i, score in enumerate(reranked_scores):
+                scored_items[i]['rerank_score'] = score
+                # Integrate rerank score into final score, e.g., as a multiplier or additive component
+                # For now, let's just add it as a separate score for potential future use or sorting
+                # scored_items[i]['score'] = scored_items[i]['score'] * (1 + score) # Example integration
+        
+        # 6. Final Rank
+        # Sort by final hybrid score
+        scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
+        
+        # 放寬搜尋的最低語意門檻：過濾掉向量分數太低的雜訊
+        if candidates and isinstance(candidates[0], dict) and candidates[0].get("rerank_score") is not None:
+             threshold = 0.01 
+        else:
+             threshold = 0.6
         
         if is_relaxed:
-            scored_items = [r for r in scored_items if r['vector_score'] > 0.6]
-            if not scored_items:
-                print("[Engine] ℹ️ 放寬搜尋後仍無足夠相關結果，回傳空結果。")
-                return {
-                    "query": user_query,
-                    "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-                    "query_vector": query_vector,
-                    "results": [],
-                    "is_relaxed": is_relaxed,
-                    "message": "資料庫中無相關書籍，請嘗試其他搜尋條件。",
-                    "engine": "HybridReasonerEngine"
-                }
-        
+            scored_items = [r for r in scored_items if float(r['vector_score']) > threshold]
+            
+        if not scored_items:
+            print("[Engine] ℹ️ 無足夠相關結果，回傳空結果。")
+            return {
+                "query": user_query,
+                "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
+                "query_vector": query_vector,
+                "results": [],
+                "is_relaxed": is_relaxed,
+                "message": "資料庫中無相關書籍，請嘗試其他搜尋條件。",
+                "engine": "HybridReasonerEngine"
+            }
         final_results = scored_items[:limit]
 
         top_n_explain = 3 if explain else 0 

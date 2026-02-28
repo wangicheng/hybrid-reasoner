@@ -6,6 +6,7 @@ from google import genai
 from google.genai import types
 from src.models.schemas import QueryParseResult
 from src.core.api_utils import retry_on_rate_limit, _is_retryable
+from src.core.keyword_extractor import KeywordExtractor
 
 # 可用模型清單 (依優先順序排列，當前模型失敗時自動切換)
 FALLBACK_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
@@ -134,6 +135,10 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
         models_to_try = FALLBACK_MODELS
 
     client = genai.Client(api_key=api_key)
+
+    # 之前嘗試過用 NER (KeyBERT) 輔助提示 LLM，但效果不佳 (太瑣碎)。
+    # 現在改回純 LLM 理解，但保留 KeywordExtractor 程式碼以備不時之需 (fallback logic)。
+    # Extractor is NOT used here to prompt the LLM.
 
     # 手動定義 Schema (保留原有的 schema 定義)
     manual_schema = {
