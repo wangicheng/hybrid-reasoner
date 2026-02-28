@@ -214,3 +214,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Data & Experiments
+data/qdrant_storage/
+data/*.json
+data/experiments/pools/
