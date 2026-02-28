@@ -38,7 +38,7 @@ class TestParser(unittest.TestCase):
         self.assertEqual(result.original_query, "cheap laptop")
         self.assertEqual(len(result.criteria), 1)
         self.assertEqual(result.criteria[0].name, "numeric_range")
-        self.assertEqual(result.criteria[0].parameters["max_val"], 1000)
+        self.assertEqual(result.criteria[0].parameters.max_val, 1000)
 
 if __name__ == '__main__':
     unittest.main()
