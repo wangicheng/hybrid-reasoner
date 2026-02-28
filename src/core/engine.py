@@ -10,9 +10,9 @@ import src.logic.scoring_functions
 from src.core.explainer import generate_explanation 
 
 class BaseEngine:
-    def __init__(self):
-        self.db = Database()
-        self.vs = VectorStore(collection_name="novels")
+    def __init__(self, db=None, vs=None):
+        self.db = db if db is not None else Database()
+        self.vs = vs if vs is not None else VectorStore(collection_name="novels")
 
     def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
         """
@@ -88,7 +88,7 @@ class BaseEngine:
             return None
         return rest.Filter(must=conditions)
 
-    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None) -> Dict[str, Any]:
+    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         """
         Base search interface. Derived classes must implement this.
         """
@@ -101,7 +101,7 @@ class ExactMatchEngine(BaseEngine):
     純粹使用 LLM 解析出的硬性條件，轉化為 Qdrant Filter 進行過濾。
     這代表了最傳統的「標籤勾選+字數過濾」網站體驗。不比較語意，純看是否命中條件。
     """
-    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None) -> Dict[str, Any]:
+    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         parse_result = parse_query(user_query, model_id=model_id)
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
         
@@ -149,7 +149,7 @@ class PureVectorEngine(BaseEngine):
     2. 純語意向量搜尋 (Pure Vector Search Baseline)
     不使用 LLM，完全用使用者的原句產生 Embedding，進行 Qdrant Cosine Similarity 搜尋。
     """
-    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None) -> Dict[str, Any]:
+    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         try:
             vector_results, query_vector = self.vs.search(
                 user_query, # 完全使用使用者的原始字串
@@ -192,7 +192,7 @@ class FilteredVectorEngine(BaseEngine):
     使用 LLM 萃取硬性條件 (Filter)，並結合查詢內容的向量與 Qdrant 搜尋。
     取出 Top-K 後，不執行我們自訂的「多維度條件（Criteria）逐條計分」。
     """
-    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None) -> Dict[str, Any]:
+    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         parse_result = parse_query(user_query, model_id=model_id)
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
         
@@ -342,11 +342,11 @@ class HybridReasonerEngine(BaseEngine):
             
         return total_score, breakdown
 
-    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None) -> Dict[str, Any]:
+    def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         parse_result = parse_query(user_query, model_id=model_id)
         
         try:
-            return self._execute_search(user_query, parse_result, limit)
+            return self._execute_search(user_query, parse_result, limit, explain)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -360,7 +360,7 @@ class HybridReasonerEngine(BaseEngine):
                 "engine": "HybridReasonerEngine"
             }
 
-    def _execute_search(self, user_query: str, parse_result: Any, limit: int) -> Dict[str, Any]:
+    def _execute_search(self, user_query: str, parse_result: Any, limit: int, explain: bool = True) -> Dict[str, Any]:
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
         
         base_terms = " ".join(parse_result.search_terms) or parse_result.original_query
@@ -455,7 +455,7 @@ class HybridReasonerEngine(BaseEngine):
         
         final_results = scored_items[:limit]
 
-        top_n_explain = 3 
+        top_n_explain = 3 if explain else 0 
         for i, res in enumerate(final_results):
             if i < top_n_explain:
                 item = res['item']

@@ -1,5 +1,6 @@
 import os
 import json
+import functools
 from typing import Any, Dict, List, Optional
 from google import genai
 from google.genai import types
@@ -115,6 +116,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
     return final_result
 
 
+@functools.lru_cache(maxsize=100)
 def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。

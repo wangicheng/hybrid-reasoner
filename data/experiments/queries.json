@@ -1,0 +1,20 @@
+[
+    {
+        "id": "q1",
+        "query": "請推薦字數超過一百萬字的無敵流修仙小說",
+        "golden_rules": {
+            "min_words": 1000000,
+            "max_words": null,
+            "required_status": null
+        }
+    },
+    {
+        "id": "q2",
+        "query": "有沒有完結的科幻愛情小說，最好有賽博龐克風格",
+        "golden_rules": {
+            "min_words": null,
+            "max_words": null,
+            "required_status": "completed"
+        }
+    }
+]
