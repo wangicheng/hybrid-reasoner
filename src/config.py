@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     
     # Use absolute paths based on PROJECT_ROOT
     QDRANT_PATH: str = str(PROJECT_ROOT / "data" / "qdrant_storage")
-    DB_PATH: str = str(PROJECT_ROOT / "hybrid_reasoner.db")
+    DB_PATH: str = str(PROJECT_ROOT / "data" / "hybrid_reasoner.db")
     
     class Config:
         env_file = ".env"

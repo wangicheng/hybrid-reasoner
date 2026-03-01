@@ -34,7 +34,7 @@ def load_data(filepath: Path):
     """Load JSON data from file."""
     print(f"Loading data from {filepath}...")
     if not filepath.exists():
-        print(f"Error: File {filepath} not found. Please run src/crawler_linovelib.py first.")
+        print(f"Error: File {filepath} not found. Please run src/scripts/crawler_linovelib.py first.")
         return []
         
     with open(filepath, "r", encoding="utf-8") as f:
