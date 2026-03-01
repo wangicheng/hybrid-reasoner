@@ -91,27 +91,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
                     else:
                         item.pop(param) # Duplicate
             
-            # Fix Weight
-            if "weight" not in item:
-                item["weight"] = 0.5 # Default weight
-            else:
-                try:
-                    item["weight"] = float(item["weight"])
-                except:
-                    item["weight"] = 0.5
-
             valid_criteria.append(item)
-            
-    # 等比縮放權重使總和為 1
-    if valid_criteria:
-        total_weight = sum(item.get("weight", 0.0) for item in valid_criteria)
-        if total_weight > 0:
-            for item in valid_criteria:
-                item["weight"] = item["weight"] / total_weight
-        else:
-            eq_weight = 1.0 / len(valid_criteria)
-            for item in valid_criteria:
-                item["weight"] = eq_weight
     
     final_result["criteria"] = valid_criteria
     return final_result
@@ -161,7 +141,6 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
-                        "weight": {"type": "number"},
                         "description": {"type": "string"},
                         "parameters": {
                             "type": "object",
@@ -178,7 +157,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                             }
                         }
                     },
-                    "required": ["name", "weight", "parameters"]
+                    "required": ["name", "parameters"]
                 }
             }
         },
@@ -186,12 +165,12 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     }
 
     system_instruction = """
-    You are a web novel recommendation assistant. Your goal is to break down the user's query into weighted scoring criteria.
+    You are a web novel recommendation assistant. Your goal is to break down the user's query into scoring criteria.
     Output a JSON object satisfying the schema.
     """
     
     full_system_instruction = """
-    You are a web novel recommendation assistant. Your goal is to break down the user's query into weighted scoring criteria.
+    You are a web novel recommendation assistant. Your goal is to break down the user's query into scoring criteria.
     
     ### Available Scoring Functions
     1. **keyword_match** (field, keyword): 'classification', 'tags', 'name'.
@@ -310,7 +289,6 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                     fallback_criteria.append(
                         ScoringCriteria(
                             name="keyword_match",
-                            weight=1.0, 
                             parameters=ScoringParameters(field="tags", keyword=tag.strip())
                         )
                     )
@@ -321,7 +299,6 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                    fallback_criteria.append(
                         ScoringCriteria(
                             name="keyword_match",
-                            weight=0.5, 
                             parameters=ScoringParameters(field="tags", keyword=p)
                         )
                     )
@@ -329,7 +306,6 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
         fallback_criteria.append(
             ScoringCriteria(
                 name="semantic_similarity", 
-                weight=1.0, 
                 parameters=ScoringParameters(query_text=user_query)
             )
         )

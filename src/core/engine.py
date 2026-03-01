@@ -33,7 +33,7 @@ class BaseEngine:
                 params = criteria.parameters if isinstance(criteria.parameters, dict) else {}
 
             name = criteria.name
-            weight = criteria.weight
+            weight = 1.0
 
             # 1. Numeric Range
             if name == "numeric_range":
@@ -301,12 +301,8 @@ class HybridReasonerEngine(BaseEngine):
         # --- 1. 處理向量分數 ---
         semantic_criteria = next((c for c in criteria_list if c.name == "semantic_similarity"), None)
         
-        if semantic_criteria:
-            sem_weight = semantic_criteria.weight
-            reason_suffix = "(LLM 指定)"
-        else:
-            sem_weight = 1.0  
-            reason_suffix = "(系統預設)"
+        sem_weight = 1.0
+        reason_suffix = "(固定權重)"
 
         normalized_v_score = (
             normalized_vector_score
@@ -333,7 +329,7 @@ class HybridReasonerEngine(BaseEngine):
             if func_name == "semantic_similarity":
                 continue
                 
-            weight = criteria.weight
+            weight = 1.0
             
             if hasattr(criteria.parameters, 'model_dump'):
                 params = criteria.parameters.model_dump()
