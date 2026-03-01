@@ -37,14 +37,39 @@ class Reranker:
             return candidates[:top_k]
 
         # 1. Prepare pairs for the model: [ (Query, Doc1), (Query, Doc2), ... ]
-        # Combine title and description for better context
+        # Combine multi-field text for better context: title + tags + intro + chapters
         pairs = []
         for item in candidates:
             # Handle potential missing fields gracefully
-            title = item.get("title", "")
-            desc = item.get("description") or item.get("summary") or item.get("intro") or ""
-            # A good format for novels is usually: "Title: {title}. Summary: {desc}"
-            doc_text = f"Title: {title}. Summary: {desc[:300]}" # Truncate long descriptions for speed
+            title = item.get("title") or item.get("name") or ""
+
+            tags = item.get("tags") or []
+            if isinstance(tags, list):
+                tags_text = ", ".join([str(tag) for tag in tags if tag is not None])
+            else:
+                tags_text = str(tags)
+
+            intro = item.get("description") or item.get("summary") or item.get("intro") or ""
+
+            chapters = item.get("chapters")
+            if chapters is None and isinstance(item.get("attributes"), dict):
+                chapters = item.get("attributes", {}).get("chapters")
+
+            chapter_titles = []
+            if isinstance(chapters, list):
+                for chapter in chapters:
+                    if isinstance(chapter, dict):
+                        chapter_titles.append(str(chapter.get("title") or chapter.get("name") or ""))
+                    else:
+                        chapter_titles.append(str(chapter))
+            chapters_text = " | ".join([c for c in chapter_titles if c])
+
+            doc_text = (
+                f"Title: {title}\n"
+                f"Tags: {tags_text}\n"
+                f"Intro: {intro}\n"
+                f"Chapters: {chapters_text}"
+            )
             pairs.append((query, doc_text))
 
         # 2. Predict scores

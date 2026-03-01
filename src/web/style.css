@@ -28,15 +28,129 @@ header {
 
 .search-box {
     display: flex;
-    gap: 10px;
+    background: white;
+    padding: 15px;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    margin-bottom: 12px;
+}
+
+.search-options-box {
     background: white;
     padding: 15px;
     border-radius: 12px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
 }
 
+.search-row {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+}
+
+.input-row {
+    width: 100%;
+}
+
+.options-row {
+    align-items: center;
+}
+
+.search-select {
+    flex: 1;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+    cursor: pointer;
+    background: white;
+    font-size: 16px;
+}
+
+.bookshelf-panel {
+    background: var(--card-bg);
+    border-radius: 12px;
+    margin: 16px 0 20px;
+    padding: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.bookshelf-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.bookshelf-header h2 {
+    margin: 0;
+    font-size: 1.1em;
+    color: #2c3e50;
+}
+
+.bookshelf-count {
+    font-size: 0.9em;
+    color: #666;
+}
+
+.bookshelf-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bookshelf-empty {
+    color: #777;
+    font-size: 0.92em;
+    background: #fafafa;
+    border: 1px dashed #ddd;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.bookshelf-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: #fff;
+}
+
+.bookshelf-item-main {
+    min-width: 0;
+}
+
+.bookshelf-item-title {
+    font-weight: 600;
+    color: #2c3e50;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bookshelf-item-meta {
+    font-size: 0.85em;
+    color: #7f8c8d;
+    margin-top: 2px;
+}
+
+.bookshelf-remove-btn {
+    background: #f5f5f5;
+    color: #555;
+    border: 1px solid #ddd;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.85em;
+}
+
+.bookshelf-remove-btn:hover {
+    background: #eeeeee;
+}
+
 input {
     flex: 1;
+    width: 100%;
     padding: 12px;
     border: 1px solid #ddd;
     border-radius: 8px;
@@ -52,6 +166,11 @@ button {
     cursor: pointer;
     font-size: 16px;
     transition: background 0.3s;
+    white-space: nowrap;
+}
+
+#search-btn {
+    min-width: 120px;
 }
 
 button:hover {
@@ -102,6 +221,32 @@ button:hover {
     font-size: 0.9em;
 }
 
+.card-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.bookshelf-toggle-btn {
+    font-size: 0.85em;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid #d7e3f3;
+    background: #f4f9ff;
+    color: #2f5d8a;
+}
+
+.bookshelf-toggle-btn:hover {
+    background: #e9f2ff;
+}
+
+.bookshelf-toggle-btn.saved {
+    border-color: #7fb3f0;
+    background: #e3f0ff;
+    color: #1f4f85;
+}
+
 .tags {
     margin: 10px 0;
 }
@@ -146,6 +291,18 @@ button:hover {
     font-weight: 500;
 }
 
+.score-value {
+    font-size: 0.8em;
+    color: #666;
+    min-width: 48px;
+    text-align: right;
+}
+
+.score-value.binary {
+    font-weight: 600;
+    color: #455a64;
+}
+
 .progress-track {
     flex: 1;
     height: 8px;
@@ -158,6 +315,13 @@ button:hover {
 .progress-fill {
     height: 100%;
     background: var(--accent-color);
+}
+
+.score-reason {
+    font-size: 0.8em;
+    color: #6c757d;
+    margin: -2px 0 8px 130px;
+    line-height: 1.35;
 }
 
 /* --- AI 解釋區塊 --- */

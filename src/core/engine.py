@@ -9,6 +9,8 @@ from qdrant_client.http import models as rest
 import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
 from src.core.reranker import Reranker
+from src.core.llm_reranker import LLMReranker
+from src.config import settings
 
 class BaseEngine:
     def __init__(self, db=None, vs=None):
@@ -262,6 +264,17 @@ class HybridReasonerEngine(BaseEngine):
     """
     def __init__(self, db=None, vs=None):
         super().__init__(db, vs)
+        self.llm_reranker = LLMReranker()
+
+    @staticmethod
+    def _minmax_normalize(values: List[float]) -> List[float]:
+        if not values:
+            return []
+        min_v = min(values)
+        max_v = max(values)
+        if max_v - min_v < 1e-9:
+            return [0.5 for _ in values]
+        return [(v - min_v) / (max_v - min_v) for v in values]
 
     def _normalize_vector_score(self, raw_score: float) -> float:
         """將 Qdrant 的 Cosine Score 拉伸到 0.0~1.0"""
@@ -275,7 +288,13 @@ class HybridReasonerEngine(BaseEngine):
             
         return (raw_score - min_threshold) / (max_threshold - min_threshold)
 
-    def calculate_score(self, item: Dict[str, Any], criteria_list: List[Any], vector_score: float = 0.0) -> Tuple[float, List[Dict[str, Any]]]:
+    def calculate_score(
+        self,
+        item: Dict[str, Any],
+        criteria_list: List[Any],
+        vector_score: float = 0.0,
+        normalized_vector_score: Optional[float] = None,
+    ) -> Tuple[float, List[Dict[str, Any]]]:
         total_score = 0.0
         breakdown = []
         
@@ -289,7 +308,11 @@ class HybridReasonerEngine(BaseEngine):
             sem_weight = 1.0  
             reason_suffix = "(系統預設)"
 
-        normalized_v_score = self._normalize_vector_score(vector_score)
+        normalized_v_score = (
+            normalized_vector_score
+            if normalized_vector_score is not None
+            else self._normalize_vector_score(vector_score)
+        )
         v_score_contrib = normalized_v_score * sem_weight
         total_score += v_score_contrib
         
@@ -365,7 +388,15 @@ class HybridReasonerEngine(BaseEngine):
             
         return total_score, breakdown
 
-    async def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
+    async def search(
+        self,
+        user_query: str,
+        limit: int = 5,
+        model_id: Optional[str] = None,
+        explain: bool = True,
+        rerank_strategy: Optional[str] = None,
+        rerank_alpha: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """
         Executes the full search pipeline.
         """
@@ -457,12 +488,33 @@ class HybridReasonerEngine(BaseEngine):
         candidates = list(candidates_map.values())
 
         # 4. Scoring
+        # Dynamic normalization within current query candidates (restores discrimination)
+        vector_norm_map: Dict[str, float] = {}
+        if vector_score_map:
+            vector_values = [float(v) for v in vector_score_map.values()]
+            min_vector = min(vector_values)
+            max_vector = max(vector_values)
+
+            if max_vector - min_vector > 1e-9:
+                for bid, raw_v in vector_score_map.items():
+                    vector_norm_map[bid] = (float(raw_v) - min_vector) / (max_vector - min_vector)
+            else:
+                for bid, raw_v in vector_score_map.items():
+                    vector_norm_map[bid] = self._normalize_vector_score(float(raw_v))
+
         scored_items = []
         for item in candidates:
-            v_score = vector_score_map.get(str(item["id"]), 0.0)
+            bid = str(item["id"])
+            v_score = vector_score_map.get(bid, 0.0)
+            v_norm = vector_norm_map.get(bid, self._normalize_vector_score(float(v_score)))
             
             # Calculate final hybrid score (Rule + Vector/Rerank)
-            score_val, breakdown = self.calculate_score(item, parse_result.criteria, vector_score=v_score)
+            score_val, breakdown = self.calculate_score(
+                item,
+                parse_result.criteria,
+                vector_score=v_score,
+                normalized_vector_score=v_norm,
+            )
 
             final_score = float(score_val)
 
@@ -473,26 +525,111 @@ class HybridReasonerEngine(BaseEngine):
                 "breakdown": breakdown,
                 "payload": payload_map.get(str(item["id"]), {}) 
             })
+
+        strategy = (rerank_strategy or settings.RERANK_STRATEGY or "score_only").lower().strip()
+        allowed_strategies = {"score_only", "rerank_only", "hybrid_fusion", "original_llm_reranker_top10"}
+        if strategy not in allowed_strategies:
+            strategy = "score_only"
+
+        alpha = rerank_alpha if rerank_alpha is not None else settings.RERANK_FUSION_ALPHA
+        try:
+            alpha = float(alpha)
+        except (TypeError, ValueError):
+            alpha = 0.3
+        alpha = max(0.0, min(1.0, alpha))
             
         # 5. Rerank (Optional)
-        if self.reranker and scored_items:
+        if self.reranker and scored_items and strategy in {"rerank_only", "hybrid_fusion"}:
             rerank_query = user_query
             if parse_result.search_terms:
                 rerank_query = " ".join(parse_result.search_terms)
-            
-            reranked_scores = self.reranker.rerank(rerank_query, [item['item'] for item in scored_items])
-            for i, score in enumerate(reranked_scores):
-                scored_items[i]['rerank_score'] = score
-                # Integrate rerank score into final score, e.g., as a multiplier or additive component
-                # For now, let's just add it as a separate score for potential future use or sorting
-                # scored_items[i]['score'] = scored_items[i]['score'] * (1 + score) # Example integration
+
+            base_candidates = [entry['item'] for entry in scored_items]
+            reranked_items = self.reranker.rerank(rerank_query, base_candidates, top_k=len(base_candidates))
+
+            rerank_map = {}
+            for rank_idx, item in enumerate(reranked_items):
+                item_id = str(item.get("id"))
+                rerank_map[item_id] = {
+                    "rerank_score": float(item.get("rerank_score", 0.0)),
+                    "rerank_rank": rank_idx + 1,
+                }
+
+            for entry in scored_items:
+                item_id = str(entry["item"].get("id"))
+                rerank_info = rerank_map.get(item_id)
+                if rerank_info:
+                    entry["rerank_score"] = rerank_info["rerank_score"]
+                    entry["rerank_rank"] = rerank_info["rerank_rank"]
+                else:
+                    entry["rerank_score"] = 0.0
+                    entry["rerank_rank"] = len(scored_items) + 1
+
+        # 5b. LLM Rerank Top-10 (Only for explicit mode)
+        if self.llm_reranker and scored_items and strategy == "original_llm_reranker_top10":
+            rerank_query = user_query
+            if parse_result.search_terms:
+                rerank_query = " ".join(parse_result.search_terms)
+
+            llm_ranked = self.llm_reranker.rerank(
+                query=rerank_query,
+                candidates=[entry["item"] for entry in scored_items],
+                top_k=10,
+            )
+            llm_rank_map = {str(r.get("id")): r for r in llm_ranked}
+            for entry in scored_items:
+                item_id = str(entry["item"].get("id"))
+                llm_info = llm_rank_map.get(item_id)
+                if llm_info:
+                    entry["llm_rerank_score"] = float(llm_info.get("llm_rerank_score", 0.0))
+                    entry["llm_rerank_rank"] = int(llm_info.get("llm_rerank_rank", 999))
+                else:
+                    entry["llm_rerank_score"] = 0.0
+                    entry["llm_rerank_rank"] = 999
+
+        if strategy == "original_llm_reranker_top10" and scored_items and any("llm_rerank_score" in e for e in scored_items):
+            base_scores = [float(e["score"]) for e in scored_items]
+            llm_scores = [float(e.get("llm_rerank_score", 0.0)) for e in scored_items]
+            norm_base_scores = self._minmax_normalize(base_scores)
+            norm_llm_scores = self._minmax_normalize(llm_scores)
+
+            for idx, entry in enumerate(scored_items):
+                entry["normalized_score"] = norm_base_scores[idx]
+                entry["normalized_llm_rerank_score"] = norm_llm_scores[idx]
+                entry["final_sort_score"] = (1.0 - alpha) * norm_base_scores[idx] + alpha * norm_llm_scores[idx]
+        elif scored_items and any("rerank_score" in e for e in scored_items):
+            base_scores = [float(e["score"]) for e in scored_items]
+            rerank_scores = [float(e.get("rerank_score", 0.0)) for e in scored_items]
+            norm_base_scores = self._minmax_normalize(base_scores)
+            norm_rerank_scores = self._minmax_normalize(rerank_scores)
+
+            for idx, entry in enumerate(scored_items):
+                entry["normalized_score"] = norm_base_scores[idx]
+                entry["normalized_rerank_score"] = norm_rerank_scores[idx]
+
+                if strategy == "rerank_only":
+                    entry["final_sort_score"] = norm_rerank_scores[idx]
+                elif strategy == "hybrid_fusion":
+                    entry["final_sort_score"] = (1.0 - alpha) * norm_base_scores[idx] + alpha * norm_rerank_scores[idx]
+                else:
+                    entry["final_sort_score"] = float(entry["score"])
+        else:
+            for entry in scored_items:
+                entry["final_sort_score"] = float(entry["score"])
+
+        if strategy == "rerank_only" and not any("rerank_score" in e for e in scored_items):
+            strategy = "score_only"
+        if strategy == "hybrid_fusion" and not any("rerank_score" in e for e in scored_items):
+            strategy = "score_only"
+        if strategy == "original_llm_reranker_top10" and not any("llm_rerank_score" in e for e in scored_items):
+            strategy = "score_only"
         
         # 6. Final Rank
-        # Sort by final hybrid score
-        scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
+        # Sort by selected strategy score
+        scored_items.sort(key=lambda x: float(x.get("final_sort_score", x["score"])), reverse=True)
         
         # 放寬搜尋的最低語意門檻：過濾掉向量分數太低的雜訊
-        if candidates and isinstance(candidates[0], dict) and candidates[0].get("rerank_score") is not None:
+        if scored_items and scored_items[0].get("rerank_score") is not None:
              threshold = 0.01 
         else:
              threshold = 0.6
@@ -514,6 +651,11 @@ class HybridReasonerEngine(BaseEngine):
         final_results = scored_items[:limit]
 
         top_n_explain = 3 if explain else 0 
+        explainer_runtime_state = {
+            "gemini_fail_count": 0,
+            "gemini_disabled": False,
+            "gemini_fail_threshold": 3,
+        }
         for i, res in enumerate(final_results):
             if i < top_n_explain:
                 item = res['item']
@@ -533,7 +675,8 @@ class HybridReasonerEngine(BaseEngine):
                     query=user_query,
                     book_item=item,
                     context_chunks=chunks_to_analyze,
-                    score_breakdown=breakdown
+                    score_breakdown=breakdown,
+                    runtime_state=explainer_runtime_state,
                 )
                 res['explanation'] = explanation
             else:
@@ -545,7 +688,10 @@ class HybridReasonerEngine(BaseEngine):
             "query_vector": query_vector,
             "results": final_results,
             "is_relaxed": is_relaxed,
-            "engine": "HybridReasonerEngine"
+            "engine": "HybridReasonerEngine",
+            "rerank_strategy": strategy,
+            "rerank_alpha": alpha,
+            "llm_rerank_top_k": 10 if strategy == "original_llm_reranker_top10" else 0,
         }
 
 # 為了維持對既有程式碼 (`web_api.py`) 的向後相容性，將 HybridEngine 指向 HybridReasonerEngine

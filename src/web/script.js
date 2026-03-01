@@ -3,6 +3,7 @@ const API_URL = "/api/search";
 async function performSearch() {
   const query = document.getElementById('query-input').value;
   const modelId = document.getElementById('model-select').value;
+  const rerankStrategy = document.getElementById('rerank-strategy-select').value;
   const resultsContainer = document.getElementById('results-container');
   const interpretationBox = document.getElementById('search-interpretation');
   const loading = document.getElementById('loading');
@@ -21,7 +22,9 @@ async function performSearch() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query: query,
-        model_id: modelId
+        model_id: modelId,
+        rerank_strategy: rerankStrategy,
+        rerank_alpha: 0.3
       })
     });
 
@@ -155,6 +158,9 @@ function createResultCard(result) {
   const item = result.item;
   const card = document.createElement('div');
   card.className = 'result-card';
+  const bookId = String(item.id || item.book_id || '');
+  const isInBookshelf = window.Bookshelf ? window.Bookshelf.isInBookshelf(item) : false;
+  const canSaveToBookshelf = Boolean(bookId);
 
   // 1. 基本資訊與標籤
   const tagsHtml = (item.tags || []).map(tag => `<span class="tag">#${tag}</span>`).join('');
@@ -163,26 +169,60 @@ function createResultCard(result) {
   // 我們將每個評分項目的 weighted_score 繪製成條狀圖
   // 為了顯示比例，我們假設滿分是 1.0 (或根據實際總分動態調整)
   let breakdownHtml = '<div class="score-breakdown">';
+  const hasCrossEncoderScore = result.rerank_score !== undefined && result.rerank_score !== null;
+  const hasNormalizedCrossEncoder = result.normalized_rerank_score !== undefined && result.normalized_rerank_score !== null;
+
+  if (hasCrossEncoderScore) {
+    const ceRaw = Number(result.rerank_score) || 0;
+    const ceNorm = hasNormalizedCrossEncoder ? Number(result.normalized_rerank_score) || 0 : null;
+    const ceBar = ceNorm !== null ? ceNorm : Math.max(0, Math.min(1, (ceRaw + 10) / 20));
+    breakdownHtml += `
+      <div class="score-bar-container">
+          <span class="score-label">CrossEncoder Rerank</span>
+          <span class="score-value">${ceRaw.toFixed(3)}</span>
+          <div class="progress-track">
+              <div class="progress-fill" style="width: ${Math.min(ceBar * 100, 100)}%; background-color: #3f51b5"></div>
+          </div>
+      </div>
+      <div class="score-reason">CrossEncoder 相關性分數${ceNorm !== null ? `（正規化: ${ceNorm.toFixed(3)}）` : ''}</div>
+    `;
+  }
+
   if (result.breakdown) {
     result.breakdown.forEach(b => {
-      const originalScore = b.normalized_score !== undefined ? b.normalized_score : b.raw_score;
+      const originalScore = b.criteria === 'semantic_similarity'
+        ? b.raw_score
+        : (b.normalized_score !== undefined ? b.normalized_score : b.raw_score);
+      const rawScore = typeof b.raw_score === 'number' ? b.raw_score : Number(b.raw_score || 0);
+      const scoreText = originalScore.toFixed(3);
 
       // 以單項 0~1 的 originalScore 作為百分比顯示
       const widthPercent = Math.min(originalScore * 100, 100);
       const label = b.label || b.criteria;
 
+      const reasonTextRaw = b.reason ? String(b.reason) : '';
+      const isTagOrKeyword = label.includes('標籤') || label.includes('分類') || b.criteria === 'keyword_match';
+      const hideReason = isTagOrKeyword || b.criteria === 'semantic_similarity' || reasonTextRaw.includes('未找到關鍵字');
+      const reasonText = hideReason ? '' : reasonTextRaw;
+
       breakdownHtml += `
                 <div class="score-bar-container">
                     <span class="score-label">${label}</span>
-                    <span style="font-size:0.8em; color:#666;">${originalScore.toFixed(3)}</span>
+                    <span class="score-value">${scoreText}</span>
                     <div class="progress-track">
                         <div class="progress-fill" style="width: ${widthPercent}%; background-color: ${getColorForCriteria(b.criteria)}"></div>
                     </div>
                 </div>
+                ${reasonText ? `<div class="score-reason">${reasonText}</div>` : ''}
             `;
     });
   }
   breakdownHtml += '</div>';
+
+  const scoreBadgeLabel = hasCrossEncoderScore ? 'CrossEncoder' : 'Score';
+  const scoreBadgeValue = hasCrossEncoderScore
+    ? Number(result.rerank_score || 0).toFixed(4)
+    : Number(result.score || 0).toFixed(4);
 
   // 3. AI 解釋區塊 (Collapsible)
   // 只有當後端有回傳 explanation 時才顯示
@@ -213,7 +253,12 @@ function createResultCard(result) {
                     <i class="fa-solid fa-pen-nib"></i> ${item.words_total ? item.words_total.toLocaleString() : '未知'}字
                 </div>
             </div>
-            <div class="total-score">Score: ${result.score.toFixed(4)}</div>
+                <div class="card-actions">
+                  <button type="button" class="bookshelf-toggle-btn ${isInBookshelf ? 'saved' : ''}" data-book-id="${bookId}" ${canSaveToBookshelf ? '' : 'disabled'}>
+                    <i class="fa-solid fa-bookmark"></i> ${canSaveToBookshelf ? (isInBookshelf ? '已加入書櫃' : '加入書櫃') : '無法收藏'}
+                  </button>
+                  <div class="total-score">${scoreBadgeLabel}: ${scoreBadgeValue}</div>
+                </div>
         </div>
         
         <div class="tags">${tagsHtml}</div>
@@ -223,7 +268,31 @@ function createResultCard(result) {
         ${explanationHtml}
     `;
 
+  const toggleButton = card.querySelector('.bookshelf-toggle-btn');
+  if (toggleButton && window.Bookshelf && canSaveToBookshelf) {
+    toggleButton.addEventListener('click', function () {
+      const saved = window.Bookshelf.toggleBook(item);
+      setBookshelfButtonState(toggleButton, saved);
+    });
+  }
+
   return card;
+}
+
+function setBookshelfButtonState(button, saved) {
+  if (!button) return;
+  button.classList.toggle('saved', saved);
+  button.innerHTML = `<i class="fa-solid fa-bookmark"></i> ${saved ? '已加入書櫃' : '加入書櫃'}`;
+}
+
+function syncBookshelfButtons() {
+  if (!window.Bookshelf) return;
+  const buttons = document.querySelectorAll('.bookshelf-toggle-btn[data-book-id]');
+  buttons.forEach(button => {
+    const bookId = button.getAttribute('data-book-id');
+    const saved = bookId ? window.Bookshelf.hasBookId(bookId) : false;
+    setBookshelfButtonState(button, saved);
+  });
 }
 
 // 輔助函式：切換解釋區塊顯示
@@ -263,4 +332,8 @@ document.getElementById('query-input').addEventListener('keypress', function (e)
   if (e.key === 'Enter') {
     performSearch();
   }
+});
+
+document.addEventListener('bookshelf:changed', function () {
+  syncBookshelfButtons();
 });
