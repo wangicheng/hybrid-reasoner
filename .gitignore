@@ -219,3 +219,10 @@ __marimo__/
 data/qdrant_storage/
 data/*.json
 data/experiments/pools/
+
+# Agent Skills
+.agents/
+.agent/
+.continue/
+skills.json
+skills-lock.json
