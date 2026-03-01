@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = "sk-placeholder"
     OPENAI_BASE_URL: str = "https://opencode.ai/zen/v1"
     LLM_MODEL_ID: str = "gemma-3-27b-it"
+    RERANK_STRATEGY: str = "score_only"
+    RERANK_FUSION_ALPHA: float = 0.3
     
     # Use absolute paths based on PROJECT_ROOT
     QDRANT_PATH: str = str(PROJECT_ROOT / "data" / "qdrant_storage")

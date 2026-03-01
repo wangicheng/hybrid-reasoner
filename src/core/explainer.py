@@ -10,7 +10,8 @@ def generate_explanation(
     query: str, 
     book_item: Dict[str, Any], 
     context_chunks: List[str] = None,
-    score_breakdown: List[Dict] = None  # 新增：評分細節
+    score_breakdown: List[Dict] = None,  # 新增：評分細節
+    runtime_state: Dict[str, Any] = None,
 ) -> str:
     """
     使用 Google GenAI SDK 生成推薦解釋。
@@ -20,6 +21,15 @@ def generate_explanation(
     api_key = os.environ.get("GOOGLE_API_KEY")
     selected_model = os.getenv("LLM_MODEL_ID", "").strip()
 
+    # Query-level circuit breaker for Gemini models
+    state = runtime_state if runtime_state is not None else {}
+    gemini_fail_count = int(state.get("gemini_fail_count", 0))
+    gemini_disabled = bool(state.get("gemini_disabled", False))
+    gemini_fail_threshold = int(state.get("gemini_fail_threshold", 3))
+
+    def is_gemini_model(model_name: str) -> bool:
+        return "gemini" in (model_name or "").lower()
+
     # 建立模型嘗試順序
     if selected_model and selected_model in FALLBACK_MODELS:
         models_to_try = [selected_model] + [m for m in FALLBACK_MODELS if m != selected_model]
@@ -27,6 +37,9 @@ def generate_explanation(
         models_to_try = [selected_model] + FALLBACK_MODELS
     else:
         models_to_try = FALLBACK_MODELS
+
+    if gemini_disabled:
+        models_to_try = [m for m in models_to_try if not is_gemini_model(m)]
     
     client = genai.Client(api_key=api_key)
 
@@ -115,6 +128,10 @@ def generate_explanation(
     # --- 模型 Fallback 迴圈 (含 Gemma 積極重試) ---
     last_exception = None
     for model_id in models_to_try:
+        if is_gemini_model(model_id) and (gemini_disabled or gemini_fail_count >= gemini_fail_threshold):
+            print(f"[explainer] 跳過 Gemini 模型 {model_id}（本次查詢已熔斷）")
+            continue
+
         print(f"[explainer] 嘗試使用模型: {model_id}")
         
         is_gemma = "gemma" in model_id.lower()
@@ -139,6 +156,15 @@ def generate_explanation(
                 return result
             except Exception as e:
                 last_exception = e
+
+                if is_gemini_model(model_id):
+                    gemini_fail_count += 1
+                    state["gemini_fail_count"] = gemini_fail_count
+                    if gemini_fail_count >= gemini_fail_threshold:
+                        gemini_disabled = True
+                        state["gemini_disabled"] = True
+                        print(f"[explainer] Gemini 失敗累積 {gemini_fail_count} 次，該次查詢後續將跳過 Gemini。")
+
                 if is_gemma:
                     print(f"[explainer] 模型 {model_id} 發生錯誤 (Attempt {attempt+1}/{max_attempts}): {e}")
                     if attempt < max_attempts - 1:

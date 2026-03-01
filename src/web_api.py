@@ -16,6 +16,8 @@ app = FastAPI()
 class SearchRequest(BaseModel):
     query: str
     model_id: str = "gemma-3-27b-it"
+    rerank_strategy: str = "score_only"
+    rerank_alpha: float = 0.3
 
 # Engine Instance (Lazy Load)
 engine = None
@@ -47,7 +49,13 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=503, detail="Engine is still initializing")
     
     try:
-        results = await engine.search(request.query, limit=10, model_id=request.model_id)
+        results = await engine.search(
+            request.query,
+            limit=10,
+            model_id=request.model_id,
+            rerank_strategy=request.rerank_strategy,
+            rerank_alpha=request.rerank_alpha,
+        )
         return results
     except Exception as e:
         import traceback
