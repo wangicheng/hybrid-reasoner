@@ -50,6 +50,26 @@ class Database:
             cursor.execute("ALTER TABLE novels ADD COLUMN attribute_name TEXT")
         if "rank_title" not in columns:
             cursor.execute("ALTER TABLE novels ADD COLUMN rank_title TEXT")
+        # New columns for rating
+        if "rating_score" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN rating_score REAL")
+        if "rating_count" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN rating_count INTEGER")
+        if "total_recommendations" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN total_recommendations INTEGER")
+        if "source" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN source TEXT")
+        if "url" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN url TEXT")
+        if "cover_url" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN cover_url TEXT")
+        # New columns for v2 crawler
+        if "illname" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN illname TEXT")
+        if "backupname" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN backupname TEXT")
+        if "is_animated" not in columns:
+            cursor.execute("ALTER TABLE novels ADD COLUMN is_animated BOOLEAN")
             
         conn.commit()
         conn.close()
@@ -78,13 +98,15 @@ class Database:
             INSERT OR REPLACE INTO novels (
                 id, name, author, author_nickname, slogan, intro, words_total, chapters_total, 
                 publish_status, click_count, bookmark_count, restricted_age, 
-                is_free, tts, classification, attribute_name, rank_title, tags, attributes
+                is_free, tts, classification, attribute_name, rank_title, tags, attributes,
+                rating_score, rating_count, total_recommendations, source, url, cover_url,
+                illname, backupname, is_animated
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             i_id,
             item.get("name"),
-            user_info.get("name") or "Unknown",
+            user_info.get("name") or item.get("author") or "Unknown",
             user_info.get("nickname"),
             item.get("slogan"),
             item.get("intro"),
@@ -96,11 +118,20 @@ class Database:
             item.get("restricted_age", 0),
             item.get("is_free", False),
             item.get("tts", False),
-            classifier.get("name") if isinstance(classifier, dict) else str(item.get("classification")),
+            classifier.get("name") if isinstance(classifier, dict) else str(item.get("classification", "")),
             attribute.get("name") if isinstance(attribute, dict) else None,
             statistic.get("rank_title") if isinstance(statistic, dict) else None,
             json.dumps(tags),
-            json.dumps(item)
+            json.dumps(item),
+            item.get("rating_score"),
+            item.get("rating_count", 0),
+            item.get("total_recommendations", 0),
+            item.get("source"),
+            item.get("url"),
+            item.get("cover_url"),
+            item.get("illname"),
+            item.get("backupname"),
+            item.get("is_animated", False)
         ))
         conn.commit()
         conn.close()
