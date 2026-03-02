@@ -10,6 +10,7 @@ import src.logic.scoring_functions
 from src.core.explainer import generate_explanation 
 from src.core.reranker import Reranker
 from src.core.llm_reranker import LLMReranker
+from src.core.book_mention_parser import BookMentionParser
 from src.config import settings
 
 class BaseEngine:
@@ -265,6 +266,7 @@ class HybridReasonerEngine(BaseEngine):
     def __init__(self, db=None, vs=None):
         super().__init__(db, vs)
         self.llm_reranker = LLMReranker()
+        self.book_mention_parser = BookMentionParser(db=self.db, vs=self.vs)
 
     @staticmethod
     def _minmax_normalize(values: List[float]) -> List[float]:
@@ -400,6 +402,17 @@ class HybridReasonerEngine(BaseEngine):
         """
         Executes the full search pipeline.
         """
+        # 0. Book Mention Parsing (提取用戶提到的書籍並增強查詢)
+        book_mention_result = self.book_mention_parser.parse(user_query)
+        enhancement = book_mention_result.get("enhancement", {})
+        
+        if book_mention_result.get("has_book_mentions"):
+            metadata = enhancement.get("enhancement_metadata", {})
+            if metadata.get("liked_matches"):
+                print(f"[Engine] 📚 偵測到喜歡的書籍: {[m['matched_name'] for m in metadata['liked_matches']]}")
+            if metadata.get("disliked_matches"):
+                print(f"[Engine] 🚫 偵測到不喜歡的書籍: {[m['matched_name'] for m in metadata['disliked_matches']]}")
+        
         # 1. Parse Query
         parse_result = parse_query(user_query, model_id=model_id)
         
@@ -418,6 +431,17 @@ class HybridReasonerEngine(BaseEngine):
         if parse_result.hypothetical_intro:
             print(f"[Engine] 🔮 HyDE 假想簡介: {parse_result.hypothetical_intro[:80]}...")
             expanded_terms += f" {parse_result.hypothetical_intro}"
+        
+        # 2b. 使用書籍提及增強查詢
+        if enhancement.get("positive_tags"):
+            positive_tags_str = " ".join(enhancement["positive_tags"][:10])  # 最多取10個標籤
+            print(f"[Engine] ✨ 書籍偏好標籤增強: {positive_tags_str}")
+            expanded_terms += f" {positive_tags_str}"
+        
+        if enhancement.get("reference_intros"):
+            # 使用喜歡書籍的簡介來增強語意搜尋
+            for intro in enhancement["reference_intros"][:2]:  # 最多取2個簡介
+                expanded_terms += f" {intro[:100]}"
         
         vector_results, query_vector = self.vs.search(
             expanded_terms, 
@@ -503,6 +527,9 @@ class HybridReasonerEngine(BaseEngine):
                     vector_norm_map[bid] = self._normalize_vector_score(float(raw_v))
 
         scored_items = []
+        negative_tags = set(enhancement.get("negative_tags", []))
+        positive_tags = set(enhancement.get("positive_tags", []))
+        
         for item in candidates:
             bid = str(item["id"])
             v_score = vector_score_map.get(bid, 0.0)
@@ -517,6 +544,39 @@ class HybridReasonerEngine(BaseEngine):
             )
 
             final_score = float(score_val)
+            
+            # 4b. 書籍偏好調整 (基於用戶提到的喜歡/不喜歡書籍的標籤)
+            item_tags = set(item.get("tags", []))
+            
+            # 負面標籤懲罰：如果書籍有用戶不喜歡的書的標籤，降低分數
+            negative_overlap = item_tags & negative_tags
+            if negative_overlap:
+                penalty = len(negative_overlap) * 0.05  # 每個重疊標籤扣 5%
+                penalty = min(penalty, 0.3)  # 最多扣 30%
+                final_score *= (1.0 - penalty)
+                breakdown.append({
+                    "criteria": "negative_tag_penalty",
+                    "label": f"負面標籤: {', '.join(list(negative_overlap)[:3])}",
+                    "weight": -penalty,
+                    "raw_score": -penalty,
+                    "weighted_score": -penalty * score_val,
+                    "reason": f"與不喜歡書籍共享 {len(negative_overlap)} 個標籤，降權 {penalty*100:.0f}%"
+                })
+            
+            # 正面標籤獎勵：如果書籍有用戶喜歡的書的標籤，提高分數
+            positive_overlap = item_tags & positive_tags
+            if positive_overlap:
+                bonus = len(positive_overlap) * 0.03  # 每個重疊標籤加 3%
+                bonus = min(bonus, 0.2)  # 最多加 20%
+                final_score *= (1.0 + bonus)
+                breakdown.append({
+                    "criteria": "positive_tag_bonus",
+                    "label": f"正面標籤: {', '.join(list(positive_overlap)[:3])}",
+                    "weight": bonus,
+                    "raw_score": bonus,
+                    "weighted_score": bonus * score_val,
+                    "reason": f"與喜歡書籍共享 {len(positive_overlap)} 個標籤，加權 {bonus*100:.0f}%"
+                })
 
             scored_items.append({
                 "item": item,
