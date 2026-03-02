@@ -181,14 +181,18 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     
     ### Available Scoring Functions
     1. **keyword_match** (field, keyword): 'classification', 'tags', 'name'.
-    2. **numeric_range** (field, min_val, max_val): 'words_total', 'click_count'.
-    3. **numeric_ranking** (field, ranking_direction, normalize_max): Soft ranking (e.g. "long novel").
+    2. **numeric_range** (field, min_val, max_val): ONLY 'words_total', 'click_count', 'chapters_total'. DO NOT invent fields!
+    3. **numeric_ranking** (field, ranking_direction, normalize_max): ONLY 'words_total', 'click_count', 'chapters_total'. Soft ranking.
     4. **status_check** (target_status): 'completed', 'ongoing'.
     5. **author_match** (author_name).
-    6. **semantic_similarity** (query_text): Abstract vibes.
+    6. **semantic_similarity** (query_text): Concepts that do not fit in tags, e.g. "主角聰明", "角色少".
 
-    Strategy: Use `keyword_match` ONLY for specific genres/tags. Use `semantic_similarity` for descriptions.
-    If the user explicitly states they DO NOT want something (e.g., "不要龍傲天", "no system", "avoid tragedy"), create a criteria and set `is_negative: true`.
+    Strategy: Use `keyword_match` ONLY for explicit existing genres/tags. Use `semantic_similarity` for story features (like "角色少").
+    
+    ### Rules for `is_negative`
+    Use `is_negative: true` ONLY for explicit EXCLUSIONS (e.g., "不要龍傲天" -> `is_negative: true`, keyword: "龍傲天").
+    DO NOT use `is_negative: true` if the user is asking for a trait, even if it uses negative words! 
+    For example, "角色不要太多" means the user WANTS "few characters". You should use `semantic_similarity` with query_text="角色少" and `is_negative: false`.
     
     ### TASK: DYNAMIC QUERY EXPANSION
     In `generated_keywords`, generate 5-10 specific terms (Traditional Chinese) relevant to the query concepts.
