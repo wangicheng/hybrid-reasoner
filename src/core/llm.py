@@ -91,6 +91,12 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
                     else:
                         item.pop(param) # Duplicate
             
+            # Fix Is Negative
+            if "is_negative" not in item:
+                item["is_negative"] = False
+            else:
+                item["is_negative"] = bool(item["is_negative"])
+
             valid_criteria.append(item)
     
     final_result["criteria"] = valid_criteria
@@ -141,6 +147,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
+                        "is_negative": {"type": "boolean"},
                         "description": {"type": "string"},
                         "parameters": {
                             "type": "object",
@@ -181,6 +188,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     6. **semantic_similarity** (query_text): Abstract vibes.
 
     Strategy: Use `keyword_match` ONLY for specific genres/tags. Use `semantic_similarity` for descriptions.
+    If the user explicitly states they DO NOT want something (e.g., "不要龍傲天", "no system", "avoid tragedy"), create a criteria and set `is_negative: true`.
     
     ### TASK: DYNAMIC QUERY EXPANSION
     In `generated_keywords`, generate 5-10 specific terms (Traditional Chinese) relevant to the query concepts.
@@ -289,6 +297,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                     fallback_criteria.append(
                         ScoringCriteria(
                             name="keyword_match",
+                            is_negative=False,
                             parameters=ScoringParameters(field="tags", keyword=tag.strip())
                         )
                     )
@@ -299,6 +308,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                    fallback_criteria.append(
                         ScoringCriteria(
                             name="keyword_match",
+                            is_negative=False,
                             parameters=ScoringParameters(field="tags", keyword=p)
                         )
                     )
@@ -306,6 +316,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
         fallback_criteria.append(
             ScoringCriteria(
                 name="semantic_similarity", 
+                is_negative=False,
                 parameters=ScoringParameters(query_text=user_query)
             )
         )

@@ -22,7 +22,8 @@ class BaseEngine:
         """
         Converts parsed criteria into Qdrant Filter for logic push-down.
         """
-        conditions = []
+        must_conditions = []
+        must_not_conditions = []
 
         for criteria in criteria_list:
             if hasattr(criteria.parameters, 'model_dump'):
@@ -33,7 +34,9 @@ class BaseEngine:
                 params = criteria.parameters if isinstance(criteria.parameters, dict) else {}
 
             name = criteria.name
-            weight = 1.0
+            is_negative = getattr(criteria, 'is_negative', False)
+
+            current_cond = None
 
             # 1. Numeric Range
             if name == "numeric_range":
@@ -48,7 +51,7 @@ class BaseEngine:
                     if max_val is not None:
                         range_params["lte"] = float(max_val)
                     if range_params:
-                        conditions.append(rest.FieldCondition(key="words_total", range=rest.Range(**range_params)))
+                        current_cond = rest.FieldCondition(key="words_total", range=rest.Range(**range_params))
 
             # 2. Status Check
             elif name == "status_check":
@@ -66,31 +69,41 @@ class BaseEngine:
                         rest.FieldCondition(key="publish_status", match=rest.MatchValue(value=v))
                         for v in possible_values
                     ]
-                    conditions.append(rest.Filter(should=should_conds))
+                    current_cond = rest.Filter(should=should_conds)
 
             # 3. Keyword Match (Smart Filter: classification OR tags 聯防)
             elif name == "keyword_match":
-                if weight >= 0.8:
-                    field = params.get("field")
-                    keyword = params.get("keyword")
-                    # 清理 LLM 可能產生的空格 (e.g. "網 遊" -> "網遊")
-                    if field in ["classification", "tags"] and keyword and isinstance(keyword, str):
-                        keyword = keyword.replace(" ", "")
-                    
-                    # 【核心修改】：如果是找分類或標籤，採取寬鬆策略 (Classification OR Tags)
-                    if field in ["classification", "tags"] and keyword:
-                        should_conditions = [
-                            rest.FieldCondition(key="classification.name", match=rest.MatchValue(value=keyword)),
-                            rest.FieldCondition(key="tags", match=rest.MatchValue(value=keyword))
-                        ]
-                        conditions.append(rest.Filter(should=should_conditions))
-                    
-                    elif field and keyword:
-                        conditions.append(rest.FieldCondition(key=field, match=rest.MatchValue(value=keyword)))
+                field = params.get("field")
+                keyword = params.get("keyword")
+                # 清理 LLM 可能產生的空格 (e.g. "網 遊" -> "網遊")
+                if field in ["classification", "tags"] and keyword and isinstance(keyword, str):
+                    keyword = keyword.replace(" ", "")
+                
+                # 【核心修改】：如果是找分類或標籤，採取寬鬆策略 (Classification OR Tags)
+                if field in ["classification", "tags"] and keyword:
+                    should_conditions = [
+                        rest.FieldCondition(key="classification.name", match=rest.MatchValue(value=keyword)),
+                        rest.FieldCondition(key="tags", match=rest.MatchValue(value=keyword))
+                    ]
+                    current_cond = rest.Filter(should=should_conditions)
+                
+                elif field and keyword:
+                    current_cond = rest.FieldCondition(key=field, match=rest.MatchValue(value=keyword))
 
-        if not conditions:
+            if current_cond:
+                if is_negative:
+                    must_not_conditions.append(current_cond)
+                else:
+                    must_conditions.append(current_cond)
+
+        if not must_conditions and not must_not_conditions:
             return None
-        return rest.Filter(must=conditions)
+            
+        filter_kwargs = {}
+        if must_conditions: filter_kwargs["must"] = must_conditions
+        if must_not_conditions: filter_kwargs["must_not"] = must_not_conditions
+        
+        return rest.Filter(**filter_kwargs)
 
     def search(self, user_query: str, limit: int = 5, model_id: Optional[str] = None, explain: bool = True) -> Dict[str, Any]:
         """
@@ -301,8 +314,9 @@ class HybridReasonerEngine(BaseEngine):
         # --- 1. 處理向量分數 ---
         semantic_criteria = next((c for c in criteria_list if c.name == "semantic_similarity"), None)
         
-        sem_weight = 1.0
-        reason_suffix = "(固定權重)"
+        is_sem_negative = getattr(semantic_criteria, 'is_negative', False) if semantic_criteria else False
+        sem_weight = -1.0 if is_sem_negative else 1.0
+        reason_suffix = "(反向權重)" if is_sem_negative else "(固定權重)"
 
         normalized_v_score = (
             normalized_vector_score
@@ -329,7 +343,8 @@ class HybridReasonerEngine(BaseEngine):
             if func_name == "semantic_similarity":
                 continue
                 
-            weight = 1.0
+            is_negative = getattr(criteria, 'is_negative', False)
+            weight = -1.0 if is_negative else 1.0
             
             if hasattr(criteria.parameters, 'model_dump'):
                 params = criteria.parameters.model_dump()
@@ -371,6 +386,9 @@ class HybridReasonerEngine(BaseEngine):
                 label = f"狀態: {params.get('target_status', '狀態')}"
             elif func_name == "author_match":
                 label = f"作者: {params.get('author_name', '作者')}"
+
+            if is_negative:
+                label = f"[排除] {label}"
 
             breakdown.append({
                 "criteria": func_name,

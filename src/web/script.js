@@ -194,10 +194,13 @@ function createResultCard(result) {
         ? b.raw_score
         : (b.normalized_score !== undefined ? b.normalized_score : b.raw_score);
       const rawScore = typeof b.raw_score === 'number' ? b.raw_score : Number(b.raw_score || 0);
-      const scoreText = originalScore.toFixed(3);
 
-      // 以單項 0~1 的 originalScore 作為百分比顯示
-      const widthPercent = Math.min(originalScore * 100, 100);
+      const weightedScore = b.weighted_score !== undefined ? Number(b.weighted_score) : originalScore;
+      const scoreText = weightedScore.toFixed(3);
+
+      // 如果分數小於 0，代表是扣分項（排除條件），我們用紅色顯示，絕對值做為寬度表示「懲罰力度」
+      const isNegative = weightedScore < 0;
+      const widthPercent = Math.max(0, Math.min(Math.abs(weightedScore) * 100, 100));
       const label = b.label || b.criteria;
 
       const reasonTextRaw = b.reason ? String(b.reason) : '';
@@ -210,7 +213,7 @@ function createResultCard(result) {
                     <span class="score-label">${label}</span>
                     <span class="score-value">${scoreText}</span>
                     <div class="progress-track">
-                        <div class="progress-fill" style="width: ${widthPercent}%; background-color: ${getColorForCriteria(b.criteria)}"></div>
+                        <div class="progress-fill" style="width: ${widthPercent}%; background-color: ${isNegative ? '#ef5350' : getColorForCriteria(b.criteria)}"></div>
                     </div>
                 </div>
                 ${reasonText ? `<div class="score-reason">${reasonText}</div>` : ''}

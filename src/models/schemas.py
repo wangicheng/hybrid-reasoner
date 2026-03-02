@@ -21,6 +21,7 @@ class ScoringCriteria(BaseModel):
     Represents a single scoring factor derived from the user query.
     """
     name: str = Field(..., description="Name of the scoring function to apply (e.g., 'keyword_match', 'numeric_range')")
+    is_negative: bool = Field(default=False, description="Set to true if this is a negative requirement (e.g., 'do not want', 'avoid').")
     parameters: ScoringParameters = Field(default_factory=ScoringParameters, description="Parameters to pass to the scoring function")
     description: Optional[str] = Field(None, description="Explanation of why this criteria was chosen")
 
