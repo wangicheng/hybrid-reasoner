@@ -155,56 +155,12 @@ def score_author_match(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple[fl
     """
     target_author = params.get("author_name", "").lower()
     item_author = str(item.get("author", "")).lower()
-    item_nickname = str(item.get("author_nickname", "")).lower()
     
     if target_author in item_author:
         return 1.0, f"作者匹配 ({item.get('author')})"
-    if target_author in item_nickname:
-        return 1.0, f"作者暱稱匹配 ({item.get('author_nickname')})"
     return 0.0, f"作者不符"
 
-@ScoringRegistry.register("is_free_check")
-def score_is_free(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple[float, str]:
-    """
-    Checks if the book is free.
-    Returns: (score, reason)
-    """
-    require_free = params.get("require_free", True)
-    is_free = bool(item.get("is_free", False))
-    
-    if require_free and not is_free:
-        return 0.0, "此書非免費"
-    if require_free and is_free:
-        return 1.0, "此書為免費"
-    return 1.0, "無免費限制"
 
-@ScoringRegistry.register("age_check")
-def score_age_check(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple[float, str]:
-    """
-    Penalizes restricted content if user is underage or generally filters.
-    Returns: (score, reason)
-    """
-    allow_restricted = params.get("allow_restricted", False)
-    restricted_age = item.get("restricted_age", 0)
-    
-    if not allow_restricted and restricted_age > 0:
-        return 0.0, f"年齡限制內容 (限制年齡: {restricted_age})"
-    return 1.0, "無年齡限制問題"
-
-@ScoringRegistry.register("audio_available")
-def score_audio_available(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple[float, str]:
-    """
-    Checks if TTS/Audio is available.
-    Returns: (score, reason)
-    """
-    require_audio = params.get("require_audio", True)
-    has_tts = bool(item.get("tts", False))
-    
-    if require_audio and not has_tts:
-        return 0.0, "無有聲書功能"
-    if require_audio and has_tts:
-        return 1.0, "支援有聲書"
-    return 1.0, "無有聲書需求"
 
 # --- Stage 5: Numeric Ranking (Soft Scoring) ---
 

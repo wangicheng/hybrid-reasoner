@@ -1,205 +1,317 @@
+"""
+Bilinovel (tw.linovelib.com) 爬蟲 v2
+從收藏榜爬取全部小說資料
+"""
+
 import requests
 from bs4 import BeautifulSoup
-import time
 import json
-import random
+import time
 import re
+import os
+import random
+from typing import List, Dict, Any, Optional
 from pathlib import Path
-from typing import List, Dict, Any
+
 
 class LinovelibCrawler:
-    """
-    Crawler for tw.linovelib.com
-    Note: This is a standalone script to fetch data and save it to data/books_linovelib.json
-    """
-    BASE_URL = "https://tw.linovelib.com"
+    """Crawler for tw.linovelib.com"""
     
-    def __init__(self, output_file: str = "books_linovelib.json"):
-        # Mimic a real browser
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Referer": "https://tw.linovelib.com/"
-        }
-        self.output_dir = Path(__file__).parent.parent / "data"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.output_path = self.output_dir / output_file
-
-    def crawl(self, pages: int = 1):
-        """
-        Crawls the ranking pages to find books.
-        """
-        books = []
-        seen_urls = set()
+    BASE_URL = "https://tw.linovelib.com"
+    HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+    }
+    
+    def __init__(self, delay: float = 1.5):
+        self.delay = delay
+        self.session = requests.Session()
+        self.session.headers.update(self.HEADERS)
+    
+    def _random_delay(self):
+        """隨機延遲 (delay ± 50%)"""
+        jitter = self.delay * random.uniform(0.5, 1.5)
+        time.sleep(jitter)
         
-        # Crawl Ranking (Month Visit)
-        # https://tw.linovelib.com/top/monthvisit/1.html
-        print(f"🚀 Starting crawl from {self.BASE_URL}...")
+    def get_page(self, url: str, retries: int = 5) -> Optional[BeautifulSoup]:
+        """獲取頁面並解析，包含 429 指數退避"""
+        backoff_times = [5, 10, 20, 40, 60]  # 指數退避等待時間
         
-        for page in range(1, pages + 1):
-            rank_url = f"{self.BASE_URL}/top/monthvisit/{page}.html"
-            print(f"📄 Fetching ranking page {page}: {rank_url}")
-            
+        for attempt in range(retries):
             try:
-                resp = requests.get(rank_url, headers=self.headers)
-                if resp.status_code != 200:
-                    print(f"⚠️ Failed to fetch page {page}: Status {resp.status_code}")
+                resp = self.session.get(url, timeout=15)
+                if resp.status_code == 200:
+                    return BeautifulSoup(resp.text, 'html.parser')
+                elif resp.status_code == 404:
+                    return None
+                elif resp.status_code == 429:
+                    # Rate limited - 指數退避
+                    wait_time = backoff_times[min(attempt, len(backoff_times) - 1)]
+                    print(f"  Rate limited (429), 等待 {wait_time} 秒後重試...")
+                    time.sleep(wait_time)
                     continue
-                
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                
-                # Extract links to novel details
-                # Pattern: <a href="/novel/2570.html" class="book-layout"> ... </a>
-                # Or just scanning all links
-                links = soup.find_all('a', href=True)
-                
-                page_books_found = 0
-                for a in links:
-                    href = a['href']
-                    # Match /novel/1234.html
-                    if re.match(r'^/novel/\d+\.html$', href):
-                        full_url = f"{self.BASE_URL}{href}"
-                        if full_url not in seen_urls:
-                            seen_urls.add(full_url)
-                            
-                            # Parse Book Details
-                            book_info = self.parse_book_details(full_url)
-                            if book_info:
-                                books.append(book_info)
-                                page_books_found += 1
-                                print(f"  ✅ Parsed: {book_info['name']} ({book_info['publish_status']})")
-                            
-                            # Be polite
-                            time.sleep(random.uniform(0.5, 1.5))
-                            
-                            # Limit for demo purposes (don't crawl thousands in one go unless asked)
-                            # if len(books) >= 20: 
-                            #    break
-                
-                # if len(books) >= 20:
-                #    print("🛑 Reached demo limit of 20 books.")
-                #    break
-                    
+                elif resp.status_code == 403:
+                    # Forbidden - 可能是地區限制或暫時封鎖
+                    wait_time = backoff_times[min(attempt, len(backoff_times) - 1)]
+                    print(f"  Forbidden (403), 等待 {wait_time} 秒後重試...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"Warning: {url} returned {resp.status_code}")
             except Exception as e:
-                print(f"❌ Error on page {page}: {e}")
-
-        # Save to JSON
-        print(f"💾 Saving {len(books)} books to {self.output_path}...")
-        with open(self.output_path, 'w', encoding='utf-8') as f:
-            json.dump(books, f, ensure_ascii=False, indent=2)
-        print("🎉 Done!")
-
-    def parse_book_details(self, url: str) -> Dict[str, Any]:
-        """
-        Parses a single book page.
-        """
+                print(f"Error fetching {url}: {e}")
+                if attempt < retries - 1:
+                    time.sleep(backoff_times[min(attempt, len(backoff_times) - 1)])
+        return None
+    
+    def get_novel_ids_from_wenku(self, max_pages: int = 200) -> List[str]:
+        """從收藏榜獲取所有小說 ID"""
+        novel_ids = []
+        seen_ids = set()
+        page = 1
+        
+        print(f"正在從收藏榜爬取小說列表...")
+        
+        while page <= max_pages:
+            url = f"{self.BASE_URL}/wenku/goodnum_0_0_0_0_0_0_0_{page}_0.html"
+            soup = self.get_page(url)
+            
+            if not soup:
+                print(f"頁面 {page} 無法訪問，停止爬取")
+                break
+            
+            # 找所有小說連結
+            found_new = False
+            for link in soup.find_all('a', href=True):
+                href = link.get('href', '')
+                match = re.search(r'/novel/(\d+)\.html', href)
+                if match:
+                    novel_id = match.group(1)
+                    if novel_id not in seen_ids:
+                        seen_ids.add(novel_id)
+                        novel_ids.append(novel_id)
+                        found_new = True
+            
+            if not found_new:
+                print(f"頁面 {page} 沒有新小說，停止爬取")
+                break
+                
+            if page % 10 == 0:
+                print(f"  頁面 {page}: 已收集 {len(novel_ids)} 本小說")
+            page += 1
+            self._random_delay()
+        
+        print(f"  完成: 共收集 {len(novel_ids)} 本小說")
+        return novel_ids
+    
+    def parse_novel_detail(self, novel_id: str) -> Optional[Dict[str, Any]]:
+        """解析單本小說詳細資訊"""
+        url = f"{self.BASE_URL}/novel/{novel_id}.html"
+        soup = self.get_page(url)
+        
+        if not soup:
+            return None
+        
         try:
-            resp = requests.get(url, headers=self.headers)
-            if resp.status_code != 200:
-                return None
-            
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            # 1. Title
-            # <meta property="og:title" content="惡魔高校DxD" />
-            og_title = soup.find('meta', property='og:title')
-            name = og_title['content'] if og_title else "Unknown"
-            
-            # 2. Author
-            # <meta property="og:novel:author" content="石踏一榮" />
-            og_author = soup.find('meta', property='og:novel:author')
-            author = og_author['content'] if og_author else "Unknown"
-            
-            # 3. Description (Intro)
-            # <meta property="og:description" content="..." />
-            og_desc = soup.find('meta', property='og:description')
-            intro = og_desc['content'] if og_desc else ""
-            # Clean up introductory text (sometimes it has "share.linovelib.net...")
-            intro = re.sub(r'share\.linovelib\.net.*', '', intro).strip()
-            
-            # 4. Cover Image
-            og_image = soup.find('meta', property='og:image')
-            cover_url = og_image['content'] if og_image else None
-            
-            # 5. Status & Metadata
-            # <meta property="og:novel:status" content="完結" />
-            og_status = soup.find('meta', property='og:novel:status')
-            raw_status = og_status['content'] if og_status else "連載中"
-            
-            # Map to our standard
-            publish_status = "已完結" if "完結" in raw_status else "連載中"
-            
-            # 6. Classification / Tags
-            # <meta property="og:novel:category" content="校園" />
-            og_category = soup.find('meta', property='og:novel:category')
-            classification = og_category['content'] if og_category else "其他"
-            
-            # --- Enhanced Tag Parsing ---
-            tags = [classification]
-            # Add site-wide implicit tags for better searchability
-            tags.append("二次元")
-            tags.append("輕小說")
-            
-            # Parsing "作品標籤" section
-            # Looking for links commonly found in the tag area
-            # Based on structure, they might be in a div with specific class or just after generic text.
-            # Let's look for known tag patterns in the soup
-            # Example: <a href="/tagarticle/...">TagName</a>
-            tag_links = soup.find_all('a', href=re.compile(r'/tagarticle/\d+/\d+\.html'))
-            for link in tag_links:
-                t_text = link.get_text().strip()
-                if t_text and t_text not in tags:
-                    tags.append(t_text)
-            
-            # Also check if "異世界" is in the title or intro, and explicitly add it if missing
-            # This helps vector search and potential hard filters
-            if "異世界" in name or "異世界" in intro:
-                if "異世界" not in tags:
-                    tags.append("異世界")
-            
-            # 7. Word Count & Click Count (Harder, needs regex on body text)
-            # Text Example: "398.1 萬字"
-            body_text = soup.get_text()
-            
-            words_total = 0
-            word_match = re.search(r'([\d\.]+)\s*萬字', body_text)
-            if word_match:
-                try:
-                    val = float(word_match.group(1))
-                    words_total = int(val * 10000)
-                except:
-                    pass
-            
-            click_count = 0
-            # Look for something like "28598 人收藏" or heat
-            # Regex: (\d+)\s*人收藏
-            collect_match = re.search(r'(\d+)\s*人收藏', body_text)
-            if collect_match:
-                 click_count = int(collect_match.group(1)) # Use collection count as proxy for clicks
-
-            # Generate ID
-            book_id = re.search(r'/novel/(\d+)\.html', url).group(1)
-            
-            return {
-                "id": f"linovelib_{book_id}",
-                "name": name,
+            novel = {
+                "id": f"linovelib_{novel_id}",
                 "source": "linovelib",
-                "author": author,
-                "classification": classification,
-                "tags": tags,
-                "intro": intro,
-                "click_count": click_count, # Using Collection count as proxy
-                "words_total": words_total,
-                "publish_status": publish_status,
                 "url": url,
-                "cover_url": cover_url
             }
             
+            # === 標題 ===
+            title_meta = soup.find('meta', {'property': 'og:novel:book_name'})
+            if title_meta:
+                novel["name"] = title_meta.get('content', '').strip()
+            else:
+                title_elem = soup.select_one('h1.book-title')
+                novel["name"] = title_elem.get_text(strip=True) if title_elem else ""
+            
+            # === 作者 ===
+            author_meta = soup.find('meta', {'property': 'og:novel:author'})
+            if author_meta:
+                novel["author"] = author_meta.get('content', '').strip()
+            else:
+                author_elem = soup.select_one('.authorname a')
+                novel["author"] = author_elem.get_text(strip=True) if author_elem else ""
+            
+            # === 插畫家 (illname) ===
+            illname_elem = soup.select_one('.illname a')
+            if illname_elem:
+                # 移除 ruby 標籤的 rt 部分
+                rt = illname_elem.find('rt')
+                if rt:
+                    rt.decompose()
+                novel["illname"] = illname_elem.get_text(strip=True)
+            else:
+                novel["illname"] = None
+            
+            # === 分類/文庫 ===
+            cat_meta = soup.find('meta', {'property': 'og:novel:category'})
+            novel["classification"] = cat_meta.get('content', '').strip() if cat_meta else ""
+            
+            # === 簡介 ===
+            intro_elem = soup.select_one('#bookSummary content')
+            novel["intro"] = intro_elem.get_text(strip=True) if intro_elem else ""
+            
+            # === 別名 (backupname) ===
+            backup_elem = soup.select_one('.backupname .bkname-body')
+            novel["backupname"] = backup_elem.get_text(strip=True) if backup_elem else None
+            
+            # === 標籤 (tags) ===
+            tags = []
+            for tag_elem in soup.select('.tag-small-group .tag-small a'):
+                tag_text = tag_elem.get_text(strip=True)
+                if tag_text and tag_text not in tags:
+                    tags.append(tag_text)
+            novel["tags"] = tags
+            
+            # === 統計資料 (從 .book-meta 解析) ===
+            meta_text = ""
+            for meta_elem in soup.select('.book-meta.book-layout-inline'):
+                meta_text += meta_elem.get_text()
+            
+            # 字數
+            words_match = re.search(r'([\d.]+)\s*萬?\s*字', meta_text)
+            if words_match:
+                words = float(words_match.group(1))
+                if '萬' in meta_text[:meta_text.find('字') + 5]:
+                    words *= 10000
+                novel["words_total"] = int(words)
+            else:
+                novel["words_total"] = 0
+            
+            # 收藏數
+            bookmark_match = re.search(r'(\d+)\s*人收藏', meta_text)
+            novel["bookmark_count"] = int(bookmark_match.group(1)) if bookmark_match else 0
+            
+            # 推薦數
+            rec_match = re.search(r'(\d+)\s*次推薦', meta_text)
+            novel["total_recommendations"] = int(rec_match.group(1)) if rec_match else 0
+            
+            # 連載狀態
+            status_meta = soup.find('meta', {'property': 'og:novel:status'})
+            novel["publish_status"] = status_meta.get('content', '').strip() if status_meta else "未知"
+            
+            # 已動畫化狀態
+            novel["is_animated"] = "已動畫化" in meta_text
+            
+            # === 評分 ===
+            score_elem = soup.select_one('.score-num')
+            if score_elem:
+                try:
+                    novel["rating_score"] = float(score_elem.get_text(strip=True))
+                except ValueError:
+                    novel["rating_score"] = None
+            else:
+                novel["rating_score"] = None
+            
+            # 評價人數
+            rating_elem = soup.select_one('.sub-rating')
+            if rating_elem:
+                text = rating_elem.get_text()
+                count_match = re.search(r'(\d+)\s*人', text)
+                novel["rating_count"] = int(count_match.group(1)) if count_match else 0
+            else:
+                novel["rating_count"] = 0
+            
+            # === 封面圖片 ===
+            cover_meta = soup.find('meta', {'property': 'og:image'})
+            novel["cover_url"] = cover_meta.get('content', '') if cover_meta else None
+            
+            return novel
+            
         except Exception as e:
-            print(f"Error parsing {url}: {e}")
+            print(f"Error parsing novel {novel_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
+    
+    def crawl(self, max_pages: int = 200,
+              max_books: int = 0,
+              output_file: str = "data/books_linovelib.json") -> List[Dict[str, Any]]:
+        """
+        主爬取函數
+        
+        Args:
+            max_pages: 最大頁數
+            max_books: 最大書籍數 (0 = 無限制)
+            output_file: 輸出文件路徑
+        """
+        # 獲取小說 ID 列表
+        novel_ids = self.get_novel_ids_from_wenku(max_pages)
+        
+        # 限制書籍數量
+        if max_books > 0 and len(novel_ids) > max_books:
+            novel_ids = novel_ids[:max_books]
+            
+        print(f"\n共獲取 {len(novel_ids)} 個小說 ID")
+        
+        if not novel_ids:
+            print("沒有獲取到任何小說 ID")
+            return []
+        
+        # 爬取詳細資料
+        novels = []
+        failed = []
+        
+        print(f"\n開始爬取小說詳細資料...")
+        
+        for i, novel_id in enumerate(novel_ids, 1):
+            novel = self.parse_novel_detail(novel_id)
+            
+            if novel:
+                novels.append(novel)
+                if i % 50 == 0:
+                    print(f"  已爬取: {i}/{len(novel_ids)} ({len(novels)} 成功)")
+                    # 中間保存
+                    self._save_json(novels, output_file)
+            else:
+                failed.append(novel_id)
+            
+            self._random_delay()
+        
+        # 最終保存
+        self._save_json(novels, output_file)
+        
+        print(f"\n爬取完成!")
+        print(f"  成功: {len(novels)}")
+        print(f"  失敗: {len(failed)}")
+        if failed:
+            print(f"  失敗 ID: {failed[:20]}{'...' if len(failed) > 20 else ''}")
+        
+        return novels
+    
+    def _save_json(self, data: List[Dict], filepath: str):
+        """保存 JSON 文件"""
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Linovelib Crawler')
+    parser.add_argument('--max-pages', type=int, default=200,
+                        help='Maximum number of pages to crawl')
+    parser.add_argument('--max-books', type=int, default=0,
+                        help='Maximum number of books to crawl (0 = unlimited)')
+    parser.add_argument('--output', type=str, default='data/books_linovelib.json',
+                        help='Output file path')
+    parser.add_argument('--delay', type=float, default=1.5,
+                        help='Base delay between requests in seconds (actual delay = delay ± 50%%)')
+    
+    args = parser.parse_args()
+    
+    crawler = LinovelibCrawler(delay=args.delay)
+    crawler.crawl(
+        max_pages=args.max_pages,
+        max_books=args.max_books,
+        output_file=args.output
+    )
+
 
 if __name__ == "__main__":
-    crawler = LinovelibCrawler()
-    # Crawl 5 pages (approx. 100 books) for a larger dataset
-    crawler.crawl(pages=5)
+    main()

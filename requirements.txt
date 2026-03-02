@@ -8,3 +8,4 @@ google-genai
 fastapi
 uvicorn
 jieba
+beautifulsoup4

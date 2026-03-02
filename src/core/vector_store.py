@@ -88,35 +88,20 @@ class VectorStore:
         texts_to_embed = []
         
         for item in items:
-            # --- Handle different schema structures (MirrorFiction vs Linovelib) ---
-            # 1. Author
-            author_name = ""
-            if isinstance(item.get('user'), dict):
-                # Old Schema
-                author_name = item.get('user', {}).get('name', '')
-            else:
-                # New Schema (Simple string)
-                author_name = item.get('author', '')
+            author_name = item.get('author', '')
 
             # 2. Tags
             tag_names = []
             tags_raw = item.get('tags')
-            if isinstance(tags_raw, dict) and 'data' in tags_raw:
-                # Old Schema: {'data': [{'name': 'tag1'}, ...]}
-                tag_names = [t.get('name') for t in tags_raw.get('data', [])]
-            elif isinstance(tags_raw, list):
-                # New Schema: ['tag1', 'tag2']
+            if isinstance(tags_raw, list):
                 tag_names = [str(t) for t in tags_raw]
 
             # Construct rich text representation
-            content_snippet = item.get('content', '')[:500] # 擷取代表性內文
             parts = [
                 f"書名: {item.get('name', '')}",
                 f"作者: {author_name}",
-                f"標語: {item.get('slogan', '')}",
                 f"標籤: {', '.join(tag_names)}",
                 f"簡介: {item.get('intro', '')}",
-                f"內文片段: {content_snippet}"
             ]
             text = "\n".join([p for p in parts if p.strip()])
             

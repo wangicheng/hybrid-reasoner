@@ -44,14 +44,14 @@ class BaseEngine:
                 min_val = params.get("min_val")
                 max_val = params.get("max_val")
                 
-                if field == "words_total":
+                if field in ["words_total", "bookmark_count", "rating_score", "total_recommendations"]:
                     range_params = {}
                     if min_val is not None:
                         range_params["gte"] = float(min_val)
                     if max_val is not None:
                         range_params["lte"] = float(max_val)
                     if range_params:
-                        current_cond = rest.FieldCondition(key="words_total", range=rest.Range(**range_params))
+                        current_cond = rest.FieldCondition(key=field, range=rest.Range(**range_params))
 
             # 2. Status Check
             elif name == "status_check":
@@ -82,7 +82,7 @@ class BaseEngine:
                 # 【核心修改】：如果是找分類或標籤，採取寬鬆策略 (Classification OR Tags)
                 if field in ["classification", "tags"] and keyword:
                     should_conditions = [
-                        rest.FieldCondition(key="classification.name", match=rest.MatchValue(value=keyword)),
+                        rest.FieldCondition(key="classification", match=rest.MatchValue(value=keyword)),
                         rest.FieldCondition(key="tags", match=rest.MatchValue(value=keyword))
                     ]
                     current_cond = rest.Filter(should=should_conditions)

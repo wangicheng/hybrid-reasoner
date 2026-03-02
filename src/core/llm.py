@@ -81,8 +81,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
             # Move top-level params to parameters dict
             known_params = [
                 "field", "keyword", "min_val", "max_val", "target_status", 
-                "query_text", "author_name", "require_free", "allow_restricted", 
-                "require_audio", "ranking_direction", "normalize_max"
+                "query_text", "author_name", "ranking_direction", "normalize_max"
             ]
             for param in known_params:
                 if param in item:
@@ -181,8 +180,8 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     
     ### Available Scoring Functions
     1. **keyword_match** (field, keyword): 'classification', 'tags', 'name'.
-    2. **numeric_range** (field, min_val, max_val): ONLY 'words_total', 'click_count', 'chapters_total'. DO NOT invent fields!
-    3. **numeric_ranking** (field, ranking_direction, normalize_max): ONLY 'words_total', 'click_count', 'chapters_total'. Soft ranking.
+    2. **numeric_range** (field, min_val, max_val): ONLY 'words_total', 'bookmark_count', 'rating_score', 'total_recommendations'. DO NOT invent fields!
+    3. **numeric_ranking** (field, ranking_direction, normalize_max): ONLY 'words_total', 'bookmark_count', 'rating_score', 'total_recommendations'. Soft ranking.
     4. **status_check** (target_status): 'completed', 'ongoing'.
     5. **author_match** (author_name).
     6. **semantic_similarity** (query_text): Concepts that do not fit in tags, e.g. "主角聰明", "角色少".

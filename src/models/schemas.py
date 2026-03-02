@@ -9,9 +9,6 @@ class ScoringParameters(BaseModel):
     target_status: Optional[str] = Field(None, description="Target status (completed or ongoing)")
     query_text: Optional[str] = Field(None, description="Text for semantic similarity")
     author_name: Optional[str] = Field(None, description="Name of the author")
-    require_free: Optional[bool] = Field(None, description="Whether to require free books")
-    allow_restricted: Optional[bool] = Field(None, description="Whether to allow restricted content")
-    require_audio: Optional[bool] = Field(None, description="Whether to require audio")
     # --- Stage 5: Numeric Ranking ---
     ranking_direction: Optional[str] = Field(None, description="For numeric_ranking: 'asc' (higher is better) or 'desc' (lower is better)")
     normalize_max: Optional[float] = Field(None, description="For numeric_ranking: the normalization ceiling (e.g. 2000000 for words)")
@@ -41,9 +38,16 @@ class NovelItem(BaseModel):
     name: str
     intro: str
     words_total: int
-    chapters_total: int
     publish_status: str
     click_count: int
+    bookmark_count: int
     tags: List[str]
     classification: str
+    rating_score: Optional[float] = None
+    rating_count: int = 0
+    total_recommendations: int = 0
     url: Optional[str] = None
+    cover_url: Optional[str] = None
+    illname: Optional[str] = None
+    backupname: Optional[str] = None
+    is_animated: bool = False
