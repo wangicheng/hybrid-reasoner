@@ -1,0 +1,576 @@
+[
+  {
+    "query_id": "q1",
+    "query": "請推薦字數超過一百萬字的無敵流修仙小說",
+    "pool_size": 21,
+    "candidates": [
+      {
+        "book_id": "4146",
+        "title": "神想幻境",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 4,
+          "FilteredVector": 8,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "2182",
+        "title": "末日前，我把惡魔少女誘拐回家",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 3,
+          "FilteredVector": 5,
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "21316",
+        "title": "相思欲絕但為君",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 10,
+          "FilteredVector": 10,
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "5374",
+        "title": "資訊匯戰",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 5
+        }
+      },
+      {
+        "book_id": "21464",
+        "title": "王總裁的百萬新娘",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "5277",
+        "title": "大神撩了一隻鬼",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "14733",
+        "title": "《漢武英俠錄》廿二：瀟湘雨劍寫狗儒生",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "17271",
+        "title": "墨跡三千",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "10725",
+        "title": "神功行者",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 8,
+          "FilteredVector": 1,
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "23483",
+        "title": "我有九千萬億舔狗金",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "7269",
+        "title": "《封魔幻域》",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 7,
+          "FilteredVector": 4,
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "29186",
+        "title": "畫槌錄",
+        "source_engines": [
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "FilteredVector": 7,
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "20870",
+        "title": "仙尊今日還裝良善否？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "5857",
+        "title": "無限淫慾",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 6,
+          "FilteredVector": 2,
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "7334",
+        "title": "魔途振劍錄〔卷一〕",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "11964",
+        "title": "八百鬼",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 9,
+          "FilteredVector": 6,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "2151",
+        "title": "諸星異聞錄",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 2,
+          "FilteredVector": 3,
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "20458",
+        "title": "御龍",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "8695",
+        "title": "《征天》卷貳．異事暗流",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "14321",
+        "title": "荏苒若火",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "2135",
+        "title": "1933時空逆流",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 1,
+          "FilteredVector": 9,
+          "HybridReasoner": 9
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q2",
+    "query": "有沒有完結的科幻愛情小說，最好有賽博龐克風格",
+    "pool_size": 29,
+    "candidates": [
+      {
+        "book_id": "11631",
+        "title": "神與畜",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "12795",
+        "title": "3.5：強迫升級",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "61",
+        "title": "禮物",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 3
+        }
+      },
+      {
+        "book_id": "33580",
+        "title": "全世界都在用克隆人續命",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "20734",
+        "title": "The Love（因為原書名太長，因此簡稱）",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8,
+          "FilteredVector": 4
+        }
+      },
+      {
+        "book_id": "56",
+        "title": "小兔",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 2
+        }
+      },
+      {
+        "book_id": "18253",
+        "title": "倘若你被世界拋棄",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "72",
+        "title": "秋山又幾重",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 5
+        }
+      },
+      {
+        "book_id": "67",
+        "title": "獻給愛情的犯罪",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 4
+        }
+      },
+      {
+        "book_id": "21833",
+        "title": "無差別愛人",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "32455",
+        "title": "停止日STOP DAY",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 7,
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "11525",
+        "title": "機械寶貝",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "FilteredVector": 3,
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "4116",
+        "title": "科幻短篇故事集",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "140",
+        "title": "獅頭花",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 10
+        }
+      },
+      {
+        "book_id": "25029",
+        "title": "雲端副作用",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "113",
+        "title": "律政女王",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 9
+        }
+      },
+      {
+        "book_id": "17786",
+        "title": "星生",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 1,
+          "FilteredVector": 1,
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "10856",
+        "title": "有效期限",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 4,
+          "FilteredVector": 7,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "4642",
+        "title": "惡霸少爺愛上我",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 9
+        }
+      },
+      {
+        "book_id": "13908",
+        "title": "《戀吻螢光幕》",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 8
+        }
+      },
+      {
+        "book_id": "102",
+        "title": "泡沫之梯",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 8
+        }
+      },
+      {
+        "book_id": "86",
+        "title": "《鬼島故事集》長生禮儀社",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 7
+        }
+      },
+      {
+        "book_id": "5565",
+        "title": "倪匡科幻獎投稿作品集",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "24",
+        "title": "誕降師",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 1
+        }
+      },
+      {
+        "book_id": "74",
+        "title": "阿勃勒之夏",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 6
+        }
+      },
+      {
+        "book_id": "17043",
+        "title": "【靈能偵察I】在結束時開始",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 6
+        }
+      },
+      {
+        "book_id": "31097",
+        "title": "客製化戀人",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 2,
+          "FilteredVector": 2,
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "19226",
+        "title": "鑽石計劃",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 5
+        }
+      },
+      {
+        "book_id": "2308",
+        "title": "在地球的最後一天",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10,
+          "FilteredVector": 10
+        }
+      }
+    ]
+  }
+]
