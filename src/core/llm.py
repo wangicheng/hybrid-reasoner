@@ -1,7 +1,7 @@
 import os
 import json
 import functools
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from google import genai
 from google.genai import types
 from src.models.schemas import QueryParseResult
@@ -225,8 +225,8 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
         
         try:
             # 定義內部呼叫函數以便使用 @retry_on_rate_limit 處理 429/503
-            # 如果是 Gemma，多給一些重試機會
-            @retry_on_rate_limit(max_retries=3 if is_gemma else 2, base_delay=5.0)
+            # Gemini 失敗一次就當作 token 用完，直接換 Gemma；Gemma 多給重試機會
+            @retry_on_rate_limit(max_retries=3 if is_gemma else 1, base_delay=2.0)
             def _do_generate():
                 import re as _re
                 final_prompt = f"User Query: {user_query}"
@@ -331,3 +331,264 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
             hypothetical_intro="",
             criteria=fallback_criteria
         )
+
+
+# ============================================================
+# 兩階段解析（支援 Tool Calling）
+# ============================================================
+
+def _stage1_analyze_intent(user_query: str, model_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    第一階段：分析用戶意圖，決定是否需要調用工具
+    
+    Returns:
+        {
+            "tool_calls": [
+                {"name": "analyze_book_mentions", "arguments": {...}}
+            ],
+            "preliminary_keywords": [...],
+            "preliminary_criteria": [...]
+        }
+    """
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    selected_model = model_id or os.getenv("LLM_MODEL_ID", "gemini-2.5-flash-lite")
+    client = genai.Client(api_key=api_key)
+    
+    # 導入工具註冊表獲取可用工具
+    from src.core.tool_registry import ToolRegistry
+    tools_schema = ToolRegistry.get_tools_schema()
+    
+    # 第一階段 Schema - 詳細定義 arguments 結構
+    stage1_schema = {
+        "type": "object",
+        "properties": {
+            "tool_calls": {
+                "type": "array",
+                "description": "需要調用的工具列表。如果用戶提到了具體的書籍名稱並表達喜好，應該調用 analyze_book_mentions。",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "工具名稱，例如 'analyze_book_mentions'"},
+                        "arguments": {
+                            "type": "object", 
+                            "description": "工具參數",
+                            "properties": {
+                                "liked_books": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "用戶喜歡的書籍名稱列表"
+                                },
+                                "disliked_books": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "用戶不喜歡的書籍名稱列表"
+                                },
+                                "neutral_books": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "用戶提到但未表達偏好的書籍名稱列表"
+                                }
+                            },
+                            "required": ["liked_books", "disliked_books"]
+                        }
+                    },
+                    "required": ["name", "arguments"]
+                }
+            },
+            "preliminary_keywords": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "從查詢中提取的初步關鍵詞"
+            },
+            "preliminary_search_terms": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "查詢的核心搜尋詞"
+            }
+        },
+        "required": ["tool_calls", "preliminary_keywords", "preliminary_search_terms"]
+    }
+    
+    # 構建工具描述
+    tools_description = "\n".join([
+        f"- **{t['name']}**: {t['description']}\n  參數: {json.dumps(t['parameters'], ensure_ascii=False)}"
+        for t in tools_schema
+    ])
+    
+    system_prompt = f"""你是一個查詢分析助手。你的任務是分析用戶的查詢，並決定是否需要調用工具來獲取更多資訊。
+
+## 可用工具：
+{tools_description}
+
+## 判斷規則：
+1. 如果用戶提到了具體的書籍名稱（如《刀劍神域》、「無職轉生」等），並且表達了喜歡或不喜歡的態度，應該調用 `analyze_book_mentions` 工具。
+2. 如果用戶只是描述想要的類型（如「奇幻冒險」「完結小說」），不需要調用工具。
+3. 書籍名稱可能用《》、「」包裹，也可能直接提及。
+
+## 輸出要求：
+- tool_calls: 如果需要調用工具，填入工具名稱和參數；如果不需要，返回空數組 []
+- preliminary_keywords: 提取查詢中的核心關鍵詞
+- preliminary_search_terms: 查詢的主要搜尋詞
+
+## 範例：
+用戶: "我喜歡《刀劍神域》，推薦類似的"
+輸出: {{
+  "tool_calls": [{{
+    "name": "analyze_book_mentions",
+    "arguments": {{
+      "liked_books": ["刀劍神域"],
+      "disliked_books": [],
+      "neutral_books": []
+    }}
+  }}],
+  "preliminary_keywords": ["VR遊戲", "冒險", "虛擬實境"],
+  "preliminary_search_terms": ["類似刀劍神域"]
+}}
+
+用戶: "推薦完結的奇幻小說"
+輸出: {{
+  "tool_calls": [],
+  "preliminary_keywords": ["奇幻", "完結"],
+  "preliminary_search_terms": ["完結奇幻小說"]
+}}
+"""
+
+    try:
+        # Gemini 失敗一次就當作 token 用完，不重試
+        @retry_on_rate_limit(max_retries=1, base_delay=1.0)
+        def _do_stage1():
+            response = client.models.generate_content(
+                model=selected_model,
+                contents=f"用戶查詢: {user_query}",
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json",
+                    response_schema=stage1_schema,
+                    temperature=0.1
+                )
+            )
+            
+            if not response.text:
+                raise ValueError("Empty response")
+            
+            return json.loads(response.text.strip())
+        
+        result = _do_stage1()
+        print(f"[llm] Stage 1 分析完成: tool_calls={len(result.get('tool_calls', []))}")
+        return result
+        
+    except Exception as e:
+        print(f"[llm] Stage 1 分析失敗: {e}")
+        return {
+            "tool_calls": [],
+            "preliminary_keywords": [],
+            "preliminary_search_terms": [user_query]
+        }
+
+
+def parse_query_with_tools(
+    user_query: str, 
+    model_id: Optional[str] = None,
+    enable_tools: bool = True
+) -> Tuple[QueryParseResult, Dict[str, Any]]:
+    """
+    兩階段查詢解析（支援 Tool Calling）
+    
+    流程：
+    1. 第一階段：分析意圖，決定是否需要調用工具
+    2. 執行工具（如果需要）
+    3. 第二階段：用增強後的輸入進行完整解析
+    
+    Args:
+        user_query: 用戶的原始查詢
+        model_id: LLM 模型 ID
+        enable_tools: 是否啟用工具調用（預設 True）
+    
+    Returns:
+        Tuple of (QueryParseResult, tool_context)
+        - QueryParseResult: 最終的解析結果
+        - tool_context: 工具調用的上下文資訊（包含 tool_results, enhanced_query 等）
+    """
+    from src.core.tool_registry import ToolRegistry, ToolCall, format_tool_result_for_query
+    
+    tool_context = {
+        "tools_enabled": enable_tools,
+        "tool_calls": [],
+        "tool_results": [],
+        "enhanced_query": user_query,
+        "enhancement_text": ""
+    }
+    
+    if not enable_tools:
+        # 不使用工具，直接用原本的 parse_query
+        result = parse_query(user_query, model_id=model_id)
+        return result, tool_context
+    
+    # === 第一階段：分析意圖 ===
+    print(f"[llm] 開始兩階段解析...")
+    stage1_result = _stage1_analyze_intent(user_query, model_id=model_id)
+    
+    tool_calls_raw = stage1_result.get("tool_calls", [])
+    
+    if not tool_calls_raw:
+        # 不需要調用工具，直接用原本的 parse_query
+        print(f"[llm] 不需要工具調用，進行標準解析")
+        result = parse_query(user_query, model_id=model_id)
+        return result, tool_context
+    
+    # === 執行工具 ===
+    print(f"[llm] 需要調用 {len(tool_calls_raw)} 個工具")
+    tool_calls = [
+        ToolCall(name=tc["name"], arguments=tc.get("arguments", {}))
+        for tc in tool_calls_raw
+    ]
+    tool_context["tool_calls"] = tool_calls_raw
+    
+    tool_results = ToolRegistry.execute_all(tool_calls)
+    tool_context["tool_results"] = [
+        {"name": r.name, "success": r.success, "result": r.result, "error": r.error}
+        for r in tool_results
+    ]
+    
+    # 檢查是否有成功的結果
+    successful_results = [r for r in tool_results if r.success]
+    if not successful_results:
+        print(f"[llm] 工具調用無成功結果，進行標準解析")
+        result = parse_query(user_query, model_id=model_id)
+        return result, tool_context
+    
+    # === 格式化增強文字 ===
+    enhancement_text = format_tool_result_for_query(tool_results)
+    tool_context["enhancement_text"] = enhancement_text
+    
+    # === 構建增強後的查詢 ===
+    if enhancement_text:
+        enhanced_query = f"{user_query}\n\n### 背景資訊（來自書籍分析）:\n{enhancement_text}"
+        tool_context["enhanced_query"] = enhanced_query
+        print(f"[llm] 增強查詢:\n{enhancement_text[:200]}...")
+    else:
+        enhanced_query = user_query
+    
+    # === 第二階段：完整解析 ===
+    # 注意：parse_query 有 cache，所以用增強後的查詢可能不會被 cache
+    # 這裡直接呼叫，讓它用增強後的輸入
+    print(f"[llm] 進行第二階段完整解析...")
+    
+    # 為了避免 cache 問題，我們直接複製 parse_query 的核心邏輯但用增強後的查詢
+    # 或者我們可以清除 cache 後再呼叫
+    parse_query.cache_clear()  # 清除 cache 確保用增強後的查詢
+    
+    result = parse_query(enhanced_query, model_id=model_id)
+    
+    # 確保 original_query 保持為用戶原始輸入
+    # 由於 QueryParseResult 是 Pydantic model，我們需要創建新的
+    from src.models.schemas import QueryParseResult as QPR
+    final_result = QPR(
+        original_query=user_query,  # 保持原始查詢
+        search_terms=result.search_terms,
+        generated_keywords=result.generated_keywords,
+        hypothetical_intro=result.hypothetical_intro,
+        criteria=result.criteria
+    )
+    
+    return final_result, tool_context
