@@ -1,7 +1,7 @@
 """
 Data Ingestion Script for Linovelib Data
 
-This script reads novel data from `data/books_linovelib.json` and populates:
+This script reads novel data from `data/books_crawled.json` and populates:
 1. SQLite Database (Metadata via src.core.database.Database)
 2. Qdrant Vector Store (Embeddings via src.core.vector_store.VectorStore)
 
@@ -21,7 +21,7 @@ sys.path.insert(0, str(project_root))
 from src.core.database import Database
 from src.core.vector_store import VectorStore
 
-DATA_FILE = project_root / "data" / "books_linovelib.json"
+DATA_FILE = project_root / "data" / "books_crawled.json"
 BATCH_SIZE = 100  # For vector store batching
 
 
