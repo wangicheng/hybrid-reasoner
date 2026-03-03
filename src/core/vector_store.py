@@ -99,8 +99,6 @@ class VectorStore:
             # Construct rich text representation
             parts = [
                 f"書名: {item.get('name', '')}",
-                f"作者: {author_name}",
-                f"標籤: {', '.join(tag_names)}",
                 f"簡介: {item.get('intro', '')}",
             ]
             text = "\n".join([p for p in parts if p.strip()])
