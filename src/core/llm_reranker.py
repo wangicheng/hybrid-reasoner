@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from google import genai
 from src.core.api_utils import retry_on_rate_limit
@@ -33,12 +33,12 @@ class LLMReranker:
             })
         return packed
 
-    def rerank(self, query: str, candidates: List[Dict[str, Any]], top_k: int = 10) -> List[Dict[str, Any]]:
+    def rerank(self, query: str, candidates: List[Dict[str, Any]], top_k: int = 10, model_id: Optional[str] = None) -> List[Dict[str, Any]]:
         packed = self._build_candidates(candidates, top_k)
         if not packed:
             return []
 
-        selected_model = os.getenv("LLM_MODEL_ID", "").strip()
+        selected_model = model_id or FALLBACK_MODELS[0]
         if selected_model and selected_model in FALLBACK_MODELS:
             models_to_try = [selected_model] + [m for m in FALLBACK_MODELS if m != selected_model]
         elif selected_model:

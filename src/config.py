@@ -12,7 +12,6 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 class Settings(BaseSettings):
     OPENAI_API_KEY: str = "sk-placeholder"
     OPENAI_BASE_URL: str = "https://opencode.ai/zen/v1"
-    LLM_MODEL_ID: str = "gemma-3-27b-it"
     RERANK_STRATEGY: str = "score_only"
     RERANK_FUSION_ALPHA: float = 0.3
     

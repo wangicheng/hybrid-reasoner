@@ -589,6 +589,7 @@ class HybridReasonerEngine(BaseEngine):
                 query=rerank_query,
                 candidates=[entry["item"] for entry in scored_items],
                 top_k=10,
+                model_id=model_id,
             )
             llm_rank_map = {str(r.get("id")): r for r in llm_ranked}
             for entry in scored_items:
@@ -691,6 +692,7 @@ class HybridReasonerEngine(BaseEngine):
                     context_chunks=chunks_to_analyze,
                     score_breakdown=breakdown,
                     runtime_state=explainer_runtime_state,
+                    model_id=model_id,
                 )
                 res['explanation'] = explanation
             else:

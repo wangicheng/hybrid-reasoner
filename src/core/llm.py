@@ -109,7 +109,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     支援多模型 fallback：當主要模型遇到配額限制或錯誤時，自動嘗試下一個模型。
     """
     api_key = os.environ.get("GOOGLE_API_KEY")
-    selected_model = model_id or os.getenv("LLM_MODEL_ID", "").strip()
+    selected_model = model_id or FALLBACK_MODELS[0]
 
     # 建立模型嘗試順序
     if selected_model and selected_model in FALLBACK_MODELS:

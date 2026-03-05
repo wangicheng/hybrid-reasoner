@@ -12,6 +12,7 @@ def generate_explanation(
     context_chunks: List[str] = None,
     score_breakdown: List[Dict] = None,  # 新增：評分細節
     runtime_state: Dict[str, Any] = None,
+    model_id: str = None,
 ) -> str:
     """
     使用 Google GenAI SDK 生成推薦解釋。
@@ -19,7 +20,7 @@ def generate_explanation(
     現在包含評分證據 (score_breakdown) 以產出基於證據的解釋。
     """
     api_key = os.environ.get("GOOGLE_API_KEY")
-    selected_model = os.getenv("LLM_MODEL_ID", "").strip()
+    selected_model = model_id or FALLBACK_MODELS[0]
 
     # Query-level circuit breaker for Gemini models
     state = runtime_state if runtime_state is not None else {}
