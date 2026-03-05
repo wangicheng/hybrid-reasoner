@@ -29,6 +29,28 @@ def apply_strict_filters(golden_rules: Dict[str, Any], book_item: Dict[str, Any]
         if req_status == "ongoing" and status not in ["ongoing", "連載中", "連載"]:
             return False
             
+    # Check animated
+    must_be_animated = golden_rules.get("must_be_animated")
+    if must_be_animated is not None:
+        if bool(book_item.get("is_animated")) != bool(must_be_animated):
+            return False
+            
+    # Check required tags
+    req_tags = golden_rules.get("required_tags") or []
+    if req_tags:
+        book_tags = set(book_item.get("tags", []))
+        for rt in req_tags:
+            if rt not in book_tags:
+                return False
+                
+    # Check blocked tags
+    blocked_tags = golden_rules.get("blocked_tags") or []
+    if blocked_tags:
+        book_tags = set(book_item.get("tags", []))
+        for bt in blocked_tags:
+            if bt in book_tags:
+                return False
+                
     return True
 
 def calculate_ndcg(ranked_scores: List[float], k: int) -> float:
@@ -56,6 +78,18 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True):
         queries_config = json.load(f)
     golden_rules_map = {item["query"]: item["golden_rules"] for item in queries_config}
     
+    # 0.5 Load all crawled books to build full metadata
+    books_crawled_map = {}
+    books_crawled_path = Path("data/books_crawled.json")
+    if books_crawled_path.exists():
+        with open(books_crawled_path, "r", encoding="utf-8") as f:
+            try:
+                crawled_data = json.load(f)
+                for b in crawled_data:
+                    books_crawled_map[str(b.get("id", ""))] = b
+            except json.JSONDecodeError:
+                print("Warning: Failed to parse books_crawled.json")
+
     # 1. Load Ground Truth tracking data (who found what!)
     with open(truth_json, "r", encoding="utf-8") as f:
         truth_data = json.load(f)
@@ -79,15 +113,31 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True):
             annotations[q][bid] = score
             
             # Reconstruct dummy dict for strict filter
-            words_in_10k = float(row["Words (萬)"]) if row["Words (萬)"] else 0
-            books_data[bid] = {
-                "words_total": words_in_10k * 10000,
-                "publish_status": row["Status"]
-            }
+            if str(bid) in books_crawled_map:
+                books_data[bid] = books_crawled_map[str(bid)]
+            else:
+                words_in_10k = float(row.get("Words (萬)") or 0)
+                intro = row.get("Intro", "")
+                
+                # Parse tags from "[標籤: 架空, 穿越]"
+                tags = []
+                if "[標籤:" in intro:
+                    start_idx = intro.find("[標籤:") + 4
+                    end_idx = intro.find("]", start_idx)
+                    if end_idx != -1:
+                        tags_str = intro[start_idx:end_idx]
+                        tags = [t.strip() for t in tags_str.split(",") if t.strip()]
+                        
+                books_data[bid] = {
+                    "words_total": words_in_10k * 10000,
+                    "publish_status": row.get("Status", ""),
+                    "tags": tags,
+                    "is_animated": False  # Default fallback
+                }
 
     # 3. Apply Strict Filter (The Arbitrator)
     if use_strict_filter:
-        print("\n🔍 [Strict Filter] 正在進行強制仲裁審查 (尋找字數/狀態的違規項目)...")
+        print("\n🔍 [Strict Filter] 正在進行強制仲裁審查 (尋找字數/狀態/標籤/動畫的違規項目)...")
         for q, books_in_query in annotations.items():
             golden_rules = golden_rules_map.get(q)
             if not golden_rules:
