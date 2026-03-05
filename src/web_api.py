@@ -7,8 +7,9 @@ import os
 # Add the project root to sys.path to resolve 'src' imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.core.engine import HybridEngine
 import uvicorn
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 
 app = FastAPI()
 
@@ -25,6 +26,17 @@ engine = None
 @app.on_event("startup")
 async def startup_event():
     global engine
+    
+    # 印出明確的 localhost 網址方便使用者點擊
+    print("\n" + "="*50)
+    print("🚀 伺服器已啟動！")
+    print("👉 請點擊前往：http://localhost:8000")
+    print("="*50 + "\n")
+
+    # 將笨重的 AI 套件載入移到這裡，讓 uvicorn 可以馬上印出啟動文字，避免畫面卡住
+    print("Loading heavy machine learning libraries... (This may take a few seconds)")
+    from src.core.engine import HybridEngine
+    
     print("Initializing Hybrid Engine... (This may take a few seconds)")
     try:
         engine = HybridEngine()

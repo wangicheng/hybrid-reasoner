@@ -102,6 +102,87 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
     return final_result
 
 
+def _verify_narrative_logic_sync(query_trait: str, book_intro: str, model_id: Optional[str] = None) -> bool:
+    """
+    輕量級 NLI 審查（同步版本）：判斷書籍簡介的敘事邏輯是否符合使用者的特定要求。
+    返回 True 表示符合或無法確定，False 表示明確違反邏輯。
+    """
+    if not book_intro or not query_trait:
+        return True
+        
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    selected_model = model_id or os.getenv("LLM_MODEL_ID", "gemini-3-flash-preview").strip()
+    
+    if selected_model and selected_model in FALLBACK_MODELS:
+        models_to_try = [selected_model] + [m for m in FALLBACK_MODELS if m != selected_model]
+    elif selected_model:
+        models_to_try = [selected_model] + FALLBACK_MODELS
+    else:
+        models_to_try = FALLBACK_MODELS
+
+    client = genai.Client(api_key=api_key)
+    
+    # 截短簡介避免 Token 浪費 (NLI 審查只需前 300 字即可判斷)
+    truncated_intro = book_intro[:300]
+    
+    prompt = f"""
+    Please perform a Natural Language Inference (NLI) check.
+    User's desired story trait/logic: "{query_trait}"
+    Book Introduction:
+    '''
+    {truncated_intro}
+    '''
+    Does the book introduction explicitly CONTRADICT the desired logic?
+    For example, if the user asks for "廢物逆襲" (starts weak/trash, becomes strong), but the book intro portrays a character who "starts as the strongest and loses all power" or "was betrayed and lost everything" without a clear "starting as trash" narrative, that is a contradiction.
+    
+    Output ONLY valid JSON:
+    {{"contradicts": true/false}}
+    """
+    
+    for mid in models_to_try:
+        try:
+            @retry_on_rate_limit(max_retries=1, base_delay=1.0)
+            def _do_generate():
+                is_gemma = "gemma" in mid.lower()
+                if is_gemma:
+                     response = client.models.generate_content(
+                        model=mid,
+                        contents=prompt + "\nIMPORTANT: Output ONLY valid JSON (no markdown)."
+                    )
+                else:
+                    response = client.models.generate_content(
+                        model=mid,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema={"type": "object", "properties": {"contradicts": {"type": "boolean"}}, "required": ["contradicts"]}
+                        )
+                    )
+                import re as _re
+                raw_text = response.text.strip()
+                raw_text = _re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
+                raw_text = _re.sub(r"\n?```\s*$", "", raw_text)
+                parsed = json.loads(raw_text.strip())
+                return not parsed.get("contradicts", False) # Return False if it contradicts
+
+            return _do_generate()
+        except Exception as e:
+            print(f"[llm] NLI Check Failed with model {mid}: {e}")
+            continue
+            
+    # Default to True (allow the book) if NLI fails entirely
+    return True
+
+
+async def verify_narrative_logic_async(query_trait: str, book_intro: str, model_id: Optional[str] = None) -> bool:
+    """
+    非同步版 NLI 審查：透過 asyncio.to_thread 包裝同步函式，
+    讓伺服器能利用 asyncio.gather 並行審核多本書而不卡死。
+    """
+    import asyncio
+    return await asyncio.to_thread(_verify_narrative_logic_sync, query_trait, book_intro, model_id)
+
+
 @functools.lru_cache(maxsize=100)
 def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseResult:
     """
@@ -193,9 +274,14 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     DO NOT use `is_negative: true` if the user is asking for a trait, even if it uses negative words! 
     For example, "角色不要太多" means the user WANTS "few characters". You should use `semantic_similarity` with query_text="角色少" and `is_negative: false`.
     
+    [NEW RULE: Negative Tag Generation for Logical Fallacies]
+    If the user's query implies a strong positive progression (e.g., "廢物逆襲", "從弱小變強大"), you MUST proactively add an explicit EXCLUSION for the "fallen hero" trope to prevent false positives in vector search.
+    Output: `is_negative: true`, `keyword_match` for "失去力量" or `semantic_similarity` for "曾經最強跌落神壇".
+
     ### TASK: DYNAMIC QUERY EXPANSION
     In `generated_keywords`, generate 5-10 specific terms (Traditional Chinese) relevant to the query concepts.
-    
+    If the user uses slang like "爽文", expand it to ["龍傲天", "開掛", "無雙", "無敵"]. If "廢物", expand it to ["廢柴", "吊車尾"].
+
     ### TASK: HYPOTHETICAL DOCUMENT EMBEDDINGS (HyDE)
     In addition to keywords, generate a `hypothetical_intro`.
     Imagine a perfect novel exists that satisfies the user's query. Write a short **Book Intro (Blurb)** for it.
@@ -206,10 +292,9 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     **Examples:**
     - Query: "網遊小說"
       - hypothetical_intro: "一款劃時代的虛擬實境遊戲《榮耀》橫空出世，主角葉修手持千機傘，帶領一群菜鳥重返巔峰..."
-    - Query: "打臉爽文"
+    - Query: "主角原本是廢物但是突然覺醒逆襲變強復仇的爽文"
       - hypothetical_intro: "家族棄少受盡冷眼，一朝覺醒無上血脈。曾經羞辱我的人，如今都要跪在我腳下顫抖！三十年河東，三十年河西..."
-    - Query: "輕鬆治癒"
-      - hypothetical_intro: "厭倦了城市的喧囂，他回到鄉下繼承了一間破舊的小食堂。沒想到，這裡的客人竟然都是..."
+      - negative criteria strategy: Must add `is_negative: true` for "失去力量" to ensure it looks for weak-to-strong.
 
     Your goal is to create a text chunk that is semantically similar to the *actual summaries* in the database.
     """

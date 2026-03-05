@@ -79,11 +79,23 @@ class BaseEngine:
                 if field in ["classification", "tags"] and keyword and isinstance(keyword, str):
                     keyword = keyword.replace(" ", "")
                 
-                # 【核心修改】：如果是找分類或標籤，採取寬鬆策略 (Classification OR Tags)
+                # 【核心修改】：如果是找分類或標籤，採取更寬鬆策略 (Classification OR Tags + MatchAny)
                 if field in ["classification", "tags"] and keyword:
+                    match_values = [keyword]
+                    # 動態拆分長複合詞 (例如 "魔法學院" -> "魔法", "學院")，確保第一階不會被死限排掉
+                    if len(keyword) >= 4:
+                        half = len(keyword) // 2
+                        match_values.append(keyword[:half])
+                        match_values.append(keyword[half:])
+                    
+                    if len(match_values) > 1:
+                        condition = rest.MatchAny(any=match_values)
+                    else:
+                        condition = rest.MatchValue(value=keyword)
+                    
                     should_conditions = [
-                        rest.FieldCondition(key="classification", match=rest.MatchValue(value=keyword)),
-                        rest.FieldCondition(key="tags", match=rest.MatchValue(value=keyword))
+                        rest.FieldCondition(key="classification", match=condition),
+                        rest.FieldCondition(key="tags", match=condition)
                     ]
                     current_cond = rest.Filter(should=should_conditions)
                 
@@ -291,8 +303,8 @@ class HybridReasonerEngine(BaseEngine):
 
     def _normalize_vector_score(self, raw_score: float) -> float:
         """將 Qdrant 的 Cosine Score 拉伸到 0.0~1.0"""
-        min_threshold = 0.35
-        max_threshold = 0.65  
+        min_threshold = 0.60  # 適度放寬底線，保留潛力候選
+        max_threshold = 0.80  # 稍微調降滿分天花板，放大候選人之間的差異
         
         if raw_score <= min_threshold:
             return 0.0
@@ -307,41 +319,44 @@ class HybridReasonerEngine(BaseEngine):
         criteria_list: List[Any],
         vector_score: float = 0.0,
         normalized_vector_score: Optional[float] = None,
+        semantic_scores_map: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         total_score = 0.0
         breakdown = []
         
-        # --- 1. 處理向量分數 ---
-        semantic_criteria = next((c for c in criteria_list if c.name == "semantic_similarity"), None)
-        
-        is_sem_negative = getattr(semantic_criteria, 'is_negative', False) if semantic_criteria else False
-        sem_weight = -1.0 if is_sem_negative else 1.0
-        reason_suffix = "(反向權重)" if is_sem_negative else "(固定權重)"
-
+        # --- 1. 處理基礎向量分數 (整體查詢語意相似度) ---
         normalized_v_score = (
             normalized_vector_score
             if normalized_vector_score is not None
             else self._normalize_vector_score(vector_score)
         )
-        v_score_contrib = normalized_v_score * sem_weight
+        VECTOR_WEIGHT = 3.0  # 確保語意為主，將權重拉高
+        v_score_contrib = normalized_v_score * VECTOR_WEIGHT
         total_score += v_score_contrib
         
         breakdown.append({
-            "criteria": "semantic_similarity",
-            "label": "語意與內容相似度",
-            "weight": sem_weight,
+            "criteria": "base_vector_similarity",
+            "label": "整體查詢語意相似度",
+            "weight": VECTOR_WEIGHT,
             "raw_score": vector_score,       
             "normalized_score": normalized_v_score, 
             "weighted_score": v_score_contrib,
-            "reason": f"語意相似度 {vector_score:.3f} -> Norm {normalized_v_score:.2f} {reason_suffix}"
+            "reason": f"向量相似度 {vector_score:.3f} -> Norm {normalized_v_score:.2f} (權重 {VECTOR_WEIGHT})"
         })
 
-        # --- 2. 處理其他規則分數 ---
+        # --- 2. 處理所有條件分數 (含 semantic_similarity) ---
+        bid = str(item.get("id", ""))
+        if semantic_scores_map is None:
+            semantic_scores_map = {}
+
+        # 預先計算 semantic_similarity 特徵的數量，用以平攤權重 (避免特徵數量多導致總分暴衝)
+        num_semantic_features = sum(1 for c in criteria_list if c.name == "semantic_similarity")
+        # 整個 semantic_similarity 區塊的最高總加分上限設為 2.0 (配合 5:3:1:1 法則)
+        SEMANTIC_TOTAL_WEIGHT_CAP = 2.0
+        semantic_feature_weight = (SEMANTIC_TOTAL_WEIGHT_CAP / num_semantic_features) if num_semantic_features > 0 else 1.0
+
         for criteria in criteria_list:
             func_name = criteria.name
-            
-            if func_name == "semantic_similarity":
-                continue
                 
             is_negative = getattr(criteria, 'is_negative', False)
             weight = -1.0 if is_negative else 1.0
@@ -350,7 +365,47 @@ class HybridReasonerEngine(BaseEngine):
                 params = criteria.parameters.model_dump()
             else:
                 params = criteria.parameters.dict()
-            
+
+            # --- 2a. 語意特徵獨立評分 (Cross-Encoder) ---
+            if func_name == "semantic_similarity":
+                query_text = params.get("query_text", "")
+                if query_text and query_text in semantic_scores_map:
+                    raw_score = semantic_scores_map[query_text].get(bid, 0.5)
+                else:
+                    raw_score = 0.5  # fallback: 無法評分時給中立分數
+                
+                reason_msg = f"Cross-Encoder 語意特徵評分: {raw_score:.2f}"
+                
+                # 【新增防禦機制】：如果這本書本身的基底關聯度慘澹，不該縱容瞎猜的高分特徵
+                if normalized_v_score <= 0.1:
+                    raw_score = raw_score * 0.1
+                    reason_msg += f" (因主旨偏離，特徵大幅降權至 {raw_score:.2f})"
+                elif normalized_v_score <= 0.4:
+                    raw_score = raw_score * 0.3
+                    reason_msg += f" (因主旨偏弱，特徵降權至 {raw_score:.2f})"
+                elif normalized_v_score <= 0.6:
+                    raw_score = raw_score * 0.7
+                    reason_msg += f" (因主旨普通，特徵微幅降權至 {raw_score:.2f})"
+
+                label = f"語意特徵: {query_text}"
+                if is_negative:
+                    label = f"[排除] {label}"
+                
+                # 套用平攤後的特徵權重 (而不是原本預設的 1.0)
+                score_contrib = raw_score * weight * semantic_feature_weight
+                total_score += score_contrib
+                breakdown.append({
+                    "criteria": func_name,
+                    "label": label,
+                    "weight": weight * semantic_feature_weight,
+                    "raw_score": raw_score,
+                    "weighted_score": score_contrib,
+                    "params": params,
+                    "reason": reason_msg + f" (權重 {semantic_feature_weight:.2f})"
+                })
+                continue
+
+            # --- 2b. 其他規則評分 ---
             func = ScoringRegistry.get(func_name)
             if not func:
                 continue
@@ -363,9 +418,7 @@ class HybridReasonerEngine(BaseEngine):
                 raw_score = float(result)
                 reason_msg = f"評分: {raw_score:.2f}"
 
-            score_contrib = raw_score * weight
-            total_score += score_contrib
-            
+            # --- 構建 label (用於前端顯示) ---
             label = func_name
             if func_name == "keyword_match":
                 field = params.get("field", "")
@@ -389,6 +442,24 @@ class HybridReasonerEngine(BaseEngine):
 
             if is_negative:
                 label = f"[排除] {label}"
+
+            # --- 【Two-Stage Veto】嚴格條件一票否決 ---
+            # 如果是硬性限制 (status_check / numeric_range) 且書籍完全不符合 (raw_score == 0.0)，
+            # 直接判定資格不符，將總分壓至 -999 並中止後續加分，防止 Auto-Relax 帶入的垃圾書靠標籤搶分。
+            if raw_score == 0.0 and not is_negative and func_name in ("status_check", "numeric_range"):
+                breakdown.append({
+                    "criteria": func_name,
+                    "label": label,
+                    "weight": weight,
+                    "raw_score": 0.0,
+                    "weighted_score": -999.0,
+                    "params": params,
+                    "reason": f"【強制淘汰】違反嚴格條件: {reason_msg}"
+                })
+                return -999.0, breakdown
+
+            score_contrib = raw_score * weight
+            total_score += score_contrib
 
             breakdown.append({
                 "criteria": func_name,
@@ -429,23 +500,28 @@ class HybridReasonerEngine(BaseEngine):
             print(f"[Engine] 🤖 LLM 動態擴展關鍵字: {expansion_str}")
             expanded_terms += f" {expansion_str}"
         
-        if parse_result.hypothetical_intro:
-            print(f"[Engine] 🔮 HyDE 假想簡介: {parse_result.hypothetical_intro[:80]}...")
-            expanded_terms += f" {parse_result.hypothetical_intro}"
+        # 選擇「策略一 (移除 HyDE)」：避免過度腦補的簡介嚴重污染 Qdrant 的 Top-50 送審池
+        # if parse_result.hypothetical_intro:
+        #     print(f"[Engine] 🔮 HyDE 假想簡介: {parse_result.hypothetical_intro[:80]}...")
+        #     expanded_terms += f" {parse_result.hypothetical_intro}"
         
+        # 【Two-Stage: Stage 1】擴大海選池至 200 筆，提高 Recall
+        STAGE1_LIMIT = 200
         vector_results, query_vector = self.vs.search(
             expanded_terms, 
-            limit=50,
+            limit=STAGE1_LIMIT,
             query_filter=qdrant_filter,
             with_payload=True 
         )
         
         is_relaxed = False
         if len(vector_results) < 3 and qdrant_filter is not None:
-            print(f"[Engine] ⚠️ 搜尋結果過少 ({len(vector_results)} 筆)，啟動自動放寬機制 (移除 Hard Filter)...")
+            print(f"[Engine] ⚠️ 搜尋結果過少 ({len(vector_results)} 筆)，啟動自動放寬機制 (移除 Hard Filter，回退至乾淨查詢)...")
+            # 💥 關鍵：拔掉 Filter 的同時，必須將查詢退回最乾淨的 base_terms，
+            #    不能再帶有 expanded_terms 中充滿幻想的 tags，否則會拉入大量僅靠標籤碰巧命中的無關書籍。
             vector_results, query_vector = self.vs.search(
-                expanded_terms, 
-                limit=50,
+                base_terms,  # <- 換回純淨的原始/核心意圖
+                limit=STAGE1_LIMIT,
                 query_filter=None,
                 with_payload=True 
             )
@@ -501,20 +577,32 @@ class HybridReasonerEngine(BaseEngine):
 
         candidates = list(candidates_map.values())
 
-        # 4. Scoring
-        # Dynamic normalization within current query candidates (restores discrimination)
+        # 4. Pre-compute semantic feature scores via Cross-Encoder
+        semantic_criteria_list = [c for c in parse_result.criteria if c.name == "semantic_similarity"]
+        semantic_scores_map: Dict[str, Dict[str, float]] = {}
+        if semantic_criteria_list and self.reranker and candidates:
+            for sc in semantic_criteria_list:
+                if hasattr(sc.parameters, 'model_dump'):
+                    sc_params = sc.parameters.model_dump()
+                else:
+                    sc_params = sc.parameters.dict()
+                query_text = sc_params.get("query_text", "")
+                if not query_text:
+                    continue
+                print(f"[Engine] 🔍 Cross-Encoder 語意特徵評分: '{query_text}' (for {len(candidates)} candidates)")
+                import asyncio
+                feature_scores = await self.reranker.score_feature(query_text, candidates)
+                score_map_for_feature: Dict[str, float] = {}
+                for idx, item in enumerate(candidates):
+                    score_map_for_feature[str(item["id"])] = feature_scores[idx]
+                semantic_scores_map[query_text] = score_map_for_feature
+
+        # 5. Scoring
+        # 【修正】移除動態 MinMax 正規化，改用穩定的絕對基準點評估，防止爛書被強行拔高成 1.0 (滿分)
         vector_norm_map: Dict[str, float] = {}
         if vector_score_map:
-            vector_values = [float(v) for v in vector_score_map.values()]
-            min_vector = min(vector_values)
-            max_vector = max(vector_values)
-
-            if max_vector - min_vector > 1e-9:
-                for bid, raw_v in vector_score_map.items():
-                    vector_norm_map[bid] = (float(raw_v) - min_vector) / (max_vector - min_vector)
-            else:
-                for bid, raw_v in vector_score_map.items():
-                    vector_norm_map[bid] = self._normalize_vector_score(float(raw_v))
+            for bid, raw_v in vector_score_map.items():
+                vector_norm_map[bid] = self._normalize_vector_score(float(raw_v))
 
         scored_items = []
         for item in candidates:
@@ -522,12 +610,13 @@ class HybridReasonerEngine(BaseEngine):
             v_score = vector_score_map.get(bid, 0.0)
             v_norm = vector_norm_map.get(bid, self._normalize_vector_score(float(v_score)))
             
-            # Calculate final hybrid score (Rule + Vector/Rerank)
+            # Calculate final hybrid score (Rule + Vector/Rerank + Semantic Features)
             score_val, breakdown = self.calculate_score(
                 item,
                 parse_result.criteria,
                 vector_score=v_score,
                 normalized_vector_score=v_norm,
+                semantic_scores_map=semantic_scores_map,
             )
 
             final_score = float(score_val)
@@ -545,11 +634,13 @@ class HybridReasonerEngine(BaseEngine):
         if strategy not in allowed_strategies:
             strategy = "score_only"
 
+        # 【Two-Stage: Reranker Dominant】base_score 的任務僅是海選，不應主導最終排名。
+        # 預設 alpha = 0.95，讓 Reranker 佔絕對主導，base_score 僅作為同分時的 tie-breaker。
         alpha = rerank_alpha if rerank_alpha is not None else settings.RERANK_FUSION_ALPHA
         try:
             alpha = float(alpha)
         except (TypeError, ValueError):
-            alpha = 0.3
+            alpha = 0.95
         alpha = max(0.0, min(1.0, alpha))
             
         # 5. Rerank (Optional)
@@ -559,7 +650,7 @@ class HybridReasonerEngine(BaseEngine):
                 rerank_query = " ".join(parse_result.search_terms)
 
             base_candidates = [entry['item'] for entry in scored_items]
-            reranked_items = self.reranker.rerank(rerank_query, base_candidates, top_k=len(base_candidates))
+            reranked_items = await self.reranker.rerank(rerank_query, base_candidates, top_k=len(base_candidates))
 
             rerank_map = {}
             for rank_idx, item in enumerate(reranked_items):
@@ -646,7 +737,7 @@ class HybridReasonerEngine(BaseEngine):
         if scored_items and scored_items[0].get("rerank_score") is not None:
              threshold = 0.01 
         else:
-             threshold = 0.6
+             threshold = 0.4
         
         if is_relaxed:
             scored_items = [r for r in scored_items if float(r['vector_score']) > threshold]
@@ -663,6 +754,55 @@ class HybridReasonerEngine(BaseEngine):
                 "engine": "HybridReasonerEngine"
             }
         final_results = scored_items[:limit]
+
+        # 【Top-K Batch NLI 邏輯審查】
+        # 只對最終前 K 名進行 LLM 邏輯審查，避免 N+1 API 卡死伺服器
+        semantic_criteria_with_logic = [
+            c for c in parse_result.criteria
+            if c.name == "semantic_similarity"
+            and any(kw in (c.parameters.query_text if hasattr(c.parameters, 'query_text') else c.parameters.get('query_text', ''))
+                    for kw in ["原本", "變成", "從", "突然", "失去", "轉生", "覺醒", "逆襲"])
+        ]
+        if semantic_criteria_with_logic and final_results:
+            from src.core.llm import verify_narrative_logic_async
+            NLI_CHECK_LIMIT = min(len(final_results), 10)
+            nli_tasks = []
+            nli_items_indices = []
+            for sc in semantic_criteria_with_logic:
+                qt = sc.parameters.query_text if hasattr(sc.parameters, 'query_text') else sc.parameters.get('query_text', '')
+                if not qt:
+                    continue
+                for idx in range(NLI_CHECK_LIMIT):
+                    book_intro = final_results[idx]['item'].get('intro', '')
+                    if book_intro:
+                        nli_tasks.append(verify_narrative_logic_async(qt, book_intro))
+                        nli_items_indices.append((idx, qt))
+
+            if nli_tasks:
+                import asyncio
+                print(f"[Engine] 🧠 Top-K Batch NLI 審查: {len(nli_tasks)} 項檢查 (涵蓋 {NLI_CHECK_LIMIT} 本書)")
+                nli_results = await asyncio.gather(*nli_tasks, return_exceptions=True)
+                for task_idx, nli_result in enumerate(nli_results):
+                    if isinstance(nli_result, Exception):
+                        continue  # NLI 失敗時不扣分 (保守策略)
+                    if not nli_result:  # contradicts = True -> nli_result = False
+                        item_idx, query_text = nli_items_indices[task_idx]
+                        # 扣減該書的總分
+                        penalty = 1.5
+                        final_results[item_idx]['score'] -= penalty
+                        final_results[item_idx]['final_sort_score'] = float(final_results[item_idx].get('final_sort_score', final_results[item_idx]['score'])) - penalty
+                        final_results[item_idx]['breakdown'].append({
+                            'criteria': 'nli_logic_check',
+                            'label': f'NLI 邏輯審查: {query_text}',
+                            'weight': -1.0,
+                            'raw_score': penalty,
+                            'weighted_score': -penalty,
+                            'reason': f'🛑 敘事邏輯不符 (如: 要求弱變強，但書中是強變弱)，扣 {penalty} 分'
+                        })
+                        print(f"[Engine] 🛑 NLI: '{final_results[item_idx]['item'].get('name')}' 邏輯不符 '{query_text}', 扣 {penalty} 分")
+
+                # 重新排序
+                final_results.sort(key=lambda x: float(x.get('final_sort_score', x['score'])), reverse=True)
 
         top_n_explain = 3 if explain else 0 
         explainer_runtime_state = {

@@ -227,3 +227,7 @@ data/hybrid_reasoner.db
 .continue/
 skills.json
 skills-lock.json
+
+# Execution results
+result*.json
+final_*.json
