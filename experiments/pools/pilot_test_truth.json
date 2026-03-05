@@ -1,236 +1,12 @@
 [
   {
     "query_id": "q1",
-    "query": "請推薦字數超過一百萬字的無敵流修仙小說",
-    "pool_size": 21,
+    "query": "現在對於小說的要求越來越高了，\n而且慢慢的發現現在除了狗糧基本上都看不進去，\n連以很喜歡的異世界主題都看不進去了，\n好想念從前那個什麼都可以看得很快樂的自己\n\n說回主題，希望可以找到沒看過的狗糧系小說，\n可以接受小刀，但一定要無黃毛無牛頭人，\n但背景自帶沈重的例如「戀愛光譜」「刮鬍」這一類的也不喜歡，\n黨爭就...看情況吧但其實我也一般般",
+    "pool_size": 20,
     "candidates": [
       {
-        "book_id": "4146",
-        "title": "神想幻境",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 4,
-          "FilteredVector": 8,
-          "HybridReasoner": 5
-        }
-      },
-      {
-        "book_id": "2182",
-        "title": "末日前，我把惡魔少女誘拐回家",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 3,
-          "FilteredVector": 5,
-          "HybridReasoner": 6
-        }
-      },
-      {
-        "book_id": "21316",
-        "title": "相思欲絕但為君",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 10,
-          "FilteredVector": 10,
-          "HybridReasoner": 10
-        }
-      },
-      {
-        "book_id": "5374",
-        "title": "資訊匯戰",
-        "source_engines": [
-          "ExactMatch"
-        ],
-        "original_ranks": {
-          "ExactMatch": 5
-        }
-      },
-      {
-        "book_id": "21464",
-        "title": "王總裁的百萬新娘",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 10
-        }
-      },
-      {
-        "book_id": "5277",
-        "title": "大神撩了一隻鬼",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 8
-        }
-      },
-      {
-        "book_id": "14733",
-        "title": "《漢武英俠錄》廿二：瀟湘雨劍寫狗儒生",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 7
-        }
-      },
-      {
-        "book_id": "17271",
-        "title": "墨跡三千",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 4
-        }
-      },
-      {
-        "book_id": "10725",
-        "title": "神功行者",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 8,
-          "FilteredVector": 1,
-          "HybridReasoner": 2
-        }
-      },
-      {
-        "book_id": "23483",
-        "title": "我有九千萬億舔狗金",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 6
-        }
-      },
-      {
-        "book_id": "7269",
-        "title": "《封魔幻域》",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 7,
-          "FilteredVector": 4,
-          "HybridReasoner": 7
-        }
-      },
-      {
-        "book_id": "29186",
-        "title": "畫槌錄",
-        "source_engines": [
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "FilteredVector": 7,
-          "HybridReasoner": 4
-        }
-      },
-      {
-        "book_id": "20870",
-        "title": "仙尊今日還裝良善否？",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 3
-        }
-      },
-      {
-        "book_id": "5857",
-        "title": "無限淫慾",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 6,
-          "FilteredVector": 2,
-          "HybridReasoner": 3
-        }
-      },
-      {
-        "book_id": "7334",
-        "title": "魔途振劍錄〔卷一〕",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 5
-        }
-      },
-      {
-        "book_id": "11964",
-        "title": "八百鬼",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 9,
-          "FilteredVector": 6,
-          "HybridReasoner": 8
-        }
-      },
-      {
-        "book_id": "2151",
-        "title": "諸星異聞錄",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 2,
-          "FilteredVector": 3,
-          "HybridReasoner": 1
-        }
-      },
-      {
-        "book_id": "20458",
-        "title": "御龍",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 9
-        }
-      },
-      {
-        "book_id": "8695",
-        "title": "《征天》卷貳．異事暗流",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 1
-        }
-      },
-      {
-        "book_id": "14321",
-        "title": "荏苒若火",
+        "book_id": "abf4156d-f347-5f96-b291-a23c7e8ba84a",
+        "title": "愛意複雜化",
         "source_engines": [
           "PureVector"
         ],
@@ -239,91 +15,8 @@
         }
       },
       {
-        "book_id": "2135",
-        "title": "1933時空逆流",
-        "source_engines": [
-          "ExactMatch",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "ExactMatch": 1,
-          "FilteredVector": 9,
-          "HybridReasoner": 9
-        }
-      }
-    ]
-  },
-  {
-    "query_id": "q2",
-    "query": "有沒有完結的科幻愛情小說，最好有賽博龐克風格",
-    "pool_size": 29,
-    "candidates": [
-      {
-        "book_id": "11631",
-        "title": "神與畜",
-        "source_engines": [
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "HybridReasoner": 9
-        }
-      },
-      {
-        "book_id": "12795",
-        "title": "3.5：強迫升級",
-        "source_engines": [
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "HybridReasoner": 7
-        }
-      },
-      {
-        "book_id": "61",
-        "title": "禮物",
-        "source_engines": [
-          "ExactMatch"
-        ],
-        "original_ranks": {
-          "ExactMatch": 3
-        }
-      },
-      {
-        "book_id": "33580",
-        "title": "全世界都在用克隆人續命",
-        "source_engines": [
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "HybridReasoner": 6
-        }
-      },
-      {
-        "book_id": "20734",
-        "title": "The Love（因為原書名太長，因此簡稱）",
-        "source_engines": [
-          "PureVector",
-          "FilteredVector"
-        ],
-        "original_ranks": {
-          "PureVector": 8,
-          "FilteredVector": 4
-        }
-      },
-      {
-        "book_id": "56",
-        "title": "小兔",
-        "source_engines": [
-          "ExactMatch"
-        ],
-        "original_ranks": {
-          "ExactMatch": 2
-        }
-      },
-      {
-        "book_id": "18253",
-        "title": "倘若你被世界拋棄",
+        "book_id": "ff3cf726-e940-59e0-80e2-a6b6f6a3a583",
+        "title": "生存以上，戀愛未滿 ～ 在日本難以維持生計的我怎能與你們戀愛",
         "source_engines": [
           "PureVector"
         ],
@@ -332,64 +25,28 @@
         }
       },
       {
-        "book_id": "72",
-        "title": "秋山又幾重",
+        "book_id": "aeea3951-4c28-5f06-83d5-976faf1c869b",
+        "title": "把班上的孤單辣妹帶回家改造成清純美女的故事",
         "source_engines": [
-          "ExactMatch"
-        ],
-        "original_ranks": {
-          "ExactMatch": 5
-        }
-      },
-      {
-        "book_id": "67",
-        "title": "獻給愛情的犯罪",
-        "source_engines": [
-          "ExactMatch"
-        ],
-        "original_ranks": {
-          "ExactMatch": 4
-        }
-      },
-      {
-        "book_id": "21833",
-        "title": "無差別愛人",
-        "source_engines": [
-          "PureVector"
-        ],
-        "original_ranks": {
-          "PureVector": 9
-        }
-      },
-      {
-        "book_id": "32455",
-        "title": "停止日STOP DAY",
-        "source_engines": [
-          "PureVector",
           "HybridReasoner"
         ],
         "original_ranks": {
-          "PureVector": 7,
-          "HybridReasoner": 2
-        }
-      },
-      {
-        "book_id": "11525",
-        "title": "機械寶貝",
-        "source_engines": [
-          "PureVector",
-          "FilteredVector",
-          "HybridReasoner"
-        ],
-        "original_ranks": {
-          "PureVector": 5,
-          "FilteredVector": 3,
           "HybridReasoner": 4
         }
       },
       {
-        "book_id": "4116",
-        "title": "科幻短篇故事集",
+        "book_id": "44c42264-c348-565a-8fe3-9ddd6c5ba11a",
+        "title": "我的高中物語貌似不平凡",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "73de3b5e-3465-5df5-9eef-1e963cced569",
+        "title": "喜歡上了她？",
         "source_engines": [
           "HybridReasoner"
         ],
@@ -398,18 +55,18 @@
         }
       },
       {
-        "book_id": "140",
-        "title": "獅頭花",
+        "book_id": "0a656c58-ad94-50e3-b769-af3a67a49baa",
+        "title": "浪漫小說里的主角只喜歡我",
         "source_engines": [
-          "ExactMatch"
+          "PureVector"
         ],
         "original_ranks": {
-          "ExactMatch": 10
+          "PureVector": 7
         }
       },
       {
-        "book_id": "25029",
-        "title": "雲端副作用",
+        "book_id": "7441e00c-6689-5c9e-a382-e5289b0fe791",
+        "title": "不跟男生交往的話就無法轉大人了喔",
         "source_engines": [
           "PureVector"
         ],
@@ -418,8 +75,998 @@
         }
       },
       {
-        "book_id": "113",
-        "title": "律政女王",
+        "book_id": "fc220d82-e364-5ccb-95b4-b7e5dab7ab02",
+        "title": "終末之時",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "cf613ab1-39ca-5ac0-98d6-782d18bcf717",
+        "title": "我和隔壁班美少女共度甜蜜校園生活，但事到如今實在無法承認當初搞錯了告白對象",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "ca01aca2-1ca4-599f-b3ec-444aa8f436df",
+        "title": "救了想一躍而下的女高中生會發生什麼事？",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "62d88555-8d5a-5640-8395-58c6bda7e5d6",
+        "title": "用催眠APP談純愛有什麼錯！ ～為了報復青梅竹馬自製催眠APP後，青春戀愛喜劇就此展開～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "cd709ed1-efdb-5817-a70e-fada9e1ad7db",
+        "title": "豬肝記得煮熟再吃",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "555146f7-6dcd-57f4-86ff-ef8ded84d64a",
+        "title": "自我中心純愛",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "946dbb29-6572-5a91-b847-9bc7a53c4b04",
+        "title": "附身在百合小說里的反派",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "74ce6377-3225-58eb-bcf7-af43044aa51d",
+        "title": "純愛羅曼史",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "24fcae39-2ced-58b5-b6ad-c9e720a71ad5",
+        "title": "依存系青梅養成筆記",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "f135bc4f-59b4-571a-8b08-c71ea6abe7b6",
+        "title": "關於學園的女神大人不知為何一直賴在我家這檔事",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "b30c72c3-1358-5c56-8d82-51aca3b2f579",
+        "title": "千萬不要心動啊",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "a5dea480-14d9-5068-8855-22647e15995a",
+        "title": "異世界拉皇探求者",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "722f8e27-8132-56de-87ed-c2931b672565",
+        "title": "異世界和我，你喜歡哪個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q2",
+    "query": "不好意思,最近異世界需求大了,很想看異世界的故事不一定要轉生類但劍與魔法是必需的.. 已有蜘蛛子了,目前在找一些已經有結局的異世界小說 原本想看哥布林殺手的但是還沒完結啊.....超不想看到一半被中斷了 至少至少...像刀劍那種完了SAO篇再換ALO的方式我還可以接受 請問還有什麼戰鬥類已完結的異世界小說可以推介呢?",
+    "pool_size": 20,
+    "candidates": [
+      {
+        "book_id": "5eb2234c-7aad-5452-bb2e-8e5954007ac5",
+        "title": "末日時在做什麼？有沒有空？可以來拯救嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "eba40801-ce65-5319-a1a6-7f0fcdbc8899",
+        "title": "BLADE＆BASTARD",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "098b1283-9704-5fc7-86e3-6191a6e82e48",
+        "title": "魔法製造者 ～異世界魔法的製作方法～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "4ef32a9b-32a4-58d9-9287-3a2b63e3f5b7",
+        "title": "被流放的我憑藉廢柴技能『王位繼承權』成為最強掛逼國王 ～異世界的公主們為當我的臣下對我展開猛烈攻勢～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "0bed35bf-41a6-5c81-b6ad-affb9bb79a7b",
+        "title": "杖與劍的魔劍譚 魔導紀事 －起始之淚－",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "795d47c8-74d4-53a6-9656-59b5cea8cdd2",
+        "title": "哥布林殺手外傳2：鍔鳴的太刀",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "94f4a781-5503-50a2-b77e-559a82c46b74",
+        "title": "女高中生小春在異世界成為娼妓 summer",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "29a142d1-fc31-5d75-9e3f-e312b46d19b9",
+        "title": "哥布林殺手外傳：第一年",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "effebbec-2a18-5f73-8e41-f228f34dd286",
+        "title": "女神大人的再教育，佐以史萊姆 ～這次，要在異世界運營保育園了～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "65d7a323-6d55-56b0-a06b-9d827909c7ec",
+        "title": "哥布林殺手",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "7edf1859-5630-5de5-823d-c716e67728b2",
+        "title": "蜘蛛與制服",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "de1ba1d1-02ff-57e7-a06c-cd688a5ca54d",
+        "title": "秒殺外掛太強了，異世界的傢伙們根本就不是對手。",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "a0d85343-bc48-52e6-860c-4009bb70a3dd",
+        "title": "被召喚到異世界的我不能做色色事情的理由",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "2b5fbb72-e2d8-5516-8594-f9ab0d884511",
+        "title": "企業☆女孩",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "5e7f334b-b028-5e3e-82c8-6aa55b83c18e",
+        "title": "王女與做奴隸的我 ～於異世界萌發的百合之花～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "49871aaf-6ce8-5c86-b22e-617482e96432",
+        "title": "支配異世界的技能掠奪者～從零開始建造奴隸後宮～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "ed08b9fa-0b75-5f74-b140-ceaf4311761b",
+        "title": "穿越武士 ～武士在異世界依舊不改本色～",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "8295f84e-e20b-5a4a-85df-db89f4b3839b",
+        "title": "等級封頂的最強劍聖女碧翠斯也有弱點──其名為「噗噗」",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "f4f8f365-9045-5998-ab31-e6b230371fb9",
+        "title": "全人類穿越異世界但我被留下了",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "d0dc39c5-57d7-5e47-9263-4d8f992b19ed",
+        "title": "食人轉移者的異世界復仇譚",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q3",
+    "query": "可以幫忙推薦幾部跟這部風格類似的輕小說\n這部吸引我的地方有幾個:\n1.男女主角純愛堅定不移\n2.各種甜蜜的打情罵俏劇情\n3.異世界轉生戰鬥、魔法\n4.中間雖然各種虐，但最後還是排除萬難再一起",
+    "pool_size": 18,
+    "candidates": [
+      {
+        "book_id": "6572f515-d3e6-5e69-8dfe-311547753838",
+        "title": "貴族千金只願意親近我。",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "6eacb1fb-2586-5d01-8f94-e1fdfa6fb02c",
+        "title": "英雄與魔女的轉生戀愛喜劇",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "d3a45ca7-aeef-58be-a2ef-e3fc11ab75e4",
+        "title": "是啊，確實很可愛呢",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "fec1c750-3ca5-589d-a327-22950d93bb1d",
+        "title": "聖屬性治療師是女騎士團的助手回復術師 (web版）",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "801a6151-00fe-599c-bbe3-ee62da2228c2",
+        "title": "異世界超能魔術師",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "e26708e2-127e-5de0-bb8a-ff05b33cce4c",
+        "title": "英雄與賢者的轉生婚姻 ～與曾經的勁敵訂婚成為最強夫婦～",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "29d96b7d-02a9-5f66-b4d6-30b01d0abda4",
+        "title": "被女神騙到異世界的我展開後宮生活",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "b2bcd00c-dcd6-5712-a015-cae2fdb9137e",
+        "title": "我在異世界裡面臨輔助魔法與召喚魔法的選擇",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "3bf11be6-a0a9-545d-95de-7f2a370cb524",
+        "title": "一般士兵獲得了「無限再生」的轉生特典，結果被眾多美女盯上。",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "7924a69f-6275-5863-92c4-bb15f845e446",
+        "title": "轉生魔王茱麗葉",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 6,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "526101b2-3ec3-5770-9f09-ba7bb0d6cedf",
+        "title": "精靈所愛的異世界不良少年",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "898be57b-98b2-5bf9-85d0-fe0d80de18ca",
+        "title": "妖精新娘",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "74ce6377-3225-58eb-bcf7-af43044aa51d",
+        "title": "純愛羅曼史",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "909ec171-f0e7-5e32-a439-9542abe7e289",
+        "title": "雖然是最後的魔女，會愛上哥哥兩次也不奇怪吧？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "0d95d626-bc6e-511b-8e73-ec60f5eb8f44",
+        "title": "聖劍使的禁咒詠唱",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "18c0be50-43b2-5d9c-a809-63cc7863a137",
+        "title": "我愛的人、讓我代替妹妹去死",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "a49c0cc4-669a-5faa-8efc-e29d0dd7a855",
+        "title": "最強陰陽師的異世界轉生記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "722f8e27-8132-56de-87ed-c2931b672565",
+        "title": "異世界和我，你喜歡哪個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q4",
+    "query": "由於自己的胃口比較獨特的原因，喜歡男主被拋置於各種不利的情節或者感情中，也是因為這樣，喜歡看那些讓人看完后心緒難以平靜的小說，就我看過的來說，無職，re0，妹妹人生，異世界迷宮最深等，在某種程度上來說都有慘烈的一部分（感情上或者情節上都是），也沒有一定要轉生異世界，現實日常要是能描繪出這些來也很好了。\n尤其那種男主能不斷被放置在痛苦或者恐懼之中，一邊流露出作者思考的文字的小說，再好不過。",
+    "pool_size": 19,
+    "candidates": [
+      {
+        "book_id": "55bb55cc-3b6d-5385-913e-cf2f3203b635",
+        "title": "不哭不哭，痛痛飛走吧",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "7d0818dd-efdb-57e1-a43f-054d26c08fd2",
+        "title": "失意男子異世旅行譚",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "b6fcd8d4-6315-5e2e-8272-9caa3568a186",
+        "title": "天國旅行",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "722f8e27-8132-56de-87ed-c2931b672565",
+        "title": "異世界和我，你喜歡哪個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "1c8617bf-5f6f-55eb-b207-559585a64725",
+        "title": "夢與罪惡的扎克厄彼斯",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "8bb81a74-5f80-5b8b-ab6b-fac982b80b02",
+        "title": "喜歡愛情喜劇的主人公嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "abf4156d-f347-5f96-b291-a23c7e8ba84a",
+        "title": "愛意複雜化",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "e16679de-b238-5e27-8c49-985af95d3fc2",
+        "title": "友誼是悲劇",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "1df5cd13-a685-5303-bc7b-b0aba3693026",
+        "title": "絕望的世界",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 1,
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "840b42e7-1a76-50fe-94f4-ae632d71dedf",
+        "title": "這個「我」，那個『我』，你喜歡哪一個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "05e4afef-de61-51da-bef6-00c38bdc59de",
+        "title": "在廢墟中乞求",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "bd7970a2-4884-509b-9c68-d62856732ac1",
+        "title": "幻想之花向死而生",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "909ec171-f0e7-5e32-a439-9542abe7e289",
+        "title": "雖然是最後的魔女，會愛上哥哥兩次也不奇怪吧？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "74eef0bb-2f91-5ab0-9e71-15dcb7678080",
+        "title": "苦癌",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "6dd2555a-d4cb-58c9-b510-fbf4200ce15b",
+        "title": "公主騎士的小白臉",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "4a8d7507-464a-5c50-a215-792a1b936ccb",
+        "title": "不可逆性加虐",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "e2f00e11-a92d-5369-88ca-5befc1adc48f",
+        "title": "拚死迴避全滅結局。隊伍的精神出了問題。",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "7827dd26-2a57-5288-875d-7bbb7caff453",
+        "title": "亡後之生 —Life After Death—",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "e340ce24-cfde-59c4-ab46-95ef05f84d64",
+        "title": "成為悲劇元兇的最強異端，最後頭目女王為了人民犧牲奉獻",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q5",
+    "query": "如題，想找像是overlord、無職這種，有龐大世界，多個國家部落，文化特色分明，歷史背景完整，沉浸感和史詩感強的小說，請問各位有沒有推薦的？希望是劍與魔法的世界，有多不同種族、魔物的那種（其實我不太確定這類型叫什麼，異世界感覺不太對，但叫奇幻又好像太廣泛了？\n\n有很多web小說我都有看過，像是轉生成魔劍、轉生龍蛋、哥布林，他們雖然世界都足夠龐大，但是都有個web小說的通病，就是讀起來會有割裂感，無法讓人帶入那個世界中\n而轉生蜘蛛雖然沒有那種割裂感，但是世界觀卻不太夠了，就只簡單分成教皇、妖精、魔王而已，希望能看到更多人類國家間的關係，還有更多魔物亞人種族的故事設定",
+    "pool_size": 34,
+    "candidates": [
+      {
+        "book_id": "3fb27d5e-586c-5967-b967-09d3844de621",
+        "title": "世界盡頭的聖騎士",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 8
+        }
+      },
+      {
+        "book_id": "0330617a-e715-5185-bcbb-fea2690204e8",
+        "title": "副教授高槻彰良的推測",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 10
+        }
+      },
+      {
+        "book_id": "02a7f0f8-1169-5ffa-b03b-f8f8e9982c80",
+        "title": "白銀龍王的搖籃",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 8
+        }
+      },
+      {
+        "book_id": "3e795bb2-fc6f-5539-afd4-60c408d62d52",
+        "title": "骸骨騎士大人異世界冒險中",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "039f3965-7a67-5ef2-b292-bcbbadcbf30b",
+        "title": "阿爾比恩傳說：登陸",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "1c8617bf-5f6f-55eb-b207-559585a64725",
+        "title": "夢與罪惡的扎克厄彼斯",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "b76b18e6-2ad3-5f21-8459-20c66452965f",
+        "title": "新手教程開始前，為了讓BOSS角色們不被消滅我能做的幾件事",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "e012fb82-b760-52fe-ac73-2c64aabd4e7c",
+        "title": "龍族",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1,
+          "FilteredVector": 2
+        }
+      },
+      {
+        "book_id": "00e3f7b2-74c6-599c-b92a-4812baeb63eb",
+        "title": "狂野歷險 the 4th Detonator",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 3
+        }
+      },
+      {
+        "book_id": "0147ebb5-7979-5846-8b89-989bce5bd483",
+        "title": "女神側身像",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 5
+        }
+      },
+      {
+        "book_id": "93029997-295e-50b2-856f-605fa73ed9d5",
+        "title": "魔王都市",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 3
+        }
+      },
+      {
+        "book_id": "01f4f849-4cb9-5982-8a92-6780bff1faa3",
+        "title": "為婚紗襯上深紅薔薇",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 7
+        }
+      },
+      {
+        "book_id": "006ed321-3881-59d2-bcc6-39e81fcb61fa",
+        "title": "回復術士的重啟人生",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 1
+        }
+      },
+      {
+        "book_id": "01bb9ee7-da45-5f97-8ed5-7fecbe309bd1",
+        "title": "虛位王權",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 6
+        }
+      },
+      {
+        "book_id": "00a254fb-db4a-5cb0-8b87-787e56c3f3f5",
+        "title": "魔女與傭兵(web)",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 2
+        }
+      },
+      {
+        "book_id": "01211e35-8d93-56dc-855f-58b2f130c3af",
+        "title": "你好、我是受心上人所託來做戀愛葯的魔女",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 4
+        }
+      },
+      {
+        "book_id": "4d38980a-26fa-561d-a6a2-b3aed1a196dc",
+        "title": "殺死龍的方法",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 10
+        }
+      },
+      {
+        "book_id": "a54862cf-145d-54a5-882d-e4f194b47c4b",
+        "title": "奧爾森王國史 ～野蠻的獸人之國如何燒毀和平的精靈之國～",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 3,
+          "FilteredVector": 1,
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "4adc200a-e6b0-5f04-9568-8ad9b8eceb9f",
+        "title": "魔王2099",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 5
+        }
+      },
+      {
+        "book_id": "7edf1859-5630-5de5-823d-c716e67728b2",
+        "title": "蜘蛛與制服",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "30dfe0e9-03f1-5a9c-a105-d52fef1e3d96",
+        "title": "無職轉生 ～蛇足篇～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "83924061-a59c-5a2e-921b-fa9ec751b0cf",
+        "title": "死亡後的再次転生，這算是好事嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "4a47b7e8-86d1-5d3f-9ce4-93d67f8b43fb",
+        "title": "Yggdrasia World —回歸基本（？）的魔物進化物語—",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "89c642f9-8535-5286-a44c-b962ab712daa",
+        "title": "迷宮中的淑女 ～她的頭顱會消失在斷頭台上嗎？",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "e32da9ec-3e25-581a-9fe9-461a6685354d",
+        "title": "銀月之書",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 7
+        }
+      },
+      {
+        "book_id": "02d86077-81ca-56be-8a3f-a6997ef426f1",
+        "title": "大陰陽師 安倍晴明",
         "source_engines": [
           "ExactMatch"
         ],
@@ -428,8 +1075,3766 @@
         }
       },
       {
-        "book_id": "17786",
-        "title": "星生",
+        "book_id": "5070ee39-00cb-5f34-8ebe-a5461b899eb8",
+        "title": "OVERLORD 南雁同人 魔導國東征記（前傳加正傳）",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "0bb7b316-6a6c-5391-be01-3c8d5adff54d",
+        "title": "OVERLORD不死者之王",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "cbc17656-270f-50e7-94fc-254760904fd1",
+        "title": "不要再發獃了，請認真戰鬥！！！",
+        "source_engines": [
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "FilteredVector": 6,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "4495df40-f7ee-5dd6-a710-63b03cceb8fe",
+        "title": "狗與魔法的奇幻世界",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 10,
+          "FilteredVector": 9,
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "bac53633-c041-585f-a857-c6ce667a7016",
+        "title": "從零開始的魔法書",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 4
+        }
+      },
+      {
+        "book_id": "75e2ce8f-919a-5fb1-be84-a5f1b50e5b19",
+        "title": "終末的史詩.墓志銘",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "8f01c14b-e16f-5262-9788-3ab640a4f66f",
+        "title": "超世界轉世 Exotic Drive",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "7e29ed93-7280-5a0b-b7b8-fb1909e6579c",
+        "title": "異世界勇者與轉生魔王",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q6",
+    "query": "很喜歡看戰爭或戰記類型的小說，不要有魔法一發收拾或莫名其妙的神器，也別機械降神，主角可以強但不要把對手變白癡，暑假到了求書來啃，斷尾或沒完結也沒關係。",
+    "pool_size": 20,
+    "candidates": [
+      {
+        "book_id": "c610eb0b-932b-502d-a02a-883027de66e1",
+        "title": "無名戰記",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "39fa1503-0ec7-51f9-86af-0a9b36c50f5a",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "cbc17656-270f-50e7-94fc-254760904fd1",
+        "title": "不要再發獃了，請認真戰鬥！！！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "e87464cf-c1f4-5e2a-81ae-7a707af1a908",
+        "title": "德爾菲尼亞戰記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "f0221aed-5b47-5251-be74-6965d205a8c1",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "35c561f9-a902-5567-b1ca-eba5d095b583",
+        "title": "從被子彈擊中的戰場消失吧",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "44b19e6d-3f38-508e-80ee-62448fb32ce9",
+        "title": "羅梅莉亞戰記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "ac2f41ed-931f-57f0-a7fd-6fad9b340c46",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "7203f315-3672-57c1-ae41-e454d2cfaf47",
+        "title": "羅德斯島戰記 誓約之寶冠",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "62166128-46dd-5082-a5b7-fb2972afceb2",
+        "title": "機動戰士高達0080 口袋中的戰爭",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "25090f4f-4ffd-5cde-9fe9-c9a19a3896cf",
+        "title": "我的她是戰爭妖精",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "9fbe9af5-172e-5e88-97bb-cd033630110c",
+        "title": "圖書館戰爭",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "a02d4621-2d7b-5111-8841-1fdf946f5212",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "8239a013-8562-5534-b058-dfb75476d4fd",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "8238d978-17f0-5cfd-aea4-a0e585b6a5fa",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "54837aee-5471-568e-b02c-0f8e4bfd5d22",
+        "title": "羅德斯島戰記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "4858c211-d356-5a2e-9e49-d6d9f85c6535",
+        "title": "阿斯嘉特武皇戰記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "544e9cce-ccc9-5293-a463-729678dd374e",
+        "title": "記錄者旁白——騎士團戰記",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "bc2cc198-7816-574b-b3c8-4696da848948",
+        "title": "千年戰爭aigis 白之帝國篇",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "3a67f35f-7b31-567e-b317-e6678baa502a",
+        "title": "亞爾斯蘭戰記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q7",
+    "query": "想請大家推薦一些書單希望符合以下條件\n1.已經完結\n2.以感情為主\n希望是讀的時候可以隨著角色情緒有所起伏。並且不要轉生開無雙。",
+    "pool_size": 20,
+    "candidates": [
+      {
+        "book_id": "3d2748fe-147e-5989-8c19-f2aea86f838f",
+        "title": "青雨之絆",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "0a656c58-ad94-50e3-b769-af3a67a49baa",
+        "title": "浪漫小說里的主角只喜歡我",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "5c30fe15-6565-5a7d-b4ed-bf1a7b2df6be",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "fc220d82-e364-5ccb-95b4-b7e5dab7ab02",
+        "title": "終末之時",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "60ef3561-6cd2-5a82-be44-87294bcbbab0",
+        "title": "一切終將遠去",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "71d6c0eb-7359-57d1-a985-110f752e2c5f",
+        "title": "請待在有光的地方",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "83788293-8fbb-538c-828f-8c6675df510e",
+        "title": "再見宣言",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "a02d4621-2d7b-5111-8841-1fdf946f5212",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "dd7b30b8-3be8-53f4-9fd8-b2b52d77c008",
+        "title": "在三號線電車，再見",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "c147a5b8-b2c3-598f-8f19-0189b81081db",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "b8fd5fef-63a1-5245-8960-091825a448c8",
+        "title": "在終點相遇",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "786c1c6f-5c24-51ea-a169-640fdd315c45",
+        "title": "擱置的畫筆，於明日重逢",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "790738ea-acd6-5c52-9e7e-56686e833375",
+        "title": "走不完的黑夜，終將到來的明天。",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "21a50e19-8c91-55f2-b292-2a70544a965a",
+        "title": "那年夏天，在夢境尾聲墜入愛河",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "73eeb45b-66be-5eda-b349-a6325653552e",
+        "title": "現在、我討厭你了",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "bc623b23-e721-51d4-b0df-abfbdeaba1f8",
+        "title": "一切從那時開始",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "8239a013-8562-5534-b058-dfb75476d4fd",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "39fa1503-0ec7-51f9-86af-0a9b36c50f5a",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "290ebf3b-a2ba-59d1-8db0-85099d72396a",
+        "title": "月魚",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "f56877b1-3d99-530b-ac09-412c27a3917a",
+        "title": "從離家出走開始人生吧",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q8",
+    "query": "希望作品是\n1.背景為現代\n有槍砲炸藥之類的比較有代入感，對武俠/奇幻沒興趣，現代但有些微科幻/超能力要素沒關係\n2.主角不是從0開始練等\n漏漏長的成長過程會讓我想睡，大概是從看完鬥破蒼穹那公式化的遇強敵→隊友幫扛→遇到機運→變強反殺→前往下個城鎮→遇強敵，之後再也不想看這種了\n3.主角非中二/死屁孩\n不要太嚴重就好，隱殺主角偶爾也會屁孩一下但是是那種大人逗小鬼玩的感覺就不會反感",
+    "pool_size": 19,
+    "candidates": [
+      {
+        "book_id": "b159965b-19d9-5acc-8162-a379fd5c8799",
+        "title": "終極反英雄",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "71f362d1-60b9-5b3f-acc9-38c67232f3e5",
+        "title": "槍械魔法異戰",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "cae974e5-54cd-59da-91ab-09093c82fa00",
+        "title": "戰地歸來的高志同學只想過平梵谷中生活",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "003ee90f-c4a2-53e0-bc54-11cc520c4abe",
+        "title": "名稱未設定",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "916a63a9-6199-5728-8367-1a8002891bb0",
+        "title": "擁有超弱技能「不起眼」的公會職員，其實是傳說中的暗殺者",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "7ade969c-f676-50ae-984f-a3fae230e756",
+        "title": "不是主人公！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "dee47c05-a51f-5696-bb83-f0d8d264b675",
+        "title": "只要有趣就好",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "8acc9fa7-9f08-505b-96aa-af21f14c863b",
+        "title": "SHE MUST DIE 她，唯有一死",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 9,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "05ca8f6e-e52d-5764-acf8-76f80b657b63",
+        "title": "The. Feast. of. The. Moon.",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "40cce14c-a8a7-5242-88cb-2e85db4e0224",
+        "title": "世界頂尖的暗殺者轉生為異世界貴族",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "1b36190d-c10a-5a4c-aea3-201588d901df",
+        "title": "轉生到和平年代的暗殺小隊的日常生活",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "76cba688-0e70-52bb-baaf-b01392257a9b",
+        "title": "樂園殺手",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "40377e5b-955c-5842-8024-c6b86cc057af",
+        "title": "轉生現代陰陽師後無雙稱霸",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "0b561407-23d0-596e-b120-5f57577d6a5b",
+        "title": "0能者九條湊",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "35c561f9-a902-5567-b1ca-eba5d095b583",
+        "title": "從被子彈擊中的戰場消失吧",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "83924061-a59c-5a2e-921b-fa9ec751b0cf",
+        "title": "死亡後的再次転生，這算是好事嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "24ec878e-bbe1-542b-92cb-0c906514f5a3",
+        "title": "我想成為影之強者 (web)",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "e376e826-c9dd-53f8-87f3-282ec1abc0d1",
+        "title": "此處前方是荒野",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "2819a743-ee6f-546a-9914-df92391b84c3",
+        "title": "你所期盼的未來",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q9",
+    "query": "想請各位大大推薦一下這類的輕小說或小說，大陸網文也可以（我就是看了某部大陸網路輕小說才想找一些這類型的故事來看\n\n世界觀再細一點的話\n就是那種奇幻元素並不普及於所有人，只有少部份人擁有特殊能力，或是一些非人種族不會輕易在人前現身，隱藏在人類社會中那種都市奇幻類型",
+    "pool_size": 18,
+    "candidates": [
+      {
+        "book_id": "c24a84f8-c2c2-52c2-abfe-cc095fdc80cc",
+        "title": "奇幻貴公子",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "76cba688-0e70-52bb-baaf-b01392257a9b",
+        "title": "樂園殺手",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "98533937-24b3-51ea-bf94-26b6fb549011",
+        "title": "噬魂盟約",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "41084dbf-83b9-5b56-9d6a-c829086281df",
+        "title": "不炫耀異能的她們更加可愛",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 10,
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "582cdcaa-69d0-5810-85cd-b01d51aea93b",
+        "title": "這家咖啡廳大有問題",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "5f57d5c8-c5bc-5d2f-b33d-908ec69358ed",
+        "title": "CANAAN 異能者迦南",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "945e4228-9c75-5bdd-8e3a-71053caa7fea",
+        "title": "光之國度",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "0b561407-23d0-596e-b120-5f57577d6a5b",
+        "title": "0能者九條湊",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 9,
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "83924061-a59c-5a2e-921b-fa9ec751b0cf",
+        "title": "死亡後的再次転生，這算是好事嗎？",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "475e0f1d-c7ed-54c8-a5c1-1819ecdfbc1e",
+        "title": "奇幻☆怪盜？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "e82e2dc2-de41-5f71-bab6-a617d1d14b73",
+        "title": "閃靈特攻隊",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "f6b093b9-18c2-52e2-a0c3-a01773e61032",
+        "title": "Missing 神隱物語",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "c93b305d-37f8-5944-afdf-dd50cfab46b1",
+        "title": "今天城區依舊滿是魔法案件",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "0a260d35-4102-5b54-a5ac-8108ce2cbb51",
+        "title": "街談巷議錄",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "eebebd25-8ca5-58e4-aec5-06c50fd13d2e",
+        "title": "非人學生與厭世教師",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "3d2a2435-19ca-5c5d-a6cc-21ef1a59c1e3",
+        "title": "合法單向通行",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "05ca8f6e-e52d-5764-acf8-76f80b657b63",
+        "title": "The. Feast. of. The. Moon.",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "3ae03cd6-b0a3-5307-8149-863886ca30f4",
+        "title": "魔界都市",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q10",
+    "query": "像是果青友少這種的\n年份的話最近三到五年為主\n背景是校園戀愛喜劇為主\n有複數女角讓男主多選一\n啊不要開場就有女朋友鎖死的\n那種我覺得其他女角只是浪費時間而已",
+    "pool_size": 18,
+    "candidates": [
+      {
+        "book_id": "117e3474-2f36-5f92-804b-3c1ab12b70ec",
+        "title": "我們不懂察言觀色",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "69686647-2552-5476-842d-904ac5d90da2",
+        "title": "不受歡迎的我在5天內直到與女主角相遇為止",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "2f8e8e90-c731-52a9-bb44-6c65f089578f",
+        "title": "敗北女角太多了！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "f44b023c-320e-586a-aafd-3bde25d02985",
+        "title": "二號的我與第一的她 後日譚 ～某青春群像劇－Quintet～",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "a05bc8b9-5a49-5e7e-bde8-27ca298b41cb",
+        "title": "能夠率直說出喜歡的女生無雙",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "8bb81a74-5f80-5b8b-ab6b-fac982b80b02",
+        "title": "喜歡愛情喜劇的主人公嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "558a2d52-513c-5a9c-90e2-2e9d1ec017ee",
+        "title": "其中一個是妹妹！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "70b1071f-b81d-5e53-aa3e-83c0072e8e65",
+        "title": "自從能夠讀取他人秘密後，我的校園戀愛喜劇就此開演",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "73de3b5e-3465-5df5-9eef-1e963cced569",
+        "title": "喜歡上了她？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "cb6f0301-83a6-58c5-8ffb-c998be59c3ac",
+        "title": "這段青春存在隱情！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "60078bef-8306-5b35-8211-b39fbc5d2c71",
+        "title": "為什麼我的青春戀愛喜劇里只有怪物女主",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "c7e60c2a-8c96-5477-87fb-4ec0c1b874dd",
+        "title": "耿直少年面對的青春不像戀愛喜劇那麼甜",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "48683163-6b11-5c72-8788-3b3d47e2eda5",
+        "title": "為何我總是成為S級美女們的話題",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "5b485c16-51cf-5b8c-9342-00bc55fff8d7",
+        "title": "我和她的青春辯論",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "2505b8dd-670c-5fe0-8cd0-6b94797b319a",
+        "title": "從被甩開始的戀愛喜劇",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 6,
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "79252066-5176-522f-898e-5a5c47f2fef0",
+        "title": "金女友、銀女友還是普通女友？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "44c42264-c348-565a-8fe3-9ddd6c5ba11a",
+        "title": "我的高中物語貌似不平凡",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "7755b654-7a8c-593d-babe-cf9fcbe4a06a",
+        "title": "果然我的青春戀愛喜劇搞錯了",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q11",
+    "query": "最近人比較負面，\n想看一些有共鳴的小說。\n有沒有那種「我一個人爛就好了別搞其他人」的主角的輕小說？以前看大老師自暴自棄滿戳中我的。\n宅宅現實找不到人取暖，希望能找輕小說取。",
+    "pool_size": 20,
+    "candidates": [
+      {
+        "book_id": "7d0818dd-efdb-57e1-a43f-054d26c08fd2",
+        "title": "失意男子異世旅行譚",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "17f3911a-8b97-5a28-bc63-386b182a04d4",
+        "title": "曾經對我造成過精神創傷的女性們又開始關注我，但可惜的是為時已晚【Web版】",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "32978f3e-17cc-5abd-a9bb-efb825284e32",
+        "title": "壞孩子的進擊",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "60ef3561-6cd2-5a82-be44-87294bcbbab0",
+        "title": "一切終將遠去",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "1b072f45-4f17-5a0b-a502-960befc8709e",
+        "title": "魔法少女Sacrifice",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "1764643a-3ab1-5004-a1c8-37f8f296938d",
+        "title": "我始終難忘，你淚中那灼眼的餘暉",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "b1568d07-dfb3-569a-b5dd-d7f047dce719",
+        "title": "尋愛少女成為共犯",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "f216aafa-0bc1-5d65-be43-26b260844a02",
+        "title": "生存意義空想",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "f95645c4-a52c-5740-91b6-026315f5c3db",
+        "title": "我的世界只剩三步，而她仍在一步之遙",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "c4bf73eb-59e0-594c-85f5-801431471880",
+        "title": "亭之下，繃帶和她",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "da1295d6-34b6-5774-95e8-629bc5cc3a79",
+        "title": "夕陽下殉情",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "b7283b4d-0e86-58e1-ac41-fa1491c84037",
+        "title": "緹蕾婭的煩惱",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "61dfe1e2-c63f-5731-a0b4-eb0815a292b1",
+        "title": "友情，親情，戀情所編織的青春",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "5f8066dd-f66c-59a2-8ef5-3cf2f7461bae",
+        "title": "重回青春時代，與孤獨的她共度盛夏時光",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "37279e81-f527-5532-8776-bcf220a96675",
+        "title": "少女身，大叔魂",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "127c9325-192f-58c5-b50d-c2924550c70a",
+        "title": "一廂情願的思念無法傳達，最終只能煙消雲散",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "72ad093a-cc57-5a93-abfd-fc647e3df3ec",
+        "title": "失去一切之後 我與她的未來",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "091bda7e-a3c8-5c8c-86ec-ff4cdba89510",
+        "title": "只有成績還算優秀的我什麼都做不到",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "1df5cd13-a685-5303-bc7b-b0aba3693026",
+        "title": "絕望的世界",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "2e47d29d-09a2-58b7-b0fd-cd71abb8dd35",
+        "title": "世界第二有趣的輕小說",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q12",
+    "query": "想找一些日常系小說類型，希望劇情節奏安排和對話有趣些。\n其它元素能接受百合、戀愛、生活、學校類型，有談話間交流劇情。",
+    "pool_size": 17,
+    "candidates": [
+      {
+        "book_id": "79ff045d-e3e4-540d-8066-bccc72e73972",
+        "title": "喜歡女孩子的我和並不是特別喜歡女孩子的你",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "d3cff37e-6190-5023-a50c-94d62d38ec75",
+        "title": "漫研社的日常",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "d7e9caf0-fb28-553d-b74d-a9c9ce6175c1",
+        "title": "女友最近有點怪",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "a0340404-a615-57cb-9732-91500b7f1885",
+        "title": "截稿日之前，百合的進度特別快",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "f7b9b9cc-f9b0-505e-bd14-834b485ebe71",
+        "title": "有妹妹的高中日常",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 7,
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "0b2061c8-59e3-5249-a106-70f058a183ff",
+        "title": "EPISODE. 插曲錄",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "f269a414-6164-52da-a579-2e0e43f219cf",
+        "title": "將放言說不會輸的高顏值女孩，全力征服的百合故事",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "cc47c2c4-8fd7-5598-a28f-b107c530bb9c",
+        "title": "請給我一盆黛粉葉",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "4b32f64b-aff8-5d7d-b5d4-499bfc7f3695",
+        "title": "誰才是我的百合呢!?",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "f13ceb7d-18e5-5db4-8f5f-70af999a0805",
+        "title": "伊田的煩惱",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "e469c364-4074-5da8-a850-4e50ef5f08ef",
+        "title": "關於被同班美少女拉進文學社這件事有點怪",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 9,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "5532c02e-dd5b-58f0-88ca-e7c48cfc8c74",
+        "title": "成為了吸血鬼於是開始做主播的現代百合",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "73de3b5e-3465-5df5-9eef-1e963cced569",
+        "title": "喜歡上了她？",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "b825f43d-86f4-5784-b31a-7141c444a287",
+        "title": "青春，少女們，不正常的戀愛物語",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "89ba9bc7-f6ad-599e-992a-5942d16ac4bf",
+        "title": "輕小說社",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "dde6a84e-92e2-59ac-aee0-c9c347f81a42",
+        "title": "百合撩亂★兔姬臨杏 ～不○○○就出不去的房間～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "00e4d87f-b9c9-5610-93de-b4bb1dc5769e",
+        "title": "百合網紅 兩人的色色野外活動",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q13",
+    "query": "我很喜歡搞笑類，誤會系剛好能戳到我的笑點，\n看了會有種「這群人的腦迴路到底怎麼長的」的感覺，（像電玩咖這種的）\n當然不需要全程搞笑，後面進入主線開始嚴肅起來我還是能接受的（素晴、腦礙這種的）",
+    "pool_size": 17,
+    "candidates": [
+      {
+        "book_id": "bd86f59d-4524-5cca-b899-3dc9855641c0",
+        "title": "為美好的世界獻上祝福！Fantastic Days",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "cf613ab1-39ca-5ac0-98d6-782d18bcf717",
+        "title": "我和隔壁班美少女共度甜蜜校園生活，但事到如今實在無法承認當初搞錯了告白對象",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "5c039d3d-8eb9-5960-abd0-0366d37eedf9",
+        "title": "我喜歡的妹妹不是妹妹",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "117e3474-2f36-5f92-804b-3c1ab12b70ec",
+        "title": "我們不懂察言觀色",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "234c8be9-28b3-51ba-aa72-df691d1609a4",
+        "title": "你們趕緊給我結婚吧！",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 9,
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "4e86fa11-30f9-54fa-86f1-c092207b0e2c",
+        "title": "我受歡迎只是誤會一場 ～被推的美少女們團團包圍～",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "73eb3c5d-0fcb-59d1-9480-406435f16411",
+        "title": "關於美少女們不斷追求我的身體（經驗值）這檔事",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "f83502a7-32f3-5e5e-8cc0-7dcdae8a009b",
+        "title": "在男女比1：5的世界裡你以為還能正常生活嗎？ ～當感情濃烈的女孩們被無自覺男生耍得團團轉～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "1e991853-4ff4-5395-81fc-1b1db6b851c2",
+        "title": "我家的妹妹們才不可能這麼可愛!?",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "4217545f-9fa6-5d00-a824-89cbbc8e708d",
+        "title": "有誰規定了現實中不能有戀愛喜劇的？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "0d96d270-3b02-5c60-a5aa-f3de37864bb5",
+        "title": "中二女主太多了！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "94aeb9e5-beeb-55b1-876e-382145f2c852",
+        "title": "為美好的世界獻上祝福！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "4004a67e-f4cd-524f-a3d5-bb0c2bc8b603",
+        "title": "我的腦內戀礙選項",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "68771719-e5c0-51b1-83ec-a982a7d2ded3",
+        "title": "不知不覺間就上了御宅社團公主、對宅男溫柔的辣妹、做爸爸活的郁嬌地雷女，以及裝可愛的小惡魔系後輩。而且這些女孩背後全都有一個疑似主人公的陰沉宅男，太糟了，怎麼就變成BSS了呢",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "44018615-6478-568b-9849-d970bffc46da",
+        "title": "我的漢化組偽娘高中生正在試圖與我拉近距離 ， 別開玩笑了",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "147ee26a-b6c1-5ea7-93e6-b02912d0bb93",
+        "title": "GAMERS電玩咖！",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 1,
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "55915b7d-d374-5159-86c2-cb70de1c0bc0",
+        "title": "我果然不適合戀愛喜劇",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q14",
+    "query": "想求各位大大們，有沒有推薦以百合、女生友情、男女愛情這類的日本輕小說呢?\n\n不太想要有奇幻、科幻、后宮、異世界這元素，有點太過氾濫不太想看\n只要日常、青春的就可以了，有發糖的和胃痛我都可以~",
+    "pool_size": 18,
+    "candidates": [
+      {
+        "book_id": "89ba9bc7-f6ad-599e-992a-5942d16ac4bf",
+        "title": "輕小說社",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "f269a414-6164-52da-a579-2e0e43f219cf",
+        "title": "將放言說不會輸的高顏值女孩，全力征服的百合故事",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "b825f43d-86f4-5784-b31a-7141c444a287",
+        "title": "青春，少女們，不正常的戀愛物語",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 1,
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "61dfe1e2-c63f-5731-a0b4-eb0815a292b1",
+        "title": "友情，親情，戀情所編織的青春",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "a0340404-a615-57cb-9732-91500b7f1885",
+        "title": "截稿日之前，百合的進度特別快",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 4,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "130ccd56-2a4a-5cf2-b2f2-55857871a63c",
+        "title": "辦公室里開不出百合花",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "cee7f5c1-4f98-5c74-aaee-41532c375fad",
+        "title": "初戀 Signal",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "2505b8dd-670c-5fe0-8cd0-6b94797b319a",
+        "title": "從被甩開始的戀愛喜劇",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "dde6a84e-92e2-59ac-aee0-c9c347f81a42",
+        "title": "百合撩亂★兔姬臨杏 ～不○○○就出不去的房間～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "c2e049fd-311b-54a9-ae02-11f86b713ad1",
+        "title": "今日的荼蘼依舊綻放❤︎",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "cc47c2c4-8fd7-5598-a28f-b107c530bb9c",
+        "title": "請給我一盆黛粉葉",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "79ff045d-e3e4-540d-8066-bccc72e73972",
+        "title": "喜歡女孩子的我和並不是特別喜歡女孩子的你",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "7b110605-2fa6-5eac-8363-8000257ad08e",
+        "title": "讓聲稱女性之間不可能的女孩，在百日內徹底淪陷的百合故事。",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "f13ceb7d-18e5-5db4-8f5f-70af999a0805",
+        "title": "伊田的煩惱",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "62d0f7b5-ac0c-51a2-b379-a126a62e9fe5",
+        "title": "夏，響",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "385c6ff7-266c-5106-b8d4-9bc049588fcf",
+        "title": "我的女性朋友意外地有求必應",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "772a648b-9c84-5872-9bd0-7e80c50a4e73",
+        "title": "妳以為我的百合人設只是商業賣點？",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "35768bee-86c3-5270-8dcc-03548a80dc06",
+        "title": "才不要這樣的青春戀愛喜劇！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q15",
+    "query": "喜歡的類型 是異世界 轉生 重生 穿越 校園異能 幻想世界 劍與魔法 主角最強 多後宮 戰鬥要夠中二 都行\n夠套路\n要男主 一定要有戰鬥 後宮 沒後宮也沒關係但要有女主 如果主角拿的是劍我會更開心\n不接受有沒男主的 例如蜘蛛又怎樣 能力值平均 怕痛的我\n不接受虐主的 除了re 0 是因為動畫入坑的 除非前面虐後面很爽的這樣可以例如平職\n需要裝逼讓我看的會高潮的 所以無職轉生我看不下去因為太真實太哭逼了",
+    "pool_size": 32,
+    "candidates": [
+      {
+        "book_id": "3bf11be6-a0a9-545d-95de-7f2a370cb524",
+        "title": "一般士兵獲得了「無限再生」的轉生特典，結果被眾多美女盯上。",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 6,
+          "FilteredVector": 2,
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "44ce9b45-a39e-5dce-9735-bf8786d11df1",
+        "title": "與來自男女比例完全崩壞世界的居民交換了人生",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "385775f5-ec9b-53eb-9ad8-31bf8aa0f631",
+        "title": "惡笑行善之邪神無雙",
+        "source_engines": [
+          "ExactMatch",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "ExactMatch": 9,
+          "FilteredVector": 10
+        }
+      },
+      {
+        "book_id": "be5f783d-b90a-5d45-840f-5fe12ae45702",
+        "title": "身為高中老師的我和學生們集體傳送到有最強排行榜的異世界，從路人角色晉陞為劍聖",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "798cf604-7118-5d60-a131-7ec13f31b82e",
+        "title": "我轉生成王城的路人衛兵，當我擊退了想要綁架公主的魔王軍，結果卻讓勇者的後宮成員一個接一個地愛上我。哦，公主是我在保護的，所以如果你是個自我中心的勇者大人，就請踏上消滅魔王的旅程吧。",
+        "source_engines": [
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "FilteredVector": 5,
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "0cca4c98-c580-585e-ad52-d36f63f3f7f7",
+        "title": "等級只有1級但固有技能是最強",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 2
+        }
+      },
+      {
+        "book_id": "e7443336-bc78-5808-85b1-45e60fb9bc7f",
+        "title": "轉生成了發生很多事情後的galgame NTR 惡役",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 6
+        }
+      },
+      {
+        "book_id": "5c3202e8-d693-5282-83bc-bec6e46061ae",
+        "title": "全員美少女的魔王討伐絕對有問題！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "76a36ca7-8b71-53b1-b19f-2d8263273fa2",
+        "title": "轉生為懶惰的惡辱貴族，破壞劇情後，以超規格的魔力成為了最兇惡之人",
+        "source_engines": [
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "FilteredVector": 4,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "7bfdf2e2-9a38-5421-9ddc-196939617867",
+        "title": "無能惡童王子只想活下去 ～雖然轉生成戀愛RPG中的反派路人，但無視原作劇情，目標是成為世界最強～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "29d96b7d-02a9-5f66-b4d6-30b01d0abda4",
+        "title": "被女神騙到異世界的我展開後宮生活",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "1e237d5c-d6d0-54e3-9036-4b4414df62e0",
+        "title": "我殺了學院玩家",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 4
+        }
+      },
+      {
+        "book_id": "39a72cfe-7aa5-5581-8011-f736c4534abe",
+        "title": "成為無限的魔法師",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 10
+        }
+      },
+      {
+        "book_id": "6c7092dc-4879-541d-9c89-55e9781bb451",
+        "title": "異世界最強貴族，後宮愈多就愈強",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "0ced6f31-9506-5f22-9a1f-ad5bd6e34dbc",
+        "title": "侯爵嫡男好色物語",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 3
+        }
+      },
+      {
+        "book_id": "f525923c-3267-513c-b8c5-95a2f25e6eee",
+        "title": "運用開掛魔術扭轉命運",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10,
+          "FilteredVector": 3
+        }
+      },
+      {
+        "book_id": "0d96d270-3b02-5c60-a5aa-f3de37864bb5",
+        "title": "中二女主太多了！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "dba6332b-eac8-505f-a67b-58428ebef600",
+        "title": "轉生成為只有死亡結局的邪惡貴族",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 8
+        }
+      },
+      {
+        "book_id": "93368a06-54c7-507c-bcfc-d3e572b63c96",
+        "title": "在異世界迷宮開後宮",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2,
+          "FilteredVector": 1
+        }
+      },
+      {
+        "book_id": "f81d8654-47cb-5b70-81c3-5a838b2de2e8",
+        "title": "轉生成了註定死亡的惡役千金的哥哥，想要養育妹妹改變未來 ～世界最強雖然是我、但世界最可愛的一定是妹妹～",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 9
+        }
+      },
+      {
+        "book_id": "4ef32a9b-32a4-58d9-9287-3a2b63e3f5b7",
+        "title": "被流放的我憑藉廢柴技能『王位繼承權』成為最強掛逼國王 ～異世界的公主們為當我的臣下對我展開猛烈攻勢～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "daa3d018-53db-5c62-8886-f0b3409ec8fa",
+        "title": "女主角們都想殺掉我",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "3c7258ef-3d13-5f1a-b84a-566b841b66d8",
+        "title": "失格紋的最強賢者 ～世界最強的賢者為了變得更強而轉生了～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "2d4138ea-435a-5fff-b176-683053eecb50",
+        "title": "成為了無良隊伍的累贅",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 5
+        }
+      },
+      {
+        "book_id": "6c4f2a2d-d168-5a84-bed7-82453774d339",
+        "title": "我用物理開無雙後大受女生歡迎",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "310c2f1a-ef9f-5a5e-b87a-bb788800a25e",
+        "title": "技能？才不需要那種東西！ ～不幸者們的才能開花～",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 8
+        }
+      },
+      {
+        "book_id": "30bb3d1b-3e0f-5354-a46f-851e03a5f952",
+        "title": "在超難關迷宮修行10萬年的結果，成為世界最強 ～最弱無能的下克上～",
+        "source_engines": [
+          "ExactMatch",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 7,
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "7a9f6fdc-3f97-56d0-a7db-c322ca19d7ec",
+        "title": "魔王的前親信即使轉生成勇者依然會獻上忠",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "300abcf2-0c43-5aa7-b994-c1a2e173ed36",
+        "title": "我是萬事屋的店員，老實說我想辭職了",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 6
+        }
+      },
+      {
+        "book_id": "722f8e27-8132-56de-87ed-c2931b672565",
+        "title": "異世界和我，你喜歡哪個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "85586dd9-a090-556f-b759-27963b58d150",
+        "title": "史上最強獸人的快樂播種後宮生活",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 7
+        }
+      },
+      {
+        "book_id": "094b57d7-b875-58da-a1bc-e856f81671b6",
+        "title": "我成為自己創造的英靈召喚師",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 1
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q16",
+    "query": "如題想看校園類型小說，不知道有無推薦\n純現實的不要有奇幻元素，集數不多的佳",
+    "pool_size": 36,
+    "candidates": [
+      {
+        "book_id": "81244764-7b5f-593c-ab20-ec19cc6a3241",
+        "title": "我們的溝通力堪稱是校園異能對決LOVE or LIKE？",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "c402c745-a7cb-5554-b575-54a09ace59f5",
+        "title": "家庭教室",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "025e4f27-aef2-52a7-8e31-a637f5e564ba",
+        "title": "連女朋友都不是的女生在深夜兩點過來做炒飯這件事",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 8
+        }
+      },
+      {
+        "book_id": "890c2a24-93c6-5102-8876-a86ff6f16305",
+        "title": "少女不畢業",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "45b60114-da65-5a2d-b9fa-626e8b342330",
+        "title": "卒業",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "cb6f0301-83a6-58c5-8ffb-c998be59c3ac",
+        "title": "這段青春存在隱情！",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 5
+        }
+      },
+      {
+        "book_id": "b8509d45-0a51-5ee3-b322-58d33a2bf67c",
+        "title": "大學社團里最可愛的學妹",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "73de3b5e-3465-5df5-9eef-1e963cced569",
+        "title": "喜歡上了她？",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 6
+        }
+      },
+      {
+        "book_id": "450b1b99-4dcb-5bca-afd0-ac991f0de98f",
+        "title": "十八時",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2,
+          "FilteredVector": 1
+        }
+      },
+      {
+        "book_id": "60078bef-8306-5b35-8211-b39fbc5d2c71",
+        "title": "為什麼我的青春戀愛喜劇里只有怪物女主",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "dbf2d6c0-c35c-5f0f-93bc-28e39eeb7465",
+        "title": "我的校園生活才正要開始！",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7,
+          "FilteredVector": 9
+        }
+      },
+      {
+        "book_id": "584627c1-d70a-5c35-b7b5-5380710f2600",
+        "title": "為青年設立的讀書俱樂部",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "9cf182ad-bd41-530a-8d61-fe29ce519320",
+        "title": "獻上我的青春，撥開你的劉海",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "01bc0413-0037-55ba-9149-b158ed4271e9",
+        "title": "迫於形勢，和拒絕無數告白的校園女神交往了",
+        "source_engines": [
+          "ExactMatch",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "ExactMatch": 6,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "7cea768c-0a1e-5c4f-bd4e-cfd0f34e70ba",
+        "title": "在流放地",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "FilteredVector": 2
+        }
+      },
+      {
+        "book_id": "cf613ab1-39ca-5ac0-98d6-782d18bcf717",
+        "title": "我和隔壁班美少女共度甜蜜校園生活，但事到如今實在無法承認當初搞錯了告白對象",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "e4760006-0c16-5689-9e87-134eef2a9d92",
+        "title": "四疊半宿舍，青春迷走",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 8
+        }
+      },
+      {
+        "book_id": "0269ebfb-9a0c-589b-b938-8ec6729d932b",
+        "title": "與美少女保持距離的方法",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 9
+        }
+      },
+      {
+        "book_id": "5ffeaf4e-ccdc-5cde-9312-b2d5c3dd8d43",
+        "title": "偵探扮演與不悅青春",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "9e3a331a-2fb7-5e8d-966f-6ccb87bf9e48",
+        "title": "我的網婆是超人氣偶像 ～冰山美人的她在現實世界也想當我老婆～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "0197379c-6baf-5c6c-bd47-1ff806ce58b9",
+        "title": "Memories Off～回憶的點滴～",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 5
+        }
+      },
+      {
+        "book_id": "b825f43d-86f4-5784-b31a-7141c444a287",
+        "title": "青春，少女們，不正常的戀愛物語",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 3
+        }
+      },
+      {
+        "book_id": "ac7f8da1-1ac6-54e2-923f-929d5c0a4335",
+        "title": "轉生為戀愛喜劇反派的我，與喜愛的女角一起享受青春",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "00e4d87f-b9c9-5610-93de-b4bb1dc5769e",
+        "title": "百合網紅 兩人的色色野外活動",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 2
+        }
+      },
+      {
+        "book_id": "05ca8f6e-e52d-5764-acf8-76f80b657b63",
+        "title": "The. Feast. of. The. Moon.",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "c789a719-0088-5c62-97c4-ef62c965a14e",
+        "title": "直到將試圖放火燒毀校園的暗墮年級第一美少女矯正為病嬌女主角為止",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "4e14ad90-44ee-5b48-af59-fa2461668010",
+        "title": "那位對所有人都溫柔體貼的校園聖女，只在我身上留下齒痕",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "e304a304-3756-5d0b-ad9f-8763f983c1d2",
+        "title": "我們真的想做的事情",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 4
+        }
+      },
+      {
+        "book_id": "019638b0-0cb2-57f5-933f-2259fb39ce04",
+        "title": "其實，原本只要那樣就好了",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 4
+        }
+      },
+      {
+        "book_id": "604ee884-4341-5c94-bd86-174f87a2d339",
+        "title": "校園小說 School/Fiction",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "02b261ea-8377-5e05-b7f7-6890fb19cda7",
+        "title": "那天所見的流星，為與你一同死去的祈願",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 10
+        }
+      },
+      {
+        "book_id": "f44b023c-320e-586a-aafd-3bde25d02985",
+        "title": "二號的我與第一的她 後日譚 ～某青春群像劇－Quintet～",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 10
+        }
+      },
+      {
+        "book_id": "003ee90f-c4a2-53e0-bc54-11cc520c4abe",
+        "title": "名稱未設定",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 1
+        }
+      },
+      {
+        "book_id": "091bda7e-a3c8-5c8c-86ec-ff4cdba89510",
+        "title": "只有成績還算優秀的我什麼都做不到",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 7
+        }
+      },
+      {
+        "book_id": "013a1feb-c8f3-5344-a935-b031c3fa4a40",
+        "title": "Memories Off 雙海詩音篇",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 3
+        }
+      },
+      {
+        "book_id": "01f43264-5ff5-55db-a3ab-cadcdbcd9775",
+        "title": "拉琪雅",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 7
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q17",
+    "query": "求推薦世界觀建構完整\n主角很清楚當下該做甚麼\n是不太希望主角輕鬆拿到一堆外掛這種的\n然後也蠻喜歡主角大意、失誤或忘記重要信息導致危機感這種狀況發生\n非戰鬥類主角也可以，感覺這類主角穿越的比較多?\n但是如果是一個高中生通十八般武藝心理素質又特好的就不要",
+    "pool_size": 35,
+    "candidates": [
+      {
+        "book_id": "0009ff57-cccf-5861-a952-5b0ed7f48196",
+        "title": "四日間的奇蹟",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 1
+        }
+      },
+      {
+        "book_id": "00522674-1629-596f-a1af-47e860f44bc0",
+        "title": "三日間的幸福",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 9
+        }
+      },
+      {
+        "book_id": "69034ed1-ac86-5c8e-9058-b3f8fea952d9",
+        "title": "THE NEW GATE",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "69c094e1-55ee-5954-9b30-d841be37d252",
+        "title": "法師的生存之道",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "005a23d6-c0d1-5d5a-a697-ff1d070f0b22",
+        "title": "天空的阿卡米雷斯",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 10
+        }
+      },
+      {
+        "book_id": "e012fb82-b760-52fe-ac73-2c64aabd4e7c",
+        "title": "龍族",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 1
+        }
+      },
+      {
+        "book_id": "c5cff50d-6c87-5617-a441-097f59f2c428",
+        "title": "我和你有致命的認知差異",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 2
+        }
+      },
+      {
+        "book_id": "97b2ee15-5db5-5f82-b4a8-0a0c19bd96fc",
+        "title": "428被封鎖的澀谷",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 9
+        }
+      },
+      {
+        "book_id": "7d0818dd-efdb-57e1-a43f-054d26c08fd2",
+        "title": "失意男子異世旅行譚",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "ab0a7397-f433-5df7-be10-fc2a5a6ec7ad",
+        "title": "配角在學院中生存 (三流反派的學院生存記)",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "52b7bc49-f84f-57f0-91c8-39aaab4a8249",
+        "title": "超人高中生們即便在異世界裡也能從容生存",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "000fc64b-d574-5068-a5a0-d5a4d7e399b5",
+        "title": "如果折斷她的旗",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 2
+        }
+      },
+      {
+        "book_id": "1f563965-dbec-5bbc-809c-85af17841f58",
+        "title": "沉月之鑰",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 8,
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "51fdb025-252e-5af2-901c-8637720c2db8",
+        "title": "弗雷姆王國興亡記",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "0ba07622-d793-5383-a14b-f78f2adb5510",
+        "title": "睿智圖書館與十個謎題",
+        "source_engines": [
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "FilteredVector": 3,
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "82a8704b-9cdf-5d55-a626-b3638da6d25f",
+        "title": "是不是搞錯了什麼",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "49988d98-3168-5bed-b42e-d78df47ffb1d",
+        "title": "魔學詭術士",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "0041a649-e36c-573d-b1af-484b6c80a7b8",
+        "title": "魅惑王冠",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 8
+        }
+      },
+      {
+        "book_id": "00defc8f-0a6a-5991-9ef1-a8ed8d1ea1cc",
+        "title": "算計",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 4
+        }
+      },
+      {
+        "book_id": "00209e3e-11c4-5c1e-80f5-a23235020137",
+        "title": "紫苑的血族",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 5
+        }
+      },
+      {
+        "book_id": "bac53633-c041-585f-a857-c6ce667a7016",
+        "title": "從零開始的魔法書",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "a500ac0c-0b24-5cc5-9804-cdd5a73eb061",
+        "title": "神明遊戲",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 5
+        }
+      },
+      {
+        "book_id": "89c642f9-8535-5286-a44c-b962ab712daa",
+        "title": "迷宮中的淑女 ～她的頭顱會消失在斷頭台上嗎？",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 10
+        }
+      },
+      {
+        "book_id": "f525923c-3267-513c-b8c5-95a2f25e6eee",
+        "title": "運用開掛魔術扭轉命運",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "5d278842-9e16-5cd1-a87a-fbd48eb7327f",
+        "title": "死靈魔法的嫌疑人",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "00109c7f-9a25-5955-a8d3-486e8b934c94",
+        "title": "人魚公主殺人事件",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 3
+        }
+      },
+      {
+        "book_id": "0321ca3e-9e1f-5757-b85b-51e4ba45cded",
+        "title": "優雅貴族的休假指南",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "00190e01-6680-59e5-8454-2cc76cd49934",
+        "title": "無盡黑夜與永眠夢境",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 4
+        }
+      },
+      {
+        "book_id": "e506a199-1f67-53e1-b550-10e023620ebe",
+        "title": "雖然不太清楚不過我好像轉生到異世界了",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "976ff783-ecfe-5198-9a1a-90358a4b9ade",
+        "title": "偽惡之王",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "c72bd837-de8b-5294-9350-a78c06cc1cf4",
+        "title": "地雷格力高",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 6
+        }
+      },
+      {
+        "book_id": "00311cd0-778b-5235-a33d-444c70df3357",
+        "title": "D.C.初音島",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 6
+        }
+      },
+      {
+        "book_id": "ebb1b9fc-a03a-59c4-a470-77b258f8fd78",
+        "title": "夏洛克＋偵探學園",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 8
+        }
+      },
+      {
+        "book_id": "1c8617bf-5f6f-55eb-b207-559585a64725",
+        "title": "夢與罪惡的扎克厄彼斯",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 9,
+          "FilteredVector": 7,
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "003ee90f-c4a2-53e0-bc54-11cc520c4abe",
+        "title": "名稱未設定",
+        "source_engines": [
+          "ExactMatch"
+        ],
+        "original_ranks": {
+          "ExactMatch": 7
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q18",
+    "query": "我最近剛看了龍王的工作的小說\n雖然不懂將棋，但覺得對局的刻劃很棒\n能看到將棋解說\n也會側面描寫一些職業棋士、女流棋士的差別和情況\n\n最喜歡的部分是銀子挑戰獎勵會那邊\n書裡描寫的女性棋士會被小看的部分\n那種低人一等、逆境求生的感覺做得很真實(?不會形容，總之很有代入感\n銀子加油，不要輸給將棋星人!\n\n希望各位能分享一些好看的將棋小說!!",
+    "pool_size": 19,
+    "candidates": [
+      {
+        "book_id": "ac2f41ed-931f-57f0-a7fd-6fad9b340c46",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "c5976947-9fec-5485-a0fc-1af5166a8e1e",
+        "title": "武士道系列",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "83972942-164b-5197-a290-d44f77e7272d",
+        "title": "未命名 ##NAME##",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "dbb93b6e-1b1b-52ab-8d12-9367da749fde",
+        "title": "逃殺競技場",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "d2a64d5e-901b-5ba7-8645-ebcde712fc54",
+        "title": "蘿球社！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "40cc5613-6aee-5421-b1e0-55fd13d3ffa0",
+        "title": "神明渴求著遊戲。挑戰眾神之少年的終極鬥智競技",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "29d070fa-beeb-5e85-bf59-55eab578a1e3",
+        "title": "DUEL LOVE -戀愛少年是勝利王子-",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "1444c20e-79e9-5775-8ee6-22cc5d5e4f99",
+        "title": "淑女騎士團",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "a44a04aa-52aa-55dd-b939-eafa7f3c4f37",
+        "title": "黑貓的王手！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "3480f4c0-c5c4-5765-9126-3dadbabe12ef",
+        "title": "哈羅，天才少女",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "13eff114-8724-5064-9b5e-69b7fcd3f423",
+        "title": "戰鬥！暴風少女！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "a952a0db-20de-5b15-b060-a06f626481e3",
+        "title": "利里耶國騎士團與辛德瑞拉的弦音",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "5c30fe15-6565-5a7d-b4ed-bf1a7b2df6be",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "23c98bbc-8e41-5ddd-bb53-66929c6802c5",
+        "title": "圈、叉與三角——王牌，就此展開",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "c9aa28cc-c774-5e0d-a74a-fcfba1e676f8",
+        "title": "夏天結束時，妳一死就完美無缺",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "7a47adc8-cf6e-5aef-815d-a1638770ca73",
+        "title": "龍王的工作！",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 1,
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "c85d5a02-63e7-5c2c-b0d0-5a9d434f8956",
+        "title": "龍王的骯髒工作！夢魔女孩是入室弟子",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "c6be5111-3e99-5a4d-89e9-10b4b0d3d3eb",
+        "title": "棋魂",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "c147a5b8-b2c3-598f-8f19-0189b81081db",
+        "title": "",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q19",
+    "query": "如題 最近看的書越來越多 總覺得自己也越來越挑了 希望有人能推薦一些好書\n以下條件：\n1. 女主是（外表）蘿莉（可愛的少御也是可以啦）\n2.有戀愛的元素（後宮可以 但拜託不要無腦倒貼）\n3.希望是異世界（不一定要穿越）\n4.有傲嬌或無口或吃貨之類的屬性更好\n拜託各位了",
+    "pool_size": 20,
+    "candidates": [
+      {
+        "book_id": "6136759e-23f5-5871-a310-88f17a7078a2",
+        "title": "為償還父母債務而被賣到異世界的我，被吸血鬼大小姐買下來，成為了美少女女僕的食物",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "a49c0cc4-669a-5faa-8efc-e29d0dd7a855",
+        "title": "最強陰陽師的異世界轉生記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "de1ba1d1-02ff-57e7-a06c-cd688a5ca54d",
+        "title": "秒殺外掛太強了，異世界的傢伙們根本就不是對手。",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "21703e02-b2c4-5114-8675-c6f5031c9dcb",
+        "title": "萬物皆可娘系列",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "0b18523c-0ebf-59cc-8b64-1fad46abef2a",
+        "title": "異世界拷問姬",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "a9ee6655-ab1f-5d15-b595-9fb84056c582",
+        "title": "不親近任何人的跳級天才幼女，只對我撒嬌的理由",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "feb34836-55f7-5ecb-b1c0-178a0db24b05",
+        "title": "你喜歡有點色色又變態的公主殿下嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "3d134c3c-a58b-5d26-87f3-cc03b193afbd",
+        "title": "放學後，到異世界咖啡廳喝杯咖啡",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "a5b69bfc-6420-5a59-ab75-79a1e19eeae6",
+        "title": "能力是遊戲玩家的我，雖然在異世界被關進了貴族的牢房，但靠著遊戲的能力自由地外出，結果成為了靈異事件",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "7441e00c-6689-5c9e-a382-e5289b0fe791",
+        "title": "不跟男生交往的話就無法轉大人了喔",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "722f8e27-8132-56de-87ed-c2931b672565",
+        "title": "異世界和我，你喜歡哪個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "f81d8654-47cb-5b70-81c3-5a838b2de2e8",
+        "title": "轉生成了註定死亡的惡役千金的哥哥，想要養育妹妹改變未來 ～世界最強雖然是我、但世界最可愛的一定是妹妹～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "0d96d270-3b02-5c60-a5aa-f3de37864bb5",
+        "title": "中二女主太多了！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "82a8704b-9cdf-5d55-a626-b3638da6d25f",
+        "title": "是不是搞錯了什麼",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "098b1283-9704-5fc7-86e3-6191a6e82e48",
+        "title": "魔法製造者 ～異世界魔法的製作方法～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "93368a06-54c7-507c-bcfc-d3e572b63c96",
+        "title": "在異世界迷宮開後宮",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "805122ca-575f-57e0-aba5-593cb7e8ea5f",
+        "title": "中國平梵谷中生轉移典到爆的異世界，同行者竟是日本美少女?!",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "effebbec-2a18-5f73-8e41-f228f34dd286",
+        "title": "女神大人的再教育，佐以史萊姆 ～這次，要在異世界運營保育園了～",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "0e26469e-6897-5eca-bc5a-b8fa79d3a8a3",
+        "title": "對人際關係感到疲憊的JK被JC給治癒後變成蘿莉控這件事",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "96571575-4e80-55ba-b4c9-0b5c083971f5",
+        "title": "蘿莉公主大人的建國日誌",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q20",
+    "query": "本人喜歡偏重人物心理描寫、人物互動和角色變化的作品，較偏執在人物塑造和刻劃上。劇情不要求設計得有多精妙，不影響觀感就好，就算是平鋪直述的也行。節奏快慢無妨，掌握恰當即可。本人對於自己的閱讀能力還算有信心，文字量稍微過多也沒差。大忌是拿膚淺粗俗爛造的刻板僵化人物作為行銷點。",
+    "pool_size": 26,
+    "candidates": [
+      {
+        "book_id": "f56877b1-3d99-530b-ac09-412c27a3917a",
+        "title": "從離家出走開始人生吧",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "17ef916b-a250-5d6d-a36a-fe2f7a0983b1",
+        "title": "CHOICE",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3,
+          "FilteredVector": 9
+        }
+      },
+      {
+        "book_id": "1764643a-3ab1-5004-a1c8-37f8f296938d",
+        "title": "我始終難忘，你淚中那灼眼的餘暉",
+        "source_engines": [
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "FilteredVector": 4,
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "8bb81a74-5f80-5b8b-ab6b-fac982b80b02",
+        "title": "喜歡愛情喜劇的主人公嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "b8fd5fef-63a1-5245-8960-091825a448c8",
+        "title": "在終點相遇",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "725e6a70-fd26-545f-a162-6d4b35f37557",
+        "title": "銀之鎮魂歌",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "0637862a-2f34-5a0c-8520-c3f0d1aec809",
+        "title": "看來我好像被女主角們討厭了的樣子，所以我想貫徹旁觀位置。",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "7c6737cf-b321-5296-97c5-9732ce37f1f4",
+        "title": "你不在的七月六日",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "0c7a0118-2008-5783-9c0d-fc951f068a22",
+        "title": "PSYCHE",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 6,
+          "FilteredVector": 1,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "0ae2431f-a3c8-50ec-a056-f852712c524f",
+        "title": "負數與零",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 8
+        }
+      },
+      {
+        "book_id": "a1b7a32e-72ce-5d48-91ee-814815e0ea08",
+        "title": "愛人錯過",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "2e3404c3-2c28-5b83-af7e-5b1bd8e30726",
+        "title": "我完美的青梅竹馬",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "1ee71eb5-3137-57b3-9aca-4ce069c1ac50",
+        "title": "陽的目光",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 2
+        }
+      },
+      {
+        "book_id": "e839093b-8db7-5226-b3c8-1341ea85ea97",
+        "title": "在櫻花落盡前",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "770765ff-694c-5947-ad1b-6bdbd5339c07",
+        "title": "簡單的問卷調查",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "840b42e7-1a76-50fe-94f4-ae632d71dedf",
+        "title": "這個「我」，那個『我』，你喜歡哪一個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "e012fb82-b760-52fe-ac73-2c64aabd4e7c",
+        "title": "龍族",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 5
+        }
+      },
+      {
+        "book_id": "667f7b89-1440-5274-a433-0b5db7c0bdb2",
+        "title": "思維•交換",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 6
+        }
+      },
+      {
+        "book_id": "61dfe1e2-c63f-5731-a0b4-eb0815a292b1",
+        "title": "友情，親情，戀情所編織的青春",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "60ef3561-6cd2-5a82-be44-87294bcbbab0",
+        "title": "一切終將遠去",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "abf4156d-f347-5f96-b291-a23c7e8ba84a",
+        "title": "愛意複雜化",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "de3fbddf-740a-5b05-b3d0-49896d5106c5",
+        "title": "心連·情結",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 3
+        }
+      },
+      {
+        "book_id": "0cb47e2a-608c-5e87-99a9-b23dbe4e3673",
+        "title": "To Heart 2",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 7
+        }
+      },
+      {
+        "book_id": "786c1c6f-5c24-51ea-a169-640fdd315c45",
+        "title": "擱置的畫筆，於明日重逢",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "3b1a2ee2-26d2-584c-8767-7b03af7c5716",
+        "title": "√4請給我正常的室友",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "da0b808b-3916-52e9-b936-a7edd2befe4c",
+        "title": "Alone Together",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 10
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q21",
+    "query": "最近剛看完三角距離無限為零\n雖然胃在痛不過還是很喜歡三角戀這個要素\n有人可以推薦一下類似的作品嗎?\n當然不一定要三角戀 更多也行 只是想看這種描述男女主如何在戀愛中痛苦掙扎的小說\n有糖更好 因為之後胃會更痛",
+    "pool_size": 17,
+    "candidates": [
+      {
+        "book_id": "1764643a-3ab1-5004-a1c8-37f8f296938d",
+        "title": "我始終難忘，你淚中那灼眼的餘暉",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "21a50e19-8c91-55f2-b292-2a70544a965a",
+        "title": "那年夏天，在夢境尾聲墜入愛河",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "255b1b2a-a923-5199-ac76-20757270f55d",
+        "title": "因為是我先喜歡上的",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 2,
+          "FilteredVector": 2,
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "a1b7a32e-72ce-5d48-91ee-814815e0ea08",
+        "title": "愛人錯過",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 8,
+          "FilteredVector": 9,
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "935bd3c1-b115-583b-9d12-72983a63058a",
+        "title": "這種酸我是第一次嘗到",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 6,
+          "FilteredVector": 6,
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "c8c8ae2b-7ff0-592f-84d8-b81d4421fa5f",
+        "title": "夢與歌",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "44018615-6478-568b-9849-d970bffc46da",
+        "title": "我的漢化組偽娘高中生正在試圖與我拉近距離 ， 別開玩笑了",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 4
+        }
+      },
+      {
+        "book_id": "6ccd2b9a-9429-5373-8b36-c2a154d6bf0d",
+        "title": "這個△戀愛喜劇有獲得幸福的義務",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3,
+          "FilteredVector": 5
+        }
+      },
+      {
+        "book_id": "abf4156d-f347-5f96-b291-a23c7e8ba84a",
+        "title": "愛意複雜化",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 4,
+          "FilteredVector": 8,
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "dd5b50b8-22e0-5890-a5c4-ba01b5811a6e",
+        "title": "修羅場戀人",
+        "source_engines": [
+          "PureVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10,
+          "FilteredVector": 10
+        }
+      },
+      {
+        "book_id": "de0ea9cb-6bac-5b2f-a4f0-2b3e0137567f",
+        "title": "疑心戀心",
+        "source_engines": [
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "FilteredVector": 7
+        }
+      },
+      {
+        "book_id": "593175e2-9d66-555e-8197-d5f71656ca55",
+        "title": "失戀後，原本冷淡的青梅竹馬變得溫柔嬌甜",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "1e2e5f01-f2f5-5241-9c4b-81cb6a9e90b6",
+        "title": "三角的距離無限趨近零",
         "source_engines": [
           "PureVector",
           "FilteredVector",
@@ -442,62 +4847,209 @@
         }
       },
       {
-        "book_id": "10856",
-        "title": "有效期限",
+        "book_id": "c635792f-2f22-5a29-8d4d-a064209efff2",
+        "title": "羞羞三角",
         "source_engines": [
           "PureVector",
-          "FilteredVector",
+          "FilteredVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5,
+          "FilteredVector": 3
+        }
+      },
+      {
+        "book_id": "61dfe1e2-c63f-5731-a0b4-eb0815a292b1",
+        "title": "友情，親情，戀情所編織的青春",
+        "source_engines": [
           "HybridReasoner"
         ],
         "original_ranks": {
-          "PureVector": 4,
-          "FilteredVector": 7,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "7c6737cf-b321-5296-97c5-9732ce37f1f4",
+        "title": "你不在的七月六日",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "a4884190-0809-5afc-8a74-103db5a04bb0",
+        "title": "你又是誰的外遇",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q22",
+    "query": "就是不後宮不NTR純純的戀愛作品 虐也行 比較希望校園類 其他類型也可以介紹看看 最近看一堆異世界後宮戰鬥有點膩了......\n還有兄妹的作品 滿喜歡兄妹類型的 隨便丟一張圖",
+    "pool_size": 19,
+    "candidates": [
+      {
+        "book_id": "f95645c4-a52c-5740-91b6-026315f5c3db",
+        "title": "我的世界只剩三步，而她仍在一步之遙",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "6bc34f3f-5659-5bc1-b6c3-bc36899d6101",
+        "title": "學妹、是妹嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "4e516f72-fd36-51c3-9e63-5861e1903be2",
+        "title": "請把我當成妹妹，給我超越女友的愛。",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "ff4cfec9-a022-5307-a59c-b52ef5fa79e9",
+        "title": "心上人的妹妹",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
           "HybridReasoner": 5
         }
       },
       {
-        "book_id": "4642",
-        "title": "惡霸少爺愛上我",
+        "book_id": "f7b9b9cc-f9b0-505e-bd14-834b485ebe71",
+        "title": "有妹妹的高中日常",
         "source_engines": [
-          "FilteredVector"
+          "HybridReasoner"
         ],
         "original_ranks": {
-          "FilteredVector": 9
+          "HybridReasoner": 4
         }
       },
       {
-        "book_id": "13908",
-        "title": "《戀吻螢光幕》",
+        "book_id": "9c984b3e-58fc-5f9d-b035-2c6221a7967d",
+        "title": "班上最可愛的辣妹成了我的投食對象這件事",
         "source_engines": [
-          "FilteredVector"
+          "HybridReasoner"
         ],
         "original_ranks": {
-          "FilteredVector": 8
+          "HybridReasoner": 6
         }
       },
       {
-        "book_id": "102",
-        "title": "泡沫之梯",
+        "book_id": "da621eb9-df6b-533d-8756-a58fb78f996d",
+        "title": "推薦一起共度初體驗的她",
         "source_engines": [
-          "ExactMatch"
+          "PureVector"
         ],
         "original_ranks": {
-          "ExactMatch": 8
+          "PureVector": 1
         }
       },
       {
-        "book_id": "86",
-        "title": "《鬼島故事集》長生禮儀社",
+        "book_id": "1764643a-3ab1-5004-a1c8-37f8f296938d",
+        "title": "我始終難忘，你淚中那灼眼的餘暉",
         "source_engines": [
-          "ExactMatch"
+          "HybridReasoner"
         ],
         "original_ranks": {
-          "ExactMatch": 7
+          "HybridReasoner": 3
         }
       },
       {
-        "book_id": "5565",
-        "title": "倪匡科幻獎投稿作品集",
+        "book_id": "9f5a2fac-16a8-5430-9c6f-ad81cdfbf960",
+        "title": "被摯友NTR的我，開始和他的妹妹打情罵俏",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "b8509d45-0a51-5ee3-b322-58d33a2bf67c",
+        "title": "大學社團里最可愛的學妹",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 4,
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "3aec5cb6-b058-5807-85fa-b5c1ddcc8af8",
+        "title": "好友的妹妹似乎願意協助我創作成人小說",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "5c039d3d-8eb9-5960-abd0-0366d37eedf9",
+        "title": "我喜歡的妹妹不是妹妹",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "e839093b-8db7-5226-b3c8-1341ea85ea97",
+        "title": "在櫻花落盡前",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "6058fc96-a8c5-5296-bb7b-76c2748cd926",
+        "title": "超妹理論",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "2206c357-6b3e-5d15-b295-43245fbd11d4",
+        "title": "晚上九點，陽台對面的女神學姐只屬於我",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "b99645cf-9157-5356-bfac-54fd0c09e305",
+        "title": "青梅竹馬是妹妹，景山北斗的哀與愛",
         "source_engines": [
           "HybridReasoner"
         ],
@@ -506,69 +5058,407 @@
         }
       },
       {
-        "book_id": "24",
-        "title": "誕降師",
+        "book_id": "c5c19467-d612-51c8-8402-43d65e63fc8c",
+        "title": "英知學園的UNDER HEART",
         "source_engines": [
-          "ExactMatch"
+          "PureVector"
         ],
         "original_ranks": {
-          "ExactMatch": 1
+          "PureVector": 6
         }
       },
       {
-        "book_id": "74",
-        "title": "阿勃勒之夏",
+        "book_id": "61dfe1e2-c63f-5731-a0b4-eb0815a292b1",
+        "title": "友情，親情，戀情所編織的青春",
         "source_engines": [
-          "ExactMatch"
-        ],
-        "original_ranks": {
-          "ExactMatch": 6
-        }
-      },
-      {
-        "book_id": "17043",
-        "title": "【靈能偵察I】在結束時開始",
-        "source_engines": [
-          "FilteredVector"
-        ],
-        "original_ranks": {
-          "FilteredVector": 6
-        }
-      },
-      {
-        "book_id": "31097",
-        "title": "客製化戀人",
-        "source_engines": [
-          "PureVector",
-          "FilteredVector",
           "HybridReasoner"
         ],
         "original_ranks": {
-          "PureVector": 2,
-          "FilteredVector": 2,
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "44e22022-178c-5431-909f-65e11dd922e2",
+        "title": "與妹妹相親相愛！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q23",
+    "query": "最近不知道要看什麼，想請大家推薦一些好看的作品\n\n裝逼開掛類的\n黑暗懸疑的\n或是一些風格冷門的都還算喜歡\n只有一個大前提，不要後宮，不要賣肉（好像變2個大前提了？\n不喜歡那種明明男主沒幹什麼但每個女角都喜歡他，非得要的話2個是極限，而且劇情希望能別注重在他們愛來愛去互刷好感度卻又不決定人選的地方，如果是冒險類作品增加同伴的時候，可以的話別清一色都女的偶而也增加點男性同伴也好（都女的最後8成都變後宮\n再來不要硬賣一些福利，例如某漫畫的黎斗摔，或者是洗澡時剛好開門，或者是組個樂團為了討老師歡心換了泳裝演奏……這種的不太能接受\n\n喜歡偏向下剋上（不管是強者因未知原因被分到弱組還是靠努力爬上來把上位者打趴的都喜歡）\n描寫內心戲多的（黑掉壞掉，或是溫馨感動的都喜歡）\n不好意思這麼麻煩…因為總感覺現在大眾向的作品，開掛後宮福利都會有，希望能找到一些後宮福利少點的",
+    "pool_size": 19,
+    "candidates": [
+      {
+        "book_id": "504316da-ac33-5e15-a8a6-465f3437a2b6",
+        "title": "通向幕後黑手的最優解",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "30bb927d-780d-5902-b4e1-e83b28777420",
+        "title": "用催眠APP打造夢幻後宮生活",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 7
+        }
+      },
+      {
+        "book_id": "f572be51-312e-5a47-bb4e-da0034453771",
+        "title": "魔術學園領域的拳王",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "5e6b423c-7a1a-5f87-899f-63257f2d3f30",
+        "title": "SUGAR DARK 被埋葬的黑暗與少女",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "722f8e27-8132-56de-87ed-c2931b672565",
+        "title": "異世界和我，你喜歡哪個？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "8b4da5d2-c564-550f-a69f-54b7db5632ab",
+        "title": "靠心理學的異世界後宮建國記",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
+        }
+      },
+      {
+        "book_id": "5d9487cd-605e-517f-ba0d-5c0498d217e2",
+        "title": "轉生成為漫畫中最壞的男人，女主角卻還是來靠近我",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 6
+        }
+      },
+      {
+        "book_id": "bd7970a2-4884-509b-9c68-d62856732ac1",
+        "title": "幻想之花向死而生",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "f6b093b9-18c2-52e2-a0c3-a01773e61032",
+        "title": "Missing 神隱物語",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "a6a008ff-5fd1-56b1-b96a-61c2eaa6488d",
+        "title": "黑之夜刀神",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "cbc17656-270f-50e7-94fc-254760904fd1",
+        "title": "不要再發獃了，請認真戰鬥！！！",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "9015c824-aff5-5ced-b010-d311382175fd",
+        "title": "別太愛我，孤狼不想開後宮。",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
+        }
+      },
+      {
+        "book_id": "8bb81a74-5f80-5b8b-ab6b-fac982b80b02",
+        "title": "喜歡愛情喜劇的主人公嗎？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 1
+        }
+      },
+      {
+        "book_id": "ff3c332e-0d93-5ba4-bddb-b56e2a4c8012",
+        "title": "暗黑童話",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "eacc91aa-3254-5101-ba71-875fa48920e0",
+        "title": "我曾經夢想擁有一個後宮，但我要的不是病嬌後宮！ 〜一群自稱被男朋友(？)NTR的女孩們一直纏著我，但她們卻完全把我當成自己的道具，這實在是讓我非常困擾？〜",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "c1671ecc-ad1e-54f8-a629-7c7f3f6a01a0",
+        "title": "暗之皇太子",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "0637862a-2f34-5a0c-8520-c3f0d1aec809",
+        "title": "看來我好像被女主角們討厭了的樣子，所以我想貫徹旁觀位置。",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 4
+        }
+      },
+      {
+        "book_id": "3ab30137-9548-55ec-a0dc-438cb7cda855",
+        "title": "Arist Craisi 穴藏惡魔",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
           "HybridReasoner": 3
         }
       },
       {
-        "book_id": "19226",
-        "title": "鑽石計劃",
+        "book_id": "eba40801-ce65-5319-a1a6-7f0fcdbc8899",
+        "title": "BLADE＆BASTARD",
         "source_engines": [
-          "FilteredVector"
+          "PureVector",
+          "HybridReasoner"
         ],
         "original_ranks": {
-          "FilteredVector": 5
+          "PureVector": 8,
+          "HybridReasoner": 5
+        }
+      }
+    ]
+  },
+  {
+    "query_id": "q24",
+    "query": "要求有點難找\n希望推薦\"戰爭+戀愛\"要素的輕小說,不是戰\"鬥\"是戰\"爭\"\n要完結了的,GOOD ENDING最好",
+    "pool_size": 16,
+    "candidates": [
+      {
+        "book_id": "db9afaf0-be63-58a1-8cc4-8f429f400621",
+        "title": "這是你與我的最後戰場，或是開創世界的聖戰",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 2
         }
       },
       {
-        "book_id": "2308",
-        "title": "在地球的最後一天",
+        "book_id": "3154fd19-0f17-59c1-93ca-5147e84fd473",
+        "title": "重裝武器",
         "source_engines": [
           "PureVector",
-          "FilteredVector"
+          "HybridReasoner"
         ],
         "original_ranks": {
-          "PureVector": 10,
-          "FilteredVector": 10
+          "PureVector": 4,
+          "HybridReasoner": 4
+        }
+      },
+      {
+        "book_id": "ff3cf726-e940-59e0-80e2-a6b6f6a3a583",
+        "title": "生存以上，戀愛未滿 ～ 在日本難以維持生計的我怎能與你們戀愛",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 8
+        }
+      },
+      {
+        "book_id": "5f94be48-395c-5b58-bc2e-c7fccca5abc7",
+        "title": "終將墜入愛河的Vivi Lane",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 6,
+          "HybridReasoner": 8
+        }
+      },
+      {
+        "book_id": "6e794b6c-3c6d-5af0-84e4-f7dc64f9c826",
+        "title": "精靈奴隸救國戰爭 王子想守護公主騎士",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 9
+        }
+      },
+      {
+        "book_id": "aa643112-41f7-50f6-aac9-c64f63662e80",
+        "title": "火之國、風之國物語",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 7
+        }
+      },
+      {
+        "book_id": "35c561f9-a902-5567-b1ca-eba5d095b583",
+        "title": "從被子彈擊中的戰場消失吧",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 1,
+          "HybridReasoner": 10
+        }
+      },
+      {
+        "book_id": "c610eb0b-932b-502d-a02a-883027de66e1",
+        "title": "無名戰記",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 6
+        }
+      },
+      {
+        "book_id": "efb31193-fa12-50fd-aa1f-b136d654164a",
+        "title": "對某飛行員的追憶",
+        "source_engines": [
+          "PureVector",
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "PureVector": 7,
+          "HybridReasoner": 2
+        }
+      },
+      {
+        "book_id": "cbc17656-270f-50e7-94fc-254760904fd1",
+        "title": "不要再發獃了，請認真戰鬥！！！",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 5
+        }
+      },
+      {
+        "book_id": "8c4814f2-3598-5c34-9b70-2eece3f156e4",
+        "title": "獻給某飛行員的戀歌",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 3
+        }
+      },
+      {
+        "book_id": "71f77f35-ce5d-5966-b8de-af9b1016d8d9",
+        "title": "公主的獻祭",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 9
+        }
+      },
+      {
+        "book_id": "8abb0fa8-af2a-515e-be02-b32ab24fd33c",
+        "title": "吾等即戰爭：魔法少女們的1944",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 5
+        }
+      },
+      {
+        "book_id": "e48a3005-4468-5c91-8cd5-97c635a2a26a",
+        "title": "千年戰爭Aigis 月下的花嫁",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 3
+        }
+      },
+      {
+        "book_id": "71f5fa8e-1551-527c-877d-b0c6680158db",
+        "title": "約定之柱，落日的女王",
+        "source_engines": [
+          "HybridReasoner"
+        ],
+        "original_ranks": {
+          "HybridReasoner": 1
+        }
+      },
+      {
+        "book_id": "909ec171-f0e7-5e32-a439-9542abe7e289",
+        "title": "雖然是最後的魔女，會愛上哥哥兩次也不奇怪吧？",
+        "source_engines": [
+          "PureVector"
+        ],
+        "original_ranks": {
+          "PureVector": 10
         }
       }
     ]
