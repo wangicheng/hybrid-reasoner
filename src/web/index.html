@@ -29,11 +29,6 @@
                     <option value="gemini-3-flash-preview">Gemini 3 Flash (快速)</option>
                 </select>
 
-                <select id="rerank-strategy-select" class="search-select">
-                    <option value="score_only" selected>原版</option>
-                    <option value="hybrid_fusion">原版 + CrossEncoder Reranker</option>
-                    <option value="original_llm_reranker_top10">原版 + LLM Reranker</option>
-                </select>
 
                 <button id="search-btn" onclick="performSearch()">
                     <i class="fa-solid fa-magnifying-glass"></i> 搜尋

@@ -8,15 +8,12 @@ from src.logic.registry import ScoringRegistry
 from qdrant_client.http import models as rest
 import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
-from src.core.reranker import Reranker
-from src.core.llm_reranker import LLMReranker
 from src.config import settings
 
 class BaseEngine:
     def __init__(self, db=None, vs=None):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
-        self.reranker = Reranker()
 
     def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
         """
@@ -277,7 +274,6 @@ class HybridReasonerEngine(BaseEngine):
     """
     def __init__(self, db=None, vs=None):
         super().__init__(db, vs)
-        self.llm_reranker = LLMReranker()
 
     @staticmethod
     def _minmax_normalize(values: List[float]) -> List[float]:
@@ -408,8 +404,6 @@ class HybridReasonerEngine(BaseEngine):
         limit: int = 5,
         model_id: Optional[str] = None,
         explain: bool = True,
-        rerank_strategy: Optional[str] = None,
-        rerank_alpha: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Executes the full search pipeline.
@@ -417,9 +411,7 @@ class HybridReasonerEngine(BaseEngine):
         # 1. Parse Query
         parse_result = parse_query(user_query, model_id=model_id)
         
-        # 2. Build Qdrant Filter
-        qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
-        
+        # 2. 準備檢索字詞 (不使用 Qdrant 硬過濾，讓所有書籍進入多維度加權)
         base_terms = " ".join(parse_result.search_terms) or parse_result.original_query
         
         expanded_terms = base_terms
@@ -433,23 +425,16 @@ class HybridReasonerEngine(BaseEngine):
             print(f"[Engine] 🔮 HyDE 假想簡介: {parse_result.hypothetical_intro[:80]}...")
             expanded_terms += f" {parse_result.hypothetical_intro}"
         
+        # 取回全部資料進行純 Python 多維度軟評分
+        retrieval_limit = 10000 
         vector_results, query_vector = self.vs.search(
             expanded_terms, 
-            limit=50,
-            query_filter=qdrant_filter,
+            limit=retrieval_limit,
+            query_filter=None,  # 移除硬過濾
             with_payload=True 
         )
         
-        is_relaxed = False
-        if len(vector_results) < 3 and qdrant_filter is not None:
-            print(f"[Engine] ⚠️ 搜尋結果過少 ({len(vector_results)} 筆)，啟動自動放寬機制 (移除 Hard Filter)...")
-            vector_results, query_vector = self.vs.search(
-                expanded_terms, 
-                limit=50,
-                query_filter=None,
-                with_payload=True 
-            )
-            is_relaxed = True
+        is_relaxed = True  # 標記為放寬，因為我們沒有用任何硬條件
         
         candidates_map = {} 
         vector_score_map = {}
@@ -522,7 +507,7 @@ class HybridReasonerEngine(BaseEngine):
             v_score = vector_score_map.get(bid, 0.0)
             v_norm = vector_norm_map.get(bid, self._normalize_vector_score(float(v_score)))
             
-            # Calculate final hybrid score (Rule + Vector/Rerank)
+            # Calculate final hybrid score (Rule + Vector)
             score_val, breakdown = self.calculate_score(
                 item,
                 parse_result.criteria,
@@ -540,114 +525,11 @@ class HybridReasonerEngine(BaseEngine):
                 "payload": payload_map.get(str(item["id"]), {}) 
             })
 
-        strategy = (rerank_strategy or settings.RERANK_STRATEGY or "score_only").lower().strip()
-        allowed_strategies = {"score_only", "rerank_only", "hybrid_fusion", "original_llm_reranker_top10"}
-        if strategy not in allowed_strategies:
-            strategy = "score_only"
-
-        alpha = rerank_alpha if rerank_alpha is not None else settings.RERANK_FUSION_ALPHA
-        try:
-            alpha = float(alpha)
-        except (TypeError, ValueError):
-            alpha = 0.3
-        alpha = max(0.0, min(1.0, alpha))
-            
-        # 5. Rerank (Optional)
-        if self.reranker and scored_items and strategy in {"rerank_only", "hybrid_fusion"}:
-            rerank_query = user_query
-            if parse_result.search_terms:
-                rerank_query = " ".join(parse_result.search_terms)
-
-            base_candidates = [entry['item'] for entry in scored_items]
-            reranked_items = self.reranker.rerank(rerank_query, base_candidates, top_k=len(base_candidates))
-
-            rerank_map = {}
-            for rank_idx, item in enumerate(reranked_items):
-                item_id = str(item.get("id"))
-                rerank_map[item_id] = {
-                    "rerank_score": float(item.get("rerank_score", 0.0)),
-                    "rerank_rank": rank_idx + 1,
-                }
-
-            for entry in scored_items:
-                item_id = str(entry["item"].get("id"))
-                rerank_info = rerank_map.get(item_id)
-                if rerank_info:
-                    entry["rerank_score"] = rerank_info["rerank_score"]
-                    entry["rerank_rank"] = rerank_info["rerank_rank"]
-                else:
-                    entry["rerank_score"] = 0.0
-                    entry["rerank_rank"] = len(scored_items) + 1
-
-        # 5b. LLM Rerank Top-10 (Only for explicit mode)
-        if self.llm_reranker and scored_items and strategy == "original_llm_reranker_top10":
-            rerank_query = user_query
-            if parse_result.search_terms:
-                rerank_query = " ".join(parse_result.search_terms)
-
-            llm_ranked = self.llm_reranker.rerank(
-                query=rerank_query,
-                candidates=[entry["item"] for entry in scored_items],
-                top_k=10,
-                model_id=model_id,
-            )
-            llm_rank_map = {str(r.get("id")): r for r in llm_ranked}
-            for entry in scored_items:
-                item_id = str(entry["item"].get("id"))
-                llm_info = llm_rank_map.get(item_id)
-                if llm_info:
-                    entry["llm_rerank_score"] = float(llm_info.get("llm_rerank_score", 0.0))
-                    entry["llm_rerank_rank"] = int(llm_info.get("llm_rerank_rank", 999))
-                else:
-                    entry["llm_rerank_score"] = 0.0
-                    entry["llm_rerank_rank"] = 999
-
-        if strategy == "original_llm_reranker_top10" and scored_items and any("llm_rerank_score" in e for e in scored_items):
-            base_scores = [float(e["score"]) for e in scored_items]
-            llm_scores = [float(e.get("llm_rerank_score", 0.0)) for e in scored_items]
-            norm_base_scores = self._minmax_normalize(base_scores)
-            norm_llm_scores = self._minmax_normalize(llm_scores)
-
-            for idx, entry in enumerate(scored_items):
-                entry["normalized_score"] = norm_base_scores[idx]
-                entry["normalized_llm_rerank_score"] = norm_llm_scores[idx]
-                entry["final_sort_score"] = (1.0 - alpha) * norm_base_scores[idx] + alpha * norm_llm_scores[idx]
-        elif scored_items and any("rerank_score" in e for e in scored_items):
-            base_scores = [float(e["score"]) for e in scored_items]
-            rerank_scores = [float(e.get("rerank_score", 0.0)) for e in scored_items]
-            norm_base_scores = self._minmax_normalize(base_scores)
-            norm_rerank_scores = self._minmax_normalize(rerank_scores)
-
-            for idx, entry in enumerate(scored_items):
-                entry["normalized_score"] = norm_base_scores[idx]
-                entry["normalized_rerank_score"] = norm_rerank_scores[idx]
-
-                if strategy == "rerank_only":
-                    entry["final_sort_score"] = norm_rerank_scores[idx]
-                elif strategy == "hybrid_fusion":
-                    entry["final_sort_score"] = (1.0 - alpha) * norm_base_scores[idx] + alpha * norm_rerank_scores[idx]
-                else:
-                    entry["final_sort_score"] = float(entry["score"])
-        else:
-            for entry in scored_items:
-                entry["final_sort_score"] = float(entry["score"])
-
-        if strategy == "rerank_only" and not any("rerank_score" in e for e in scored_items):
-            strategy = "score_only"
-        if strategy == "hybrid_fusion" and not any("rerank_score" in e for e in scored_items):
-            strategy = "score_only"
-        if strategy == "original_llm_reranker_top10" and not any("llm_rerank_score" in e for e in scored_items):
-            strategy = "score_only"
-        
-        # 6. Final Rank
-        # Sort by selected strategy score
-        scored_items.sort(key=lambda x: float(x.get("final_sort_score", x["score"])), reverse=True)
+        # 最終排序
+        scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
         
         # 放寬搜尋的最低語意門檻：過濾掉向量分數太低的雜訊
-        if scored_items and scored_items[0].get("rerank_score") is not None:
-             threshold = 0.01 
-        else:
-             threshold = 0.6
+        threshold = 0.6
         
         if is_relaxed:
             scored_items = [r for r in scored_items if float(r['vector_score']) > threshold]
@@ -705,9 +587,6 @@ class HybridReasonerEngine(BaseEngine):
             "results": final_results,
             "is_relaxed": is_relaxed,
             "engine": "HybridReasonerEngine",
-            "rerank_strategy": strategy,
-            "rerank_alpha": alpha,
-            "llm_rerank_top_k": 10 if strategy == "original_llm_reranker_top10" else 0,
         }
 
 # 為了維持對既有程式碼 (`web_api.py`) 的向後相容性，將 HybridEngine 指向 HybridReasonerEngine

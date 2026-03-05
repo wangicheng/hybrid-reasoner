@@ -3,7 +3,6 @@ const API_URL = "/api/search";
 async function performSearch() {
   const query = document.getElementById('query-input').value;
   const modelId = document.getElementById('model-select').value;
-  const rerankStrategy = document.getElementById('rerank-strategy-select').value;
   const resultsContainer = document.getElementById('results-container');
   const interpretationBox = document.getElementById('search-interpretation');
   const loading = document.getElementById('loading');
@@ -22,9 +21,7 @@ async function performSearch() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query: query,
-        model_id: modelId,
-        rerank_strategy: rerankStrategy,
-        rerank_alpha: 0.3
+        model_id: modelId
       })
     });
 
@@ -169,24 +166,6 @@ function createResultCard(result) {
   // 我們將每個評分項目的 weighted_score 繪製成條狀圖
   // 為了顯示比例，我們假設滿分是 1.0 (或根據實際總分動態調整)
   let breakdownHtml = '<div class="score-breakdown">';
-  const hasCrossEncoderScore = result.rerank_score !== undefined && result.rerank_score !== null;
-  const hasNormalizedCrossEncoder = result.normalized_rerank_score !== undefined && result.normalized_rerank_score !== null;
-
-  if (hasCrossEncoderScore) {
-    const ceRaw = Number(result.rerank_score) || 0;
-    const ceNorm = hasNormalizedCrossEncoder ? Number(result.normalized_rerank_score) || 0 : null;
-    const ceBar = ceNorm !== null ? ceNorm : Math.max(0, Math.min(1, (ceRaw + 10) / 20));
-    breakdownHtml += `
-      <div class="score-bar-container">
-          <span class="score-label">CrossEncoder Rerank</span>
-          <span class="score-value">${ceRaw.toFixed(3)}</span>
-          <div class="progress-track">
-              <div class="progress-fill" style="width: ${Math.min(ceBar * 100, 100)}%; background-color: #3f51b5"></div>
-          </div>
-      </div>
-      <div class="score-reason">CrossEncoder 相關性分數${ceNorm !== null ? `（正規化: ${ceNorm.toFixed(3)}）` : ''}</div>
-    `;
-  }
 
   if (result.breakdown) {
     result.breakdown.forEach(b => {
@@ -222,10 +201,8 @@ function createResultCard(result) {
   }
   breakdownHtml += '</div>';
 
-  const scoreBadgeLabel = hasCrossEncoderScore ? 'CrossEncoder' : 'Score';
-  const scoreBadgeValue = hasCrossEncoderScore
-    ? Number(result.rerank_score || 0).toFixed(4)
-    : Number(result.score || 0).toFixed(4);
+  const scoreBadgeLabel = 'Score';
+  const scoreBadgeValue = Number(result.score || 0).toFixed(4);
 
   // 3. AI 解釋區塊 (Collapsible)
   // 只有當後端有回傳 explanation 時才顯示

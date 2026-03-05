@@ -20,7 +20,6 @@ graph TD
     end
     
     subgraph "融合與輸出模組 (Fusion & Output)"
-        Reranker["重排序引擎 (Re-ranker)<br>特徵融合打分"]
         Result([Top-K 小說推薦列表])
     end
 
@@ -39,9 +38,8 @@ graph TD
     TextDB -->|Top-N 關鍵字結果| RuleEngine
     HardFilter -->|SQL/Filter 條件| RuleEngine
     
-    RuleEngine -->|符合規則的候選集| Reranker
-    Reranker -->|計算最終分數 如 NDCG 最佳化| Result
+    RuleEngine -->|符合規則的候選排序| Result
     
-    class Parser,Reranker highlight;
+    class Parser highlight;
     class VectorDB,TextDB database;
 ```
