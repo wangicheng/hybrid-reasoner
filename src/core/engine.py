@@ -184,10 +184,11 @@ class PureVectorEngine(BaseEngine):
         """
         try:
             vector_results, query_vector = self.vs.search(
-                user_query, # 完全使用使用者的原始字串
+                user_query,
                 limit=limit,
-                query_filter=None, # 無任何硬性限制
-                with_payload=True 
+                query_filter=None,
+                with_payload=True,
+                vector_name="content"
             )
             
             scored_items = []
@@ -239,7 +240,8 @@ class FilteredVectorEngine(BaseEngine):
                 base_terms, 
                 limit=limit,
                 query_filter=qdrant_filter,
-                with_payload=True 
+                with_payload=True,
+                vector_name="content"
             )
             
             scored_items = []
@@ -307,11 +309,13 @@ class HybridReasonerEngine(BaseEngine):
         criteria_list: List[Any],
         vector_score: float = 0.0,
         normalized_vector_score: Optional[float] = None,
+        tag_vector_score: float = 0.0,
+        normalized_tag_vector_score: Optional[float] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         total_score = 0.0
         breakdown = []
         
-        # --- 1. 處理向量分數 ---
+        # --- 1. 處理內容向量分數 ---
         semantic_criteria = next((c for c in criteria_list if c.name == "semantic_similarity"), None)
         
         is_sem_negative = getattr(semantic_criteria, 'is_negative', False) if semantic_criteria else False
@@ -334,6 +338,25 @@ class HybridReasonerEngine(BaseEngine):
             "normalized_score": normalized_v_score, 
             "weighted_score": v_score_contrib,
             "reason": f"語意相似度 {vector_score:.3f} -> Norm {normalized_v_score:.2f} {reason_suffix}"
+        })
+
+        # --- 1b. 處理標籤向量分數 (Named Vectors) ---
+        normalized_t_score = (
+            normalized_tag_vector_score
+            if normalized_tag_vector_score is not None
+            else self._normalize_vector_score(tag_vector_score)
+        )
+        t_score_contrib = normalized_t_score * sem_weight  # Same direction as semantic
+        total_score += t_score_contrib
+        
+        breakdown.append({
+            "criteria": "tag_vector_similarity",
+            "label": "標籤語意相似度",
+            "weight": sem_weight,
+            "raw_score": tag_vector_score,
+            "normalized_score": normalized_t_score,
+            "weighted_score": t_score_contrib,
+            "reason": f"標籤向量 {tag_vector_score:.3f} -> Norm {normalized_t_score:.2f}"
         })
 
         # --- 2. 處理其他規則分數 ---
@@ -433,11 +456,29 @@ class HybridReasonerEngine(BaseEngine):
             print(f"[Engine] 🔮 HyDE 假想簡介: {parse_result.hypothetical_intro[:80]}...")
             expanded_terms += f" {parse_result.hypothetical_intro}"
         
+        # --- Content Vector Search ---
         vector_results, query_vector = self.vs.search(
             expanded_terms, 
             limit=50,
             query_filter=qdrant_filter,
-            with_payload=True 
+            with_payload=True,
+            vector_name="content",
+            task_type="RETRIEVAL_QUERY"
+        )
+        
+        # --- Tag Vector Search ---
+        tag_query = " ".join(parse_result.search_terms) or parse_result.original_query
+        if parse_result.generated_keywords:
+            tag_query += " " + " ".join(parse_result.generated_keywords[:5])  # Top-5 keywords only
+        
+        print(f"[Engine] 🏷️ Tag vector query: {tag_query[:60]}...")
+        tag_results, _ = self.vs.search(
+            tag_query,
+            limit=30,
+            query_filter=qdrant_filter,
+            with_payload=True,
+            vector_name="tags",
+            task_type="SEMANTIC_SIMILARITY"
         )
         
         is_relaxed = False
@@ -447,14 +488,26 @@ class HybridReasonerEngine(BaseEngine):
                 expanded_terms, 
                 limit=50,
                 query_filter=None,
-                with_payload=True 
+                with_payload=True,
+                vector_name="content",
+                task_type="RETRIEVAL_QUERY"
+            )
+            tag_results, _ = self.vs.search(
+                tag_query,
+                limit=30,
+                query_filter=None,
+                with_payload=True,
+                vector_name="tags",
+                task_type="SEMANTIC_SIMILARITY"
             )
             is_relaxed = True
         
         candidates_map = {} 
-        vector_score_map = {}
+        vector_score_map = {}    # Content vector scores
+        tag_score_map = {}       # Tag vector scores
         payload_map = {} 
 
+        # Collect content vector results
         for hit in vector_results:
             item = self.db.get_item(hit["id"])
             if item:
@@ -464,26 +517,32 @@ class HybridReasonerEngine(BaseEngine):
                 if hit.get('payload'):
                     payload_map[bid] = hit['payload']
         
+        # Collect tag vector results (merge into candidates)
+        for hit in tag_results:
+            bid_raw = hit["id"]
+            item = self.db.get_item(bid_raw)
+            if item:
+                bid = str(item["id"])
+                if bid not in candidates_map:
+                    candidates_map[bid] = item
+                    print(f"[Engine] 🏷️ Tag search added: {item.get('name', 'N/A')}")
+                tag_score_map[bid] = hit["score"]
+                if hit.get('payload') and bid not in payload_map:
+                    payload_map[bid] = hit['payload']
+
         # 3. Structural Retrieval (Title & Author Match)
-        # 3a. Title Match (Newly Added for Exact Title Search)
-        # Utilizes search_terms to find exact book matches
         for term in parse_result.search_terms:
-            if len(term) < 2: continue # Skip single chars
+            if len(term) < 2: continue
             title_matches = self.db.search_by_title_fuzzy(term)
             for book in title_matches:
                 b_id = str(book["id"])
-                # Only add if robust match (e.g. term is significant part of title)
-                # For now, trust the keyword search but assign high score
                 if b_id not in candidates_map:
                     print(f"[Engine] 📖 Title Match found: {book['name']} (term: {term})")
                     candidates_map[b_id] = book
-                    # Assign max vector score for direct title match
                     vector_score_map[b_id] = 1.0 
 
-        # 3b. Author Match
         for criterion in parse_result.criteria:
             if criterion.name == "author_match":
-                # Handle parameter extraction more safely
                 if hasattr(criterion.parameters, 'author_name'):
                     author_name = criterion.parameters.author_name
                 elif isinstance(criterion.parameters, dict):
@@ -501,8 +560,7 @@ class HybridReasonerEngine(BaseEngine):
 
         candidates = list(candidates_map.values())
 
-        # 4. Scoring
-        # Dynamic normalization within current query candidates (restores discrimination)
+        # 4. Scoring — normalize both content and tag vector scores
         vector_norm_map: Dict[str, float] = {}
         if vector_score_map:
             vector_values = [float(v) for v in vector_score_map.values()]
@@ -516,18 +574,34 @@ class HybridReasonerEngine(BaseEngine):
                 for bid, raw_v in vector_score_map.items():
                     vector_norm_map[bid] = self._normalize_vector_score(float(raw_v))
 
+        tag_norm_map: Dict[str, float] = {}
+        if tag_score_map:
+            tag_values = [float(v) for v in tag_score_map.values()]
+            min_tag = min(tag_values)
+            max_tag = max(tag_values)
+
+            if max_tag - min_tag > 1e-9:
+                for bid, raw_t in tag_score_map.items():
+                    tag_norm_map[bid] = (float(raw_t) - min_tag) / (max_tag - min_tag)
+            else:
+                for bid, raw_t in tag_score_map.items():
+                    tag_norm_map[bid] = self._normalize_vector_score(float(raw_t))
+
         scored_items = []
         for item in candidates:
             bid = str(item["id"])
             v_score = vector_score_map.get(bid, 0.0)
             v_norm = vector_norm_map.get(bid, self._normalize_vector_score(float(v_score)))
+            t_score = tag_score_map.get(bid, 0.0)
+            t_norm = tag_norm_map.get(bid, self._normalize_vector_score(float(t_score)))
             
-            # Calculate final hybrid score (Rule + Vector/Rerank)
             score_val, breakdown = self.calculate_score(
                 item,
                 parse_result.criteria,
                 vector_score=v_score,
                 normalized_vector_score=v_norm,
+                tag_vector_score=t_score,
+                normalized_tag_vector_score=t_norm,
             )
 
             final_score = float(score_val)
@@ -536,6 +610,7 @@ class HybridReasonerEngine(BaseEngine):
                 "item": item,
                 "score": final_score,
                 "vector_score": v_score,
+                "tag_vector_score": t_score,
                 "breakdown": breakdown,
                 "payload": payload_map.get(str(item["id"]), {}) 
             })

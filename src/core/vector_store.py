@@ -1,8 +1,10 @@
+import time
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
 from google import genai
 from google.genai import types
 from src.config import settings
+from src.core.api_utils import retry_on_rate_limit
 from typing import List, Dict, Any, Optional, Tuple
 import os
 from pathlib import Path
@@ -25,15 +27,26 @@ class VectorStore:
         self._ensure_collection()
 
     def _ensure_collection(self):
+        """
+        Creates a collection with Named Vectors:
+          - "content": for book title + intro (used in semantic retrieval)
+          - "tags":    for classification + tags (used in tag-level retrieval)
+        """
         collections = self.client.get_collections().collections
         exists = any(c.name == self.collection_name for c in collections)
         if not exists:
             self.client.create_collection(
                 collection_name=self.collection_name,
-                vectors_config=rest.VectorParams(
-                    size=3072, # gemini-embedding-001 dimension
-                    distance=rest.Distance.COSINE
-                )
+                vectors_config={
+                    "content": rest.VectorParams(
+                        size=3072,  # gemini-embedding-001 dimension
+                        distance=rest.Distance.COSINE
+                    ),
+                    "tags": rest.VectorParams(
+                        size=3072,
+                        distance=rest.Distance.COSINE
+                    ),
+                }
             )
 
     def search(
@@ -41,33 +54,37 @@ class VectorStore:
         query_text: str, 
         limit: int = 10, 
         query_filter: Optional[rest.Filter] = None,
-        with_payload: bool = True
+        with_payload: bool = True,
+        vector_name: str = "content",
+        task_type: str = "RETRIEVAL_QUERY",
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
-        Performs semantic search with optional filtering.
+        Performs semantic search on a specific named vector.
         
         Args:
             query_text: The search query text to embed and search.
             limit: Maximum number of results to return.
             query_filter: Optional Qdrant Filter object for logic push-down.
-                          Filters are applied at the database level for efficiency.
             with_payload: Whether to return the payload with the results.
+            vector_name: Which named vector to search against ("content" or "tags").
+            task_type: Embedding task type ("RETRIEVAL_QUERY" for content,
+                       "SEMANTIC_SIMILARITY" for tags).
         
         Returns:
             Tuple of (search results, query vector).
         """
-        # Embed query text using text-embedding-004
         embed_response = self.genai_client.models.embed_content(
             model=self.embedding_model,
             contents=query_text,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+            config=types.EmbedContentConfig(task_type=task_type)
         )
         vector = embed_response.embeddings[0].values
         
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=vector,
-            query_filter=query_filter,  # Logic push-down: filter at DB level
+            using=vector_name,  # Named vector selection
+            query_filter=query_filter,
             limit=limit,
             with_payload=with_payload
         )
@@ -80,39 +97,60 @@ class VectorStore:
         
         return formatted_results, vector
 
+    @staticmethod
+    def _build_content_text(item: Dict[str, Any]) -> str:
+        """Builds text for the content vector (title + intro)."""
+        parts = [
+            f"書名: {item.get('name', '')}",
+            f"簡介: {item.get('intro', '')}",
+        ]
+        text = "\n".join([p for p in parts if p.strip()])
+        if not text.strip():
+            text = item.get("name", "")
+        return text
+
+    @staticmethod
+    def _build_tags_text(item: Dict[str, Any]) -> str:
+        """Builds text for the tags vector (classification + tags)."""
+        tag_names = []
+        tags_raw = item.get('tags')
+        if isinstance(tags_raw, list):
+            tag_names = [str(t) for t in tags_raw]
+        
+        classification = item.get('classification', '')
+        
+        parts = []
+        if classification:
+            parts.append(classification)
+        if tag_names:
+            parts.append(', '.join(tag_names))
+        
+        text = ' '.join(parts)
+        if not text.strip():
+            # Fallback: use book name if no tags/classification
+            text = item.get("name", "")
+        return text
+
     def add_items(self, items: List[Dict[str, Any]]):
         """
-        Embeds and adds items to Qdrant in batches.
+        Embeds and adds items to Qdrant with dual named vectors (content + tags).
         """
         valid_items = []
-        texts_to_embed = []
+        content_texts = []
+        tags_texts = []
         
         for item in items:
-            author_name = item.get('author', '')
-
-            # 2. Tags
-            tag_names = []
-            tags_raw = item.get('tags')
-            if isinstance(tags_raw, list):
-                tag_names = [str(t) for t in tags_raw]
-
-            # Construct rich text representation
-            parts = [
-                f"書名: {item.get('name', '')}",
-                f"簡介: {item.get('intro', '')}",
-            ]
-            text = "\n".join([p for p in parts if p.strip()])
+            content_text = self._build_content_text(item)
+            tags_text = self._build_tags_text(item)
             
-            if not text.strip():
-                text = item.get("name", "")
-            if not text:
+            if not content_text:
                 continue
                 
-            texts_to_embed.append(text)
+            content_texts.append(content_text)
+            tags_texts.append(tags_text)
             valid_items.append(item)
             
         # --- RESUME LOGIC ---
-        # Fetch existing IDs in the collection to skip them
         existing_ids = set()
         try:
             scroll_point = None
@@ -129,51 +167,72 @@ class VectorStore:
                 if scroll_point is None:
                     break
         except Exception:
-            pass # Collection might be empty or missing
+            pass
             
         print(f"  [Resume] Found {len(existing_ids)} existing items in Qdrant. Skipping...")
 
         batch_size = 50
-        import time
         from google.genai.errors import ClientError
         
-        for i in range(0, len(texts_to_embed), batch_size):
-            batch_texts = []
+        for i in range(0, len(valid_items), batch_size):
+            batch_content_texts = []
+            batch_tags_texts = []
             batch_items = []
             
-            # Filter batch items that are not already in DB
-            for text, item in zip(texts_to_embed[i:i+batch_size], valid_items[i:i+batch_size]):
+            for content_t, tags_t, item in zip(
+                content_texts[i:i+batch_size],
+                tags_texts[i:i+batch_size],
+                valid_items[i:i+batch_size]
+            ):
                 if item["id"] not in existing_ids:
-                    batch_texts.append(text)
+                    batch_content_texts.append(content_t)
+                    batch_tags_texts.append(tags_t)
                     batch_items.append(item)
                     
-            if not batch_texts:
-                continue # Skip batch if all items are already embedded
+            if not batch_items:
+                continue
             
-            from src.core.api_utils import retry_on_rate_limit
-            
+            # --- Embed content texts ---
             @retry_on_rate_limit(max_retries=3, base_delay=10.0)
-            def _embed():
+            def _embed_content():
                 return self.genai_client.models.embed_content(
                     model=self.embedding_model,
-                    contents=batch_texts,
+                    contents=batch_content_texts,
                     config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                )
+            
+            # --- Embed tags texts ---
+            @retry_on_rate_limit(max_retries=3, base_delay=10.0)
+            def _embed_tags():
+                return self.genai_client.models.embed_content(
+                    model=self.embedding_model,
+                    contents=batch_tags_texts,
+                    config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY")
                 )
                 
             try:
-                response = _embed()
+                content_response = _embed_content()
+                time.sleep(1)  # Brief pause between API calls
+                tags_response = _embed_tags()
             except Exception as e:
                 print(f"Failed to embed batch after retries: {e}")
                 continue
                 
-            if not response:
+            if not content_response or not tags_response:
                 continue
             
             points = []
-            for item, embedding in zip(batch_items, response.embeddings):
+            for item, content_emb, tags_emb in zip(
+                batch_items,
+                content_response.embeddings,
+                tags_response.embeddings
+            ):
                 points.append(rest.PointStruct(
                     id=item["id"],
-                    vector=embedding.values,
+                    vector={
+                        "content": content_emb.values,
+                        "tags": tags_emb.values,
+                    },
                     payload=item
                 ))
                 
@@ -183,6 +242,7 @@ class VectorStore:
                     points=points
                 )
             
-            # Avoid hitting rate limits rapidly
-            if i + batch_size < len(texts_to_embed) and batch_texts:
+            print(f"  [Batch] Embedded {len(points)} items (content + tags)")
+            
+            if i + batch_size < len(valid_items) and batch_items:
                 time.sleep(2)

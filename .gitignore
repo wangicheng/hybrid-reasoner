@@ -217,6 +217,7 @@ __marimo__/
 
 # Data & Experiments
 data/qdrant_storage/
+data/qdrant_named_vectors/
 data/*.json
 data/experiments/pools/
 data/hybrid_reasoner.db
