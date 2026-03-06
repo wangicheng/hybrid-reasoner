@@ -22,7 +22,7 @@ from src.core.database import Database
 from src.core.vector_store import VectorStore
 
 DATA_FILE = project_root / "data" / "books_crawled.json"
-BATCH_SIZE = 100  # For vector store batching
+BATCH_SIZE = 500  # For vector store batching
 
 
 def generate_uuid(unique_string: str) -> str:

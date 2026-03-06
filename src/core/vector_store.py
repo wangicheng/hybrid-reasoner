@@ -20,8 +20,13 @@ class VectorStore:
         self.collection_name = collection_name
         
         # Initialize Google GenAI client
-        api_key = os.environ.get("GOOGLE_API_KEY")
-        self.genai_client = genai.Client(api_key=api_key)
+        api_keys_str = os.environ.get("GOOGLE_API_KEY", "")
+        self.api_keys = [k.strip() for k in api_keys_str.split(",") if k.strip()]
+        if not self.api_keys:
+            raise ValueError("GOOGLE_API_KEY environment variable is not set or empty.")
+            
+        self.current_key_idx = 0
+        self.genai_client = genai.Client(api_key=self.api_keys[self.current_key_idx])
         self.embedding_model = "gemini-embedding-001"
         
         self._ensure_collection()
@@ -171,7 +176,7 @@ class VectorStore:
             
         print(f"  [Resume] Found {len(existing_ids)} existing items in Qdrant. Skipping...")
 
-        batch_size = 50
+        batch_size = 100
         from google.genai.errors import ClientError
         
         for i in range(0, len(valid_items), batch_size):
@@ -192,30 +197,47 @@ class VectorStore:
             if not batch_items:
                 continue
             
-            # --- Embed content texts ---
-            @retry_on_rate_limit(max_retries=3, base_delay=10.0)
-            def _embed_content():
-                return self.genai_client.models.embed_content(
-                    model=self.embedding_model,
-                    contents=batch_content_texts,
-                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-                )
+            # --- Custom embedding logic with API key rotation ---
+            import google.genai.errors as genai_errors
             
-            # --- Embed tags texts ---
-            @retry_on_rate_limit(max_retries=3, base_delay=10.0)
-            def _embed_tags():
-                return self.genai_client.models.embed_content(
-                    model=self.embedding_model,
-                    contents=batch_tags_texts,
-                    config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY")
-                )
+            def _embed_with_rotation(texts, task_type):
+                max_retries_per_key = 2
+                base_delay = 5.0
                 
+                # Try with all keys before giving up completely
+                for _ in range(len(self.api_keys)):
+                    # Try a few times with current key in case it's a transient non-exhaustion error
+                    for attempt in range(max_retries_per_key):
+                        try:
+                            # Gemini API throws 400 if any string is completely empty, replace them with a space
+                            safe_texts = [t if t.strip() else " " for t in texts]
+                            
+                            return self.genai_client.models.embed_content(
+                                model=self.embedding_model,
+                                contents=safe_texts,
+                                config=types.EmbedContentConfig(task_type=task_type)
+                            )
+                        except genai_errors.ClientError as e:
+                            # If it's a 429 Resource Exhausted or 400 Invalid Argument related to quota
+                            if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
+                                print(f"  [API Key Rotation] Key {self.current_key_idx + 1}/{len(self.api_keys)} exhausted. Rotating...")
+                                self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+                                self.genai_client = genai.Client(api_key=self.api_keys[self.current_key_idx])
+                                # Wait a moment before hitting the new key just in case
+                                time.sleep(2)
+                                break  # Break inner loop to immediately try with new key instead of retrying exhausted one
+                            else:
+                                print(f"  [API Error] Attempt {attempt+1} failed: {e}")
+                                time.sleep(base_delay * (2 ** attempt))
+                    
+                raise Exception("All API keys exhausted or failed.")
+            
             try:
-                content_response = _embed_content()
+                content_response = _embed_with_rotation(batch_content_texts, "RETRIEVAL_DOCUMENT")
                 time.sleep(1)  # Brief pause between API calls
-                tags_response = _embed_tags()
+                tags_response = _embed_with_rotation(batch_tags_texts, "SEMANTIC_SIMILARITY")
             except Exception as e:
-                print(f"Failed to embed batch after retries: {e}")
+                print(f"Failed to embed batch after trying all keys: {e}")
                 continue
                 
             if not content_response or not tags_response:
