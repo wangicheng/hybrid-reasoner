@@ -442,7 +442,7 @@ class HybridReasonerEngine(BaseEngine):
 
         for hit in vector_results:
             item = self.db.get_item(hit["id"])
-            if item:
+            if item and item.get("name"):
                 bid = str(item["id"])
                 candidates_map[bid] = item
                 vector_score_map[bid] = hit["score"]
