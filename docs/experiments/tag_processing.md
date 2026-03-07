@@ -23,3 +23,16 @@
 
 - **說明**：將書籍的標籤直接與小說簡介合併，共同進行 Embedding 運算。
 - **特點**：讓標籤直接影響語意向量提取的結果，從底層表徵改變語意搜尋 (Dense Retrieval) 的匹配邏輯。
+
+## 評分與評估方式 (Evaluation)
+
+本專案全面採用 **LLM-as-a-Judge** 自動化評分機制 (`src/eval/llm_judge.py`)，取代原本的人工評分 UI (`src/eval/annotate_ui.py`)。
+
+- **評分標準 (0-3 分)**：
+  - **3 分 (Highly Relevant)**: 完美符合使用者的核心需求與偏好條件。
+  - **2 分 (Partially Relevant)**: 符合部分關鍵需求，是合理的推薦，但非最理想。
+  - **1 分 (Marginally Relevant)**: 僅有表面或邊緣的關聯，未滿足核心需求。
+  - **0 分 (Irrelevant)**: 完全無關，或是書籍資訊缺失 (如書名 Unknown、無簡介)。
+- **評估指標 (Metrics)**:
+  - 採用 **NDCG@10** (Normalized Discounted Cumulative Gain) 衡量各推薦引擎的排序品質。
+  - **強硬條件仲裁 (Strict Filter)**：在計算 NDCG 前，會先透過 `src/eval/metrics.py` 的程式邏輯審查，若發現違反使用者「硬性規則」(如限制字數、特定連載狀態、必須或禁止的標籤等) 的推薦結果，會將其得分強制降為 0，確保指標準確反映真實的推薦限制。
