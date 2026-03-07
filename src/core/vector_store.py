@@ -139,10 +139,16 @@ class VectorStore:
         query_filter: Optional[rest.Filter] = None,
         with_payload: bool = True,
         text_weight: float = 0.7,
-        tag_weight: float = 0.3
+        tag_weight: float = 0.3,
+        batch_size: int = 20  # Limit pre-fetch to avoid excessive merging
     ) -> Tuple[List[Dict[str, Any]], Tuple[List[float], List[float]]]:
         """
-        Performs multi-vector semantic search (text + tag) with weighted fusion.
+        Performs Late Interaction multi-vector semantic search (text + tag).
+        
+        Methodology:
+        1. Embed query text once
+        2. Query both vector spaces independently (Late Interaction)
+        3. Merge results with weighted score fusion
         
         Args:
             query_text: The search query text to embed and search.
@@ -151,11 +157,12 @@ class VectorStore:
             with_payload: Whether to return the payload with the results.
             text_weight: Weight for text_semantic vector (default 0.7).
             tag_weight: Weight for tag_semantic vector (default 0.3).
+            batch_size: Number of results to fetch per vector space. Reduce memory usage.
         
         Returns:
-            Tuple of (fused search results, (text_vector, tag_vector)).
+            Tuple of (fused search results, (query_vector, query_vector)).
         """
-        # Embed query text
+        # Step 1: Embed query once
         embed_response = self.genai_client.models.embed_content(
             model=self.embedding_model,
             contents=query_text,
@@ -163,63 +170,57 @@ class VectorStore:
         )
         query_vector = embed_response.embeddings[0].values
         
-        # Search against text_semantic vector
+        # Step 2: Late Interaction - Query both vector spaces independently
+        fetch_limit = max(batch_size, limit * 2)
+        
+        # Query text_semantic space
         text_response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
             query_filter=query_filter,
-            limit=limit * 2,  # Get more results to merge with tag results
+            limit=fetch_limit,
             with_payload=with_payload,
             using="text_semantic"
         )
-        text_results = {hit.id: hit.score for hit in text_response.points}
         
-        # Search against tag_semantic vector (same query vector for now)
+        # Query tag_semantic space
         tag_response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
             query_filter=query_filter,
-            limit=limit * 2,  # Get more results to merge with text results
+            limit=fetch_limit,
             with_payload=with_payload,
             using="tag_semantic"
         )
-        tag_results = {hit.id: hit.score for hit in tag_response.points}
         
-        # Merge and weight fusion scores
+        # Step 3: Score fusion at score layer (Late Interaction property)
         combined_scores = {}
-        all_ids = set(text_results.keys()) | set(tag_results.keys())
+        payload_cache = {}  # Cache payloads to avoid O(n²) lookup
         
-        for point_id in all_ids:
-            text_score = text_results.get(point_id, 0.0)
-            tag_score = tag_results.get(point_id, 0.0)
-            # Weighted fusion
-            fused_score = (text_score * text_weight) + (tag_score * tag_weight)
-            combined_scores[point_id] = fused_score
+        # Process text results
+        for hit in text_response.points:
+            combined_scores[hit.id] = text_weight * hit.score
+            if hit.payload:
+                payload_cache[hit.id] = hit.payload
         
-        # Sort by fused score and take top limit results
+        # Process tag results - merge with existing scores
+        for hit in tag_response.points:
+            current_score = combined_scores.get(hit.id, 0.0)
+            combined_scores[hit.id] = current_score + (tag_weight * hit.score)
+            if hit.payload and hit.id not in payload_cache:
+                payload_cache[hit.id] = hit.payload
+        
+        # Step 4: Sort and return top-k results
         sorted_ids = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:limit]
         
-        # Reconstruct point data with payload
         formatted_results = []
-        for point_id, score in sorted_ids:
-            # Get payload from either text or tag response
-            payload = None
-            for hit in text_response.points:
-                if hit.id == point_id:
-                    payload = hit.payload
-                    break
-            if payload is None:
-                for hit in tag_response.points:
-                    if hit.id == point_id:
-                        payload = hit.payload
-                        break
-            
+        for point_id, fused_score in sorted_ids:
             formatted_results.append({
                 "id": point_id,
-                "score": score,
-                "payload": payload,
-                "text_score": text_results.get(point_id, 0.0),
-                "tag_score": tag_results.get(point_id, 0.0)
+                "score": fused_score,
+                "payload": payload_cache.get(point_id),
+                "text_score": combined_scores.get(point_id, 0.0) / text_weight if text_weight > 0 else 0.0,
+                "tag_score": combined_scores.get(point_id, 0.0) / tag_weight if tag_weight > 0 else 0.0
             })
         
         return formatted_results, (query_vector, query_vector)
