@@ -132,6 +132,98 @@ class VectorStore:
         
         return formatted_results, vector
 
+    def search_multi_vector(
+        self,
+        query_text: str,
+        limit: int = 10,
+        query_filter: Optional[rest.Filter] = None,
+        with_payload: bool = True,
+        text_weight: float = 0.7,
+        tag_weight: float = 0.3
+    ) -> Tuple[List[Dict[str, Any]], Tuple[List[float], List[float]]]:
+        """
+        Performs multi-vector semantic search (text + tag) with weighted fusion.
+        
+        Args:
+            query_text: The search query text to embed and search.
+            limit: Maximum number of results to return.
+            query_filter: Optional Qdrant Filter object for logic push-down.
+            with_payload: Whether to return the payload with the results.
+            text_weight: Weight for text_semantic vector (default 0.7).
+            tag_weight: Weight for tag_semantic vector (default 0.3).
+        
+        Returns:
+            Tuple of (fused search results, (text_vector, tag_vector)).
+        """
+        # Embed query text
+        embed_response = self.genai_client.models.embed_content(
+            model=self.embedding_model,
+            contents=query_text,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+        )
+        query_vector = embed_response.embeddings[0].values
+        
+        # Search against text_semantic vector
+        text_response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_vector,
+            query_filter=query_filter,
+            limit=limit * 2,  # Get more results to merge with tag results
+            with_payload=with_payload,
+            using="text_semantic"
+        )
+        text_results = {hit.id: hit.score for hit in text_response.points}
+        
+        # Search against tag_semantic vector (same query vector for now)
+        tag_response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_vector,
+            query_filter=query_filter,
+            limit=limit * 2,  # Get more results to merge with text results
+            with_payload=with_payload,
+            using="tag_semantic"
+        )
+        tag_results = {hit.id: hit.score for hit in tag_response.points}
+        
+        # Merge and weight fusion scores
+        combined_scores = {}
+        all_ids = set(text_results.keys()) | set(tag_results.keys())
+        
+        for point_id in all_ids:
+            text_score = text_results.get(point_id, 0.0)
+            tag_score = tag_results.get(point_id, 0.0)
+            # Weighted fusion
+            fused_score = (text_score * text_weight) + (tag_score * tag_weight)
+            combined_scores[point_id] = fused_score
+        
+        # Sort by fused score and take top limit results
+        sorted_ids = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+        
+        # Reconstruct point data with payload
+        formatted_results = []
+        for point_id, score in sorted_ids:
+            # Get payload from either text or tag response
+            payload = None
+            for hit in text_response.points:
+                if hit.id == point_id:
+                    payload = hit.payload
+                    break
+            if payload is None:
+                for hit in tag_response.points:
+                    if hit.id == point_id:
+                        payload = hit.payload
+                        break
+            
+            formatted_results.append({
+                "id": point_id,
+                "score": score,
+                "payload": payload,
+                "text_score": text_results.get(point_id, 0.0),
+                "tag_score": tag_results.get(point_id, 0.0)
+            })
+        
+        return formatted_results, (query_vector, query_vector)
+
     def add_items(self, items: List[Dict[str, Any]]):
         """
         Embeds and adds items to Qdrant in batches.

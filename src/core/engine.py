@@ -14,20 +14,29 @@ class HybridEngine:
     深度推理混合引擎 (Hybrid Reasoner Engine)
     包含 Filter、向量、局部取回後的多維度條件逐條加權計分，與可解釋性生成。
     
-    向量搜尋使用融合向量 (書名 + 標籤 + 簡介) 以提升語意理解品質。
+    向量搜尋支持：
+    - 融合向量 (書名 + 標籤 + 簡介)
+    - 多向量 (文本語意 + 標籤語意 with weighted fusion)
     """
-    def __init__(self, db=None, vs=None, use_fused_vectors: bool = True):
+    def __init__(self, db=None, vs=None, use_fused_vectors: bool = True, use_multi_vector: bool = True):
         self.db = db if db is not None else Database()
         
-        # 使用融合向量進行搜尋 (預設)
-        # 融合向量包含：書名、標籤、簡介 → 單一 embedding 向量
-        collection_name = "novels_fused" if use_fused_vectors else "novels"
+        # 使用多向量搜尋 (優先於融合向量)
+        # 多向量包含：text_semantic (書名 + 簡介) 和 tag_semantic (標籤)
+        if use_multi_vector:
+            collection_name = "novels_multi_vector"
+            self.use_multi_vector = True
+            print("[HybridEngine] Using multi-vector embeddings for semantic search")
+            print("[HybridEngine] Vectors: text_semantic (Title+Introduction) + tag_semantic (Tags)")
+        else:
+            collection_name = "novels_fused" if use_fused_vectors else "novels"
+            self.use_multi_vector = False
+            if use_fused_vectors:
+                print("[HybridEngine] Using fused embeddings for semantic search")
+                print("[HybridEngine] Fused content: Title + Tags + Introduction")
+        
         self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
         self.use_fused_vectors = use_fused_vectors
-        
-        if use_fused_vectors:
-            print("[HybridEngine] Using fused embeddings for semantic search")
-            print("[HybridEngine] Fused content: Title + Tags + Introduction")
 
     @staticmethod
     def _minmax_normalize(values: List[float]) -> List[float]:
@@ -172,21 +181,35 @@ class HybridEngine:
         if parse_result.generated_keywords:
             cleaned_keywords = [kw.replace(" ", "") for kw in parse_result.generated_keywords]
             expansion_str = " ".join(cleaned_keywords)
-            print(f"[Engine] 🤖 LLM 動態擴展關鍵字: {expansion_str}")
+            print(f"[Engine] LLM-expanded keywords: {expansion_str}")
             expanded_terms += f" {expansion_str}"
         
         if parse_result.hypothetical_intro:
-            print(f"[Engine] 🔮 HyDE 假想簡介: {parse_result.hypothetical_intro[:80]}...")
+            print(f"[Engine] HyDE hypothetical intro: {parse_result.hypothetical_intro[:80]}...")
             expanded_terms += f" {parse_result.hypothetical_intro}"
         
         # 取回全部資料進行純 Python 多維度軟評分
-        retrieval_limit = 10000 
-        vector_results, query_vector = self.vs.search(
-            expanded_terms, 
-            limit=retrieval_limit,
-            query_filter=None,  # 移除硬過濾
-            with_payload=True 
-        )
+        retrieval_limit = 10000
+        
+        # Use multi-vector search if available
+        query_vector = None
+        if self.use_multi_vector:
+            vector_results, query_vector = self.vs.search_multi_vector(
+                expanded_terms,
+                limit=retrieval_limit,
+                query_filter=None,
+                with_payload=True,
+                text_weight=0.7,  # Text semantic priority
+                tag_weight=0.3    # Tag semantic secondary
+            )
+            print(f"[Engine] Multi-vector search: text_weight=0.7, tag_weight=0.3")
+        else:
+            vector_results, query_vector = self.vs.search(
+                expanded_terms,
+                limit=retrieval_limit,
+                query_filter=None,  # 移除硬過濾
+                with_payload=True
+            )
         
         is_relaxed = True  # 標記為放寬，因為我們沒有用任何硬條件
         
@@ -228,10 +251,10 @@ class HybridEngine:
                 # Only add if robust match (e.g. term is significant part of title)
                 # For now, trust the keyword search but assign high score
                 if b_id not in candidates_map:
-                    print(f"[Engine] 📖 Title Match found: {book['name']} (term: {term})")
+                    print(f"[Engine] [Title Match] {book['name']} (term: {term})")
                     candidates_map[b_id] = book
                     # Assign max vector score for direct title match
-                    vector_score_map[b_id] = 1.0 
+                    vector_score_map[b_id] = 1.0
 
         # 3b. Author Match
         for criterion in parse_result.criteria:

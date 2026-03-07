@@ -25,8 +25,10 @@ async def startup_event():
     global engine
     print("Initializing Hybrid Engine... (This may take a few seconds)")
     try:
-        engine = HybridEngine(use_fused_vectors=True)  # Enable fused vectors for better search
+        # Enable multi-vector search (text + tag semantic with fusion)
+        engine = HybridEngine(use_fused_vectors=True, use_multi_vector=True)
         print("Hybrid Engine initialized successfully!")
+        print("Search mode: Multi-vector (text_semantic + tag_semantic with 0.7:0.3 weighting)")
     except RuntimeError as e:
         if "already accessed by another instance" in str(e):
             print(f"\n{'='*60}")
