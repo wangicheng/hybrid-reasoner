@@ -25,7 +25,7 @@ async def startup_event():
     global engine
     print("Initializing Hybrid Engine... (This may take a few seconds)")
     try:
-        engine = HybridEngine()
+        engine = HybridEngine(use_fused_vectors=True)  # Enable fused vectors for better search
         print("Hybrid Engine initialized successfully!")
     except RuntimeError as e:
         if "already accessed by another instance" in str(e):

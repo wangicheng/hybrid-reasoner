@@ -6,6 +6,7 @@ Provides:
 - retry_on_rate_limit: decorator that retries on 429/503 errors with exponential backoff.
 """
 
+import os
 import time
 import threading
 import functools
@@ -115,3 +116,70 @@ def retry_on_rate_limit(max_retries: int = 5, base_delay: float = 5.0, max_delay
             raise last_exception
         return wrapper
     return decorator
+
+
+class APIKeyRotator:
+    """
+    Thread-safe API Key rotator for handling multiple API keys.
+    Automatically switches to the next key when one hits rate limits.
+    """
+    
+    def __init__(self, api_keys: list):
+        """
+        Args:
+            api_keys: List of API keys to rotate through.
+        """
+        self.api_keys = api_keys
+        self.current_index = 0
+        self._lock = threading.Lock()
+        
+        if not api_keys:
+            raise ValueError("No API keys provided")
+        
+        print(f"[APIKeyRotator] Initialized with {len(api_keys)} API key(s)")
+    
+    def get_current_key(self) -> str:
+        """Get the current API key without rotating."""
+        with self._lock:
+            return self.api_keys[self.current_index]
+    
+    def rotate(self) -> str:
+        """
+        Rotate to the next API key.
+        Returns the new current key.
+        """
+        with self._lock:
+            old_index = self.current_index
+            self.current_index = (self.current_index + 1) % len(self.api_keys)
+            new_key = self.api_keys[self.current_index]
+            print(f"[APIKeyRotator] Switched from key {old_index} to key {self.current_index}")
+            return new_key
+    
+    def on_rate_limit_error(self):
+        """Called when a rate limit error is detected. Rotates to next key."""
+        return self.rotate()
+
+
+# Global API key rotator instance
+from src.config import settings
+
+_global_api_key_rotator = None
+
+def get_api_key_rotator() -> APIKeyRotator:
+    """Get or initialize the global API key rotator."""
+    global _global_api_key_rotator
+    if _global_api_key_rotator is None:
+        if hasattr(settings, 'GOOGLE_API_KEYS') and settings.GOOGLE_API_KEYS:
+            _global_api_key_rotator = APIKeyRotator(settings.GOOGLE_API_KEYS)
+        else:
+            # Fallback: use single key from environment
+            single_key = os.environ.get("GOOGLE_API_KEY", "")
+            if single_key:
+                _global_api_key_rotator = APIKeyRotator([single_key])
+            else:
+                raise ValueError("No GOOGLE_API_KEY found in environment")
+    return _global_api_key_rotator
+
+def get_current_api_key() -> str:
+    """Get the current active API key."""
+    return get_api_key_rotator().get_current_key()

@@ -13,10 +13,21 @@ class HybridEngine:
     """
     深度推理混合引擎 (Hybrid Reasoner Engine)
     包含 Filter、向量、局部取回後的多維度條件逐條加權計分，與可解釋性生成。
+    
+    向量搜尋使用融合向量 (書名 + 標籤 + 簡介) 以提升語意理解品質。
     """
-    def __init__(self, db=None, vs=None):
+    def __init__(self, db=None, vs=None, use_fused_vectors: bool = True):
         self.db = db if db is not None else Database()
-        self.vs = vs if vs is not None else VectorStore(collection_name="novels")
+        
+        # 使用融合向量進行搜尋 (預設)
+        # 融合向量包含：書名、標籤、簡介 → 單一 embedding 向量
+        collection_name = "novels_fused" if use_fused_vectors else "novels"
+        self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
+        self.use_fused_vectors = use_fused_vectors
+        
+        if use_fused_vectors:
+            print("[HybridEngine] Using fused embeddings for semantic search")
+            print("[HybridEngine] Fused content: Title + Tags + Introduction")
 
     @staticmethod
     def _minmax_normalize(values: List[float]) -> List[float]:
@@ -184,13 +195,27 @@ class HybridEngine:
         payload_map = {} 
 
         for hit in vector_results:
-            item = self.db.get_item(hit["id"])
-            if item and item.get("name"):
-                bid = str(item["id"])
-                candidates_map[bid] = item
+            # Use payload data directly from Qdrant (includes original string ID)
+            # hit["id"] is numeric ID (MD5), but payload has the complete item data
+            if hit.get('payload') and hit['payload'].get("name"):
+                # Extract original string ID from payload
+                str_id = hit['payload'].get("id")
+                if not str_id:
+                    continue
+                    
+                bid = str(str_id)
+                candidates_map[bid] = hit['payload']  # Use payload as item
                 vector_score_map[bid] = hit["score"]
-                if hit.get('payload'):
-                    payload_map[bid] = hit['payload']
+                payload_map[bid] = hit['payload']
+            else:
+                # Fallback: try to get from database if payload is missing
+                item = self.db.get_item(hit.get("id"))
+                if item and item.get("name"):
+                    bid = str(item["id"])
+                    candidates_map[bid] = item
+                    vector_score_map[bid] = hit["score"]
+                    if hit.get('payload'):
+                        payload_map[bid] = hit['payload']
         
         # 3. Structural Retrieval (Title & Author Match)
         # 3a. Title Match (Newly Added for Exact Title Search)
@@ -272,7 +297,8 @@ class HybridEngine:
         scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
         
         # 放寬搜尋的最低語意門檻：過濾掉向量分數太低的雜訊
-        threshold = 0.6
+        # Fused embeddings typically score 0.5-0.7, so use lower threshold
+        threshold = 0.5
         
         if is_relaxed:
             scored_items = [r for r in scored_items if float(r['vector_score']) > threshold]

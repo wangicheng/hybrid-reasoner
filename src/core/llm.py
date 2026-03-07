@@ -107,8 +107,10 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
     支援多模型 fallback：當主要模型遇到配額限制或錯誤時，自動嘗試下一個模型。
+    支援 API Key 輪換：當遇到速率限制時，自動切換到下一個 API Key。
     """
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    from src.core.api_utils import get_current_api_key, get_api_key_rotator, _is_retryable
+    
     selected_model = model_id or FALLBACK_MODELS[0]
 
     # 建立模型嘗試順序
@@ -118,12 +120,6 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
         models_to_try = [selected_model] + FALLBACK_MODELS
     else:
         models_to_try = FALLBACK_MODELS
-
-    client = genai.Client(api_key=api_key)
-
-    # 之前嘗試過用 NER (KeyBERT) 輔助提示 LLM，但效果不佳 (太瑣碎)。
-    # 現在改回純 LLM 理解，但保留 KeywordExtractor 程式碼以備不時之需 (fallback logic)。
-    # Extractor is NOT used here to prompt the LLM.
 
     # 手動定義 Schema (保留原有的 schema 定義)
     manual_schema = {
@@ -221,67 +217,83 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
         
         # Config params
         is_gemma = "gemma" in model_id.lower()
+        rotator = get_api_key_rotator()
+        api_key_attempts = 0
+        max_api_key_attempts = len(rotator.api_keys)
         
-        try:
-            # 定義內部呼叫函數以便使用 @retry_on_rate_limit 處理 429/503
-            # 如果是 Gemma，多給一些重試機會
-            @retry_on_rate_limit(max_retries=3 if is_gemma else 2, base_delay=5.0)
-            def _do_generate():
-                import re as _re
-                final_prompt = f"User Query: {user_query}"
+        while api_key_attempts < max_api_key_attempts:
+            try:
+                api_key = get_current_api_key()
+                client = genai.Client(api_key=api_key)
                 
-                if is_gemma:
-                    config_args = {}
-                    final_contents = (
-                        f"{full_system_instruction}\n\n"
-                        f"Task: Parse this query:\n{final_prompt}\n\n"
-                        "IMPORTANT: Output ONLY valid JSON (no markdown). Ensure keys are snake_case."
-                    )
-                else:
-                    config_args = {
-                        "response_mime_type": "application/json",
-                        "response_schema": manual_schema,
-                        "system_instruction": full_system_instruction,
-                    }
-                    final_contents = final_prompt
-
-                response = client.models.generate_content(
-                    model=model_id,
-                    contents=final_contents,
-                    config=types.GenerateContentConfig(**config_args)
-                )
-                
-                if not response.text:
-                    raise ValueError("Empty response from LLM")
+                # 定義內部呼叫函數以便使用 @retry_on_rate_limit 處理 429/503
+                @retry_on_rate_limit(max_retries=2 if is_gemma else 1, base_delay=3.0)
+                def _do_generate():
+                    import re as _re
+                    final_prompt = f"User Query: {user_query}"
                     
-                raw_text = response.text.strip()
-                # Strip markdown
-                raw_text = _re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
-                raw_text = _re.sub(r"\n?```\s*$", "", raw_text)
-                raw_text = raw_text.strip()
+                    if is_gemma:
+                        config_args = {}
+                        final_contents = (
+                            f"{full_system_instruction}\n\n"
+                            f"Task: Parse this query:\n{final_prompt}\n\n"
+                            "IMPORTANT: Output ONLY valid JSON (no markdown). Ensure keys are snake_case."
+                        )
+                    else:
+                        config_args = {
+                            "response_mime_type": "application/json",
+                            "response_schema": manual_schema,
+                            "system_instruction": full_system_instruction,
+                        }
+                        final_contents = final_prompt
+
+                    response = client.models.generate_content(
+                        model=model_id,
+                        contents=final_contents,
+                        config=types.GenerateContentConfig(**config_args)
+                    )
+                    
+                    if not response.text:
+                        raise ValueError("Empty response from LLM")
+                        
+                    raw_text = response.text.strip()
+                    # Strip markdown
+                    raw_text = _re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
+                    raw_text = _re.sub(r"\n?```\s*$", "", raw_text)
+                    raw_text = raw_text.strip()
+                    
+                    try:
+                        parsed = json.loads(raw_text)
+                    except json.JSONDecodeError as je:
+                        print(f"[llm] JSON Decode Error: {je} \nRaw: {raw_text[:100]}...")
+                        raise je
+
+                    # Normalize
+                    normalized_data = _normalize_llm_output(parsed, user_query)
+                    
+                    # Validate with Pydantic
+                    return QueryParseResult.model_validate(normalized_data)
+
+                # Execute call
+                result = _do_generate()
+                print(f"[llm] 成功使用模型: {model_id}")
+                return result
+
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
                 
-                try:
-                    parsed = json.loads(raw_text)
-                except json.JSONDecodeError as je:
-                    print(f"[llm] JSON Decode Error: {je} \nRaw: {raw_text[:100]}...")
-                    raise je
-
-                # Normalize
-                normalized_data = _normalize_llm_output(parsed, user_query)
-                
-                # Validate with Pydantic
-                return QueryParseResult.model_validate(normalized_data)
-
-            # Execute call
-            result = _do_generate()
-            print(f"[llm] 成功使用模型: {model_id}")
-            return result
-
-        except Exception as e:
-            last_exception = e
-            print(f"[llm] 模型 {model_id} 發生錯誤: {e}")
-            # Try next model in models_to_try
-            continue
+                if is_rate_limit and api_key_attempts < max_api_key_attempts - 1:
+                    print(f"[llm] API Key 遇到速率限制。切換到下一個 Key...")
+                    rotator.on_rate_limit_error()
+                    api_key_attempts += 1
+                    import time
+                    time.sleep(2)
+                    continue
+                else:
+                    last_exception = e
+                    print(f"[llm] 模型 {model_id} 發生錯誤: {e}")
+                    break  # Try next model
 
     # 所有模型都失敗，進入 fallback 邏輯
     if last_exception:
@@ -330,3 +342,4 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
             hypothetical_intro="",
             criteria=fallback_criteria
         )
+

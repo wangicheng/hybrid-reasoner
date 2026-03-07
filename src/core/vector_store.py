@@ -17,12 +17,64 @@ class VectorStore:
             self.client = QdrantClient(path=str(path.resolve()))
         self.collection_name = collection_name
         
-        # Initialize Google GenAI client
-        api_key = os.environ.get("GOOGLE_API_KEY")
+        # Initialize Google GenAI client with API key rotation
+        from src.core.api_utils import get_current_api_key
+        api_key = get_current_api_key()
         self.genai_client = genai.Client(api_key=api_key)
         self.embedding_model = "gemini-embedding-001"
         
         self._ensure_collection()
+
+    @staticmethod
+    def build_fused_text(item: Dict[str, Any]) -> str:
+        """
+        融合書籍信息為結構化文本用於向量化。
+        格式: [TITLE] 書名 [/TITLE] [TAGS] tag1 tag2 tag3 [/TAGS] [ABSTRACT] 簡介 [/ABSTRACT]
+        
+        研究表明：結構化標記能幫助模型更好區分各個內容部分，提升語意理解效果。
+        
+        Args:
+            item: 書籍資訊字典，包含 name, tags, intro
+        
+        Returns:
+            融合後的結構化文本
+        """
+        # 書名
+        title = item.get('name', '').strip()
+        
+        # 標籤 - 支援多種格式 (列表或 JSON string)
+        tags_raw = item.get('tags', [])
+        if isinstance(tags_raw, str):
+            try:
+                import json
+                tags_raw = json.loads(tags_raw)
+            except:
+                tags_raw = []
+        
+        if isinstance(tags_raw, list):
+            tags_text = ' '.join([str(t).strip() for t in tags_raw if t])
+        else:
+            tags_text = ''
+        
+        # 簡介
+        abstract = item.get('intro', '').strip()
+        
+        # 組合成結構化格式
+        fused_text = f"[TITLE] {title} [/TITLE] [TAGS] {tags_text} [/TAGS] [ABSTRACT] {abstract} [/ABSTRACT]"
+        
+        return fused_text
+    
+    def _update_api_key_on_rate_limit(self):
+        """Update the genai client with a new API key when rate limit is hit."""
+        from src.core.api_utils import get_api_key_rotator
+        try:
+            rotator = get_api_key_rotator()
+            new_key = rotator.on_rate_limit_error()
+            self.genai_client = genai.Client(api_key=new_key)
+            print(f"[VectorStore] API key rotated. Now using key index: {rotator.current_index}")
+        except Exception as e:
+            print(f"[VectorStore] Failed to rotate API key: {e}")
+            raise
 
     def _ensure_collection(self):
         collections = self.client.get_collections().collections
@@ -150,21 +202,31 @@ class VectorStore:
             if not batch_texts:
                 continue # Skip batch if all items are already embedded
             
-            from src.core.api_utils import retry_on_rate_limit
+            from src.core.api_utils import retry_on_rate_limit, _is_retryable
             
-            @retry_on_rate_limit(max_retries=3, base_delay=10.0)
-            def _embed():
-                return self.genai_client.models.embed_content(
-                    model=self.embedding_model,
-                    contents=batch_texts,
-                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-                )
-                
-            try:
-                response = _embed()
-            except Exception as e:
-                print(f"Failed to embed batch after retries: {e}")
-                continue
+            # Retry with API key rotation on rate limit
+            attempt = 0
+            max_attempts = 3
+            while attempt < max_attempts:
+                try:
+                    response = self.genai_client.models.embed_content(
+                        model=self.embedding_model,
+                        contents=batch_texts,
+                        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                    )
+                    break
+                except Exception as e:
+                    error_str = str(e)
+                    is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                    
+                    if is_rate_limit and attempt < max_attempts - 1:
+                        print(f"[VectorStore] Rate limit detected. Rotating API key...")
+                        self._update_api_key_on_rate_limit()
+                        attempt += 1
+                        time.sleep(5)
+                    else:
+                        print(f"Failed to embed batch after attempts: {e}")
+                        raise
                 
             if not response:
                 continue
@@ -186,3 +248,135 @@ class VectorStore:
             # Avoid hitting rate limits rapidly
             if i + batch_size < len(texts_to_embed) and batch_texts:
                 time.sleep(2)
+
+    def add_fused_items(self, items: List[Dict[str, Any]]):
+        """
+        為書籍添加融合向量（書名 + 標籤 + 簡介融合）。
+        融合後的向量存儲到單獨的 collection。
+        
+        Args:
+            items: 書籍信息字典列表
+        """
+        import hashlib
+        
+        valid_items = []
+        texts_to_embed = []
+        id_mappings = {}  # Map string IDs to numeric IDs
+        
+        # 為每個項目生成融合文本
+        for item in items:
+            fused_text = self.build_fused_text(item)
+            
+            if not fused_text.strip():
+                continue
+            
+            texts_to_embed.append(fused_text)
+            valid_items.append(item)
+            
+            # Create numeric ID from string ID using hash
+            str_id = str(item.get("id", ""))
+            numeric_id = int(hashlib.md5(str_id.encode()).hexdigest(), 16) % (2**63)
+            id_mappings[len(valid_items) - 1] = (numeric_id, str_id)
+        
+        if not texts_to_embed:
+            print("[add_fused_items] No valid items to process")
+            return
+        
+        # 檢查已存在的項目以支援恢復邏輯
+        existing_ids = set()
+        try:
+            scroll_point = None
+            while True:
+                response = self.client.scroll(
+                    collection_name=self.collection_name,
+                    offset=scroll_point,
+                    limit=1000,
+                    with_payload=False,
+                    with_vectors=False
+                )
+                points, scroll_point = response
+                existing_ids.update(p.id for p in points)
+                if scroll_point is None:
+                    break
+        except Exception:
+            pass
+        
+        print(f"[add_fused_items] Found {len(existing_ids)} existing items, skipping...")
+        
+        batch_size = 50
+        import time
+        
+        for i in range(0, len(texts_to_embed), batch_size):
+            batch_texts = []
+            batch_items = []
+            batch_ids = []
+            
+            # 過濾已存在的項目
+            for idx in range(i, min(i + batch_size, len(texts_to_embed))):
+                numeric_id, str_id = id_mappings[idx]
+                if numeric_id not in existing_ids:
+                    batch_texts.append(texts_to_embed[idx])
+                    batch_items.append(valid_items[idx])
+                    batch_ids.append(numeric_id)
+            
+            if not batch_texts:
+                continue
+            
+            # 使用 API key 輪換重試融合向量計算
+            attempt = 0
+            max_attempts = 5
+            response = None
+            while attempt < max_attempts:
+                try:
+                    response = self.genai_client.models.embed_content(
+                        model=self.embedding_model,
+                        contents=batch_texts,
+                        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                    )
+                    break
+                except Exception as e:
+                    error_str = str(e)
+                    is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                    is_invalid_key = "API key not valid" in error_str or "INVALID_ARGUMENT" in error_str
+                    
+                    if (is_rate_limit or is_invalid_key) and attempt < max_attempts - 1:
+                        if is_invalid_key:
+                            rotator = get_api_key_rotator()
+                            old_idx = rotator.current_index
+                            rotator.rotate()
+                            new_idx = rotator.current_index
+                            print(f"[add_fused_items] Invalid key {old_idx}, rotating to key {new_idx}...")
+                            self._update_api_key_on_rate_limit()
+                        else:
+                            print(f"[add_fused_items] Rate limit, rotating API key...")
+                            self._update_api_key_on_rate_limit()
+                        attempt += 1
+                        time.sleep(5)
+                    else:
+                        print(f"[add_fused_items] Embedding failed: {e}")
+                        raise
+            
+            if not response:
+                continue
+            
+            # 構造向量點
+            points = []
+            for numeric_id, item, embedding in zip(batch_ids, batch_items, response.embeddings):
+                points.append(rest.PointStruct(
+                    id=numeric_id,
+                    vector=embedding.values,
+                    payload=item
+                ))
+            
+            if points:
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=points
+                )
+                print(f"[add_fused_items] Uploaded {len(points)} fused vectors")
+            
+            # 避免過快觸發速率限制
+            if i + batch_size < len(texts_to_embed) and batch_texts:
+                time.sleep(2)
+        
+        print(f"[add_fused_items] Done processing {len(valid_items)} items")
