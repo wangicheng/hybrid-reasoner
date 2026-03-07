@@ -8,7 +8,7 @@ from pathlib import Path
 # ⚙️ 實驗設定區 (測試不同引擎時請修改這裡)
 # ==========================================
 # 在不同的分支或實驗中，載入你想要測試的引擎
-from src.core.engine import HybridReasonerEngine as TestEngine
+from src.core.engine import HybridEngine as TestEngine
 
 # 設定這個引擎的名稱，將會作為輸出的檔名 (e.g., HybridReasoner.json)
 ENGINE_NAME = "HybridReasoner"
