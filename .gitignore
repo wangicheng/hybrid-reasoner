@@ -215,12 +215,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Data & Experiments
-data/qdrant_storage/
-data/*.json
-data/experiments/pools/
-data/hybrid_reasoner.db
-
 # Agent Skills
 .agents/
 .agent/
