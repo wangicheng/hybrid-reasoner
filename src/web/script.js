@@ -114,9 +114,9 @@ function displayInterpretation(container, criteriaList, queryVector) {
     html += `</div>`;
   }
 
-  if (queryVector && queryVector.length > 0) {
+  if (queryVector && Array.isArray(queryVector) && queryVector.length > 0) {
     const dim = queryVector.length;
-    const preview = queryVector.slice(0, 5).map(v => v.toFixed(3)).join(', ');
+    const preview = queryVector.slice(0, 5).map(v => Number(v).toFixed(3)).join(', ');
     html += `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-size:0.85em; color:#666;">`;
     html += `<strong><i class="fa-solid fa-location-crosshairs"></i> 向量座標：</strong> [${preview}, ...] <span style="background:#eee; padding:2px 6px; border-radius:4px; font-size:0.8em;">${dim} 維度</span>`;
     html += `</div>`;
@@ -170,12 +170,12 @@ function createResultCard(result) {
   if (result.breakdown) {
     result.breakdown.forEach(b => {
       const originalScore = b.criteria === 'semantic_similarity'
-        ? b.raw_score
-        : (b.normalized_score !== undefined ? b.normalized_score : b.raw_score);
+        ? Number(b.raw_score || 0)
+        : (b.normalized_score !== undefined ? Number(b.normalized_score) : Number(b.raw_score || 0));
       const rawScore = typeof b.raw_score === 'number' ? b.raw_score : Number(b.raw_score || 0);
 
-      const weightedScore = b.weighted_score !== undefined ? Number(b.weighted_score) : originalScore;
-      const scoreText = weightedScore.toFixed(3);
+      const weightedScore = b.weighted_score !== undefined ? Number(b.weighted_score || 0) : Number(originalScore || 0);
+      const scoreText = Number(weightedScore).toFixed(3);
 
       // 如果分數小於 0，代表是扣分項（排除條件），我們用紅色顯示，絕對值做為寬度表示「懲罰力度」
       const isNegative = weightedScore < 0;

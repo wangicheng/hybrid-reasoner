@@ -221,3 +221,44 @@ __marimo__/
 .continue/
 skills.json
 skills-lock.json
+
+# ========================================
+# Hybrid Reasoner Project Specific
+# ========================================
+
+# Test and Debug Files
+test_*.py
+check_*.py
+debug_*.py
+monitor_progress.py
+verify_system.py
+
+# Database Files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Exclude All Vector Data by Default
+data/qdrant_storage/
+data/qdrant_named_vectors/
+data/qdrant_research_fusion/
+data/vector-fusion-new/
+data/raw_repo_data/
+qdrant_storage/
+
+# Include Only Multi-Vector Collection (text_semantic + tag_semantic)
+!data/qdrant_storage/
+!data/qdrant_storage/meta.json
+!data/qdrant_storage/collection/
+!data/qdrant_storage/collection/novels_multi_vector/
+!data/qdrant_storage/collection/novels_multi_vector/**
+
+# Old/Unused Collections
+collection/
+
+# Documentation Files (Optional - Keep Implementation Summaries)
+# Uncomment to exclude if not needed:
+# API_KEY_ROTATION_SUMMARY.md
+# FUSED_EMBEDDINGS_IMPLEMENTATION.md
+# UPDATE_SUMMARY_20260307.md

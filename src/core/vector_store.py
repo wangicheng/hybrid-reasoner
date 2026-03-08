@@ -114,7 +114,8 @@ class VectorStore:
             contents=query_text,
             config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
         )
-        vector = embed_response.embeddings[0].values
+        # Convert to list for JSON serialization
+        vector = list(embed_response.embeddings[0].values)
         
         response = self.client.query_points(
             collection_name=self.collection_name,
@@ -141,7 +142,7 @@ class VectorStore:
         text_weight: float = 0.7,
         tag_weight: float = 0.3,
         batch_size: int = 20  # Limit pre-fetch to avoid excessive merging
-    ) -> Tuple[List[Dict[str, Any]], Tuple[List[float], List[float]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
         Performs Late Interaction multi-vector semantic search (text + tag).
         
@@ -160,7 +161,7 @@ class VectorStore:
             batch_size: Number of results to fetch per vector space. Reduce memory usage.
         
         Returns:
-            Tuple of (fused search results, (query_vector, query_vector)).
+            Tuple of (fused search results, query_vector as list).
         """
         # Step 1: Embed query once
         embed_response = self.genai_client.models.embed_content(
@@ -168,7 +169,8 @@ class VectorStore:
             contents=query_text,
             config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
         )
-        query_vector = embed_response.embeddings[0].values
+        # Convert to list for JSON serialization
+        query_vector = list(embed_response.embeddings[0].values)
         
         # Step 2: Late Interaction - Query both vector spaces independently
         fetch_limit = max(batch_size, limit * 2)
@@ -223,7 +225,8 @@ class VectorStore:
                 "tag_score": combined_scores.get(point_id, 0.0) / tag_weight if tag_weight > 0 else 0.0
             })
         
-        return formatted_results, (query_vector, query_vector)
+        # Return single vector (already converted to list above)
+        return formatted_results, query_vector
 
     def add_items(self, items: List[Dict[str, Any]]):
         """

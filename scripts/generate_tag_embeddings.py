@@ -70,27 +70,26 @@ def generate_tag_embeddings():
     collections = client.get_collections().collections
     collection_exists = any(c.name == "novels_multi_vector" for c in collections)
     
-    if collection_exists:
-        print("[TagEmbeddings] Collection novels_multi_vector already exists. Deleting...")
-        client.delete_collection("novels_multi_vector")
+    if not collection_exists:
+        print("[TagEmbeddings] Creating new Named Vectors collection: novels_multi_vector")
+        client.create_collection(
+            collection_name="novels_multi_vector",
+            vectors_config={
+                "text_semantic": rest.VectorParams(
+                    size=3072,
+                    distance=rest.Distance.COSINE
+                ),
+                "tag_semantic": rest.VectorParams(
+                    size=3072,
+                    distance=rest.Distance.COSINE
+                ),
+            }
+        )
+    else:
+        print("[TagEmbeddings] Collection novels_multi_vector already exists. Continuing to add more vectors...")
     
-    print("[TagEmbeddings] Creating new Named Vectors collection: novels_multi_vector")
-    client.create_collection(
-        collection_name="novels_multi_vector",
-        vectors_config={
-            "text_semantic": rest.VectorParams(
-                size=3072,
-                distance=rest.Distance.COSINE
-            ),
-            "tag_semantic": rest.VectorParams(
-                size=3072,
-                distance=rest.Distance.COSINE
-            ),
-        }
-    )
-    
-    # Read all existing text vectors from novels_fused collection
-    print("[TagEmbeddings] Reading existing text vectors from novels_fused collection...")
+    # Read all existing text vectors from novels collection
+    print("[TagEmbeddings] Reading existing text vectors from novels collection...")
     
     existing_points = {}
     try:
@@ -98,7 +97,7 @@ def generate_tag_embeddings():
         total_fused = 0
         while True:
             response = client.scroll(
-                collection_name="novels_fused",
+                collection_name="novels",
                 offset=scroll_point,
                 limit=1000,
                 with_payload=True,
@@ -114,9 +113,9 @@ def generate_tag_embeddings():
             if scroll_point is None:
                 break
     except Exception as e:
-        print(f"[TagEmbeddings] Warning: Error reading novels_fused: {e}")
+        print(f"[TagEmbeddings] Warning: Error reading novels: {e}")
     
-    print(f"[TagEmbeddings] Retrieved {total_fused} existing vectors from novels_fused")
+    print(f"[TagEmbeddings] Retrieved {total_fused} existing vectors from novels")
     
     # Read all novels from database
     conn = db.get_connection()
@@ -287,7 +286,7 @@ def generate_tag_embeddings():
     
     print("\n[TagEmbeddings] SUCCESS: Tag embedding generation completed!")
     print(f"[TagEmbeddings] Collection: novels_multi_vector")
-    print(f"[TagEmbeddings] Original collection preserved: novels_fused")
+    print(f"[TagEmbeddings] Original collection preserved: novels")
 
 
 if __name__ == "__main__":

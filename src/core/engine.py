@@ -320,8 +320,15 @@ class HybridEngine:
         scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
         
         # 放寬搜尋的最低語意門檻：過濾掉向量分數太低的雜訊
-        # Fused embeddings typically score 0.5-0.7, so use lower threshold
-        threshold = 0.5
+        # Multi-vector Late Interaction scores are weighted sums (text_weight * score + tag_weight * score)
+        # Observed range: 0.15-0.25 for typical queries, so use very low threshold
+        threshold = 0.15 if self.use_multi_vector else 0.5
+        
+        # Debug: print top scores before filtering
+        if scored_items:
+            top_scores = [r['vector_score'] for r in scored_items[:5]]
+            print(f"[Engine] Top 5 vector scores before threshold: {top_scores}")
+            print(f"[Engine] Using threshold: {threshold}")
         
         if is_relaxed:
             scored_items = [r for r in scored_items if float(r['vector_score']) > threshold]
@@ -331,7 +338,7 @@ class HybridEngine:
             return {
                 "query": user_query,
                 "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-                "query_vector": query_vector,
+                "query_vector": query_vector,  # Already converted to list in vector_store.py
                 "results": [],
                 "is_relaxed": is_relaxed,
                 "message": "資料庫中無相關書籍，請嘗試其他搜尋條件。",
@@ -375,7 +382,7 @@ class HybridEngine:
         return {
             "query": user_query,
             "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-            "query_vector": query_vector,
+            "query_vector": query_vector,  # Already converted to list in vector_store.py
             "results": final_results,
             "is_relaxed": is_relaxed,
             "engine": "HybridEngine",
