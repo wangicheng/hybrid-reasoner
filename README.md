@@ -24,10 +24,10 @@
   * `original_llm_reranker_top10`：額外增加約 12 秒延遲，但換取顯著的品味提升。
   * `hybrid_fusion`：耗時最長 (20s+)，且在輕小說場境下投資報酬率低。
 
-### 📝 完整報告位置
+### 📝 實驗報告與結果位置
 
-詳細的實驗數據、盲測過程與未來優化方向請參考：
-👉 **[重排序策略評測報告 (Markdown)](file:///experiments/results/rerank_strategy_evaluation_report.md)**
+* **實驗結果存放目錄**：[`experiments/results/`](./experiments/results/)
+* **詳細評測報告 (Markdown)**：👉 **[重排序策略評測報告](./experiments/results/rerank_strategy_evaluation_report.md)**
 
 ---
 
