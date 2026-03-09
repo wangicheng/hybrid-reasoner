@@ -9,6 +9,28 @@
 * 新增 **Explainability**，讓系統能解釋推薦理由。
 * 全新 **Web UI** 介面與 Windows 一鍵啟動腳本。
 
+---
+
+## 🧪 重排序策略實驗 (Rerank Strategy Experiment)
+
+本分支 `experiment/rerank-strategy` 包含了針對三種不同重排序策略的深度評測結果。
+
+### 📊 實驗核心總結
+
+* **測試策略**：`score_only` (基礎版), `original_llm_reranker_top10` (LLM 大腦版), `hybrid_fusion` (Cross-Encoder 融合版)。
+* **🏆 最佳方案**：**`original_llm_reranker_top10`**。在主觀盲測中獲得最高勝率 (43.75%)，且在處理「負面表述」(例如：不要異世界) 時展現了最佳的傷害控制能力。
+* **⚡ 效能指標**：
+  * `score_only`：延遲最低 (0s Rerank)，穩定度高。
+  * `original_llm_reranker_top10`：額外增加約 12 秒延遲，但換取顯著的品味提升。
+  * `hybrid_fusion`：耗時最長 (20s+)，且在輕小說場境下投資報酬率低。
+
+### 📝 完整報告位置
+
+詳細的實驗數據、盲測過程與未來優化方向請參考：
+👉 **[重排序策略評測報告 (Markdown)](file:///experiments/results/rerank_strategy_evaluation_report.md)**
+
+---
+
 ## ✨ 特色 (Features)
 
 * **混合檢索引擎**: 結合 Qdrant 向量資料庫與傳統欄位過濾/評分 (Logic Push-down supported)。
