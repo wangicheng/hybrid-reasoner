@@ -151,7 +151,7 @@ class ExactMatchEngine(BaseEngine):
                 
                 for hit in response:
                     item = self.db.get_item(hit.id)
-                    if item:
+                    if item and str(item.get("name", "")).strip():
                         results.append({
                             "item": item,
                             "score": 1.0,  # 基礎命中給予 1.0 (Exact Match)
@@ -205,7 +205,7 @@ class PureVectorEngine(BaseEngine):
             scored_items = []
             for hit in vector_results:
                 item = self.db.get_item(hit["id"])
-                if item:
+                if item and str(item.get("name", "")).strip():
                     scored_items.append({
                         "item": item,
                         "score": hit["score"], # 純 Qdrant 的 Cosine Score
@@ -257,7 +257,7 @@ class FilteredVectorEngine(BaseEngine):
             scored_items = []
             for hit in vector_results:
                 item = self.db.get_item(hit["id"])
-                if item:
+                if item and str(item.get("name", "")).strip():
                     scored_items.append({
                         "item": item,
                         "score": hit["score"], # 混合過濾後的 Qdrant Score
@@ -533,7 +533,7 @@ class HybridReasonerEngine(BaseEngine):
 
         for hit in vector_results:
             item = self.db.get_item(hit["id"])
-            if item:
+            if item and str(item.get("name", "")).strip():
                 bid = str(item["id"])
                 candidates_map[bid] = item
                 vector_score_map[bid] = hit["score"]

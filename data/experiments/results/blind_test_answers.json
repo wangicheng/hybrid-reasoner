@@ -1,0 +1,122 @@
+{
+    "q1": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "score_only",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q2": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "original_llm_reranker_top10",
+        "Candidate_C": "score_only"
+    },
+    "q3": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "score_only",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q4": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "original_llm_reranker_top10",
+        "Candidate_C": "hybrid_fusion"
+    },
+    "q5": {
+        "Candidate_A": "original_llm_reranker_top10",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "score_only"
+    },
+    "q6": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q7": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q8": {
+        "Candidate_A": "original_llm_reranker_top10",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "score_only"
+    },
+    "q9": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q10": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "original_llm_reranker_top10",
+        "Candidate_C": "hybrid_fusion"
+    },
+    "q11": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "score_only",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q12": {
+        "Candidate_A": "original_llm_reranker_top10",
+        "Candidate_B": "score_only",
+        "Candidate_C": "hybrid_fusion"
+    },
+    "q13": {
+        "Candidate_A": "original_llm_reranker_top10",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "score_only"
+    },
+    "q14": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "score_only",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q15": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q16": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "original_llm_reranker_top10",
+        "Candidate_C": "score_only"
+    },
+    "q17": {
+        "Candidate_A": "original_llm_reranker_top10",
+        "Candidate_B": "score_only",
+        "Candidate_C": "hybrid_fusion"
+    },
+    "q18": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q19": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "original_llm_reranker_top10",
+        "Candidate_C": "score_only"
+    },
+    "q20": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q21": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q22": {
+        "Candidate_A": "original_llm_reranker_top10",
+        "Candidate_B": "score_only",
+        "Candidate_C": "hybrid_fusion"
+    },
+    "q23": {
+        "Candidate_A": "score_only",
+        "Candidate_B": "hybrid_fusion",
+        "Candidate_C": "original_llm_reranker_top10"
+    },
+    "q24": {
+        "Candidate_A": "hybrid_fusion",
+        "Candidate_B": "score_only",
+        "Candidate_C": "original_llm_reranker_top10"
+    }
+}
