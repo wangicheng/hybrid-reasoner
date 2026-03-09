@@ -18,6 +18,7 @@
 ### 📊 實驗核心總結
 
 * **測試策略**：`score_only` (基礎版), `original_llm_reranker_top10` (LLM 大腦版), `hybrid_fusion` (Cross-Encoder 融合版)。
+* **測試策略**：`score_only` (基礎版), `original_llm_reranker_top10` (LLM 大腦版), `hybrid_fusion` (Cross-Encoder 融合版)。
 * **🏆 最佳方案**：**`original_llm_reranker_top10`**。在主觀盲測中獲得最高勝率 (43.75%)，且在處理「負面表述」(例如：不要異世界) 時展現了最佳的傷害控制能力。
 * **⚡ 效能指標**：
   * `score_only`：延遲最低 (0s Rerank)，穩定度高。
@@ -28,6 +29,7 @@
 
 * **實驗結果存放目錄**：[`experiments/results/`](./experiments/results/)
 * **詳細評測報告 (Markdown)**：👉 **[重排序策略評測報告](./experiments/results/rerank_strategy_evaluation_report.md)**
+* **原始模擬數據**：[`experiments/queries.json`](./experiments/queries.json)
 
 ---
 
@@ -36,7 +38,7 @@
 * **混合檢索引擎**: 結合 Qdrant 向量資料庫與傳統欄位過濾/評分 (Logic Push-down supported)。
 * **自然語言查詢 (Gemini Powered)**: 使用 Google Gemini 模型解析模糊的查詢意圖 (例如: "找一本字數超過十萬字的奇幻小說")，並生成結構化搜尋條件。
 * **可解釋性 (Explainability)**: 系統不僅推薦書籍，還會告訴你*為什麼*這本書符合你的需求。
-* **自動化爬蟲**: 從 MirrorFiction 抓取小說資料作為測試數據。
+* **自動化爬蟲**: 從 MirrorFiction 抓取小說資料與測試數據。
 * **Modern Web UI**: 提供直觀的網頁搜尋介面。
 * **Windows 一鍵啟動**: 透過 `run_web.bat` 快速啟動服務。
 
