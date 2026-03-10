@@ -1,4 +1,5 @@
 import asyncio
+import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 from src.core.llm import parse_query
 from src.models.schemas import QueryParseResult
@@ -8,15 +9,16 @@ from src.logic.registry import ScoringRegistry
 import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
 from src.config import settings
+from qdrant_client.http import models as rest
 
 class HybridEngine:
     """
-    深度推理混合引擎 (Hybrid Reasoner Engine)
-    包含 Filter、向量、局部取回後的多維度條件逐條加權計分，與可解釋性生成。
+    简化的混合搜索引擎 (Simplified Hybrid Search Engine)
     
-    向量搜尋支持：
-    - 融合向量 (書名 + 標籤 + 簡介)
-    - 多向量 (文本語意 + 標籤語意 with weighted fusion)
+    核心策略：
+    - 主要依赖：多向量语义搜索 (text_semantic 0.7 + tag_semantic 0.3)
+    - 可选过滤：状态、作者、字数（Qdrant 硬过滤）
+    - 负向语义：二次向量查询实现排除功能
     """
     def __init__(self, db=None, vs=None, use_fused_vectors: bool = True, use_multi_vector: bool = True):
         self.db = db if db is not None else Database()
@@ -38,128 +40,276 @@ class HybridEngine:
         self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
         self.use_fused_vectors = use_fused_vectors
 
-    @staticmethod
-    def _minmax_normalize(values: List[float]) -> List[float]:
-        if not values:
-            return []
-        min_v = min(values)
-        max_v = max(values)
-        if max_v - min_v < 1e-9:
-            return [0.5 for _ in values]
-        return [(v - min_v) / (max_v - min_v) for v in values]
-
-    def _normalize_vector_score(self, raw_score: float) -> float:
-        """將 Qdrant 的 Cosine Score 拉伸到 0.0~1.0"""
-        min_threshold = 0.35
-        max_threshold = 0.65  
+    def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
+        """
+        根据 criteria 构建 Qdrant 硬过滤器（Logic Push-down）
         
-        if raw_score <= min_threshold:
-            return 0.0
-        if raw_score >= max_threshold:
-            return 1.0
+        硬過濾器的意義：
+        在 Qdrant 向量搜索「之前」先排除不可能符合的候選項，
+        這樣向量搜索只在符合條件的子集上進行，大幅提升效率和精確度。
+        
+        支持的过滤条件：
+        - status_check: publish_status = "完結" or "連載"
+        - author_match: author 包含指定作者名
+        - numeric_range: words_total 的范围查询
+        
+        Returns:
+            rest.Filter 对象，如果没有过滤条件则返回 None
+        """
+        conditions = []
+        
+        for criteria in criteria_list:
+            if hasattr(criteria.parameters, 'model_dump'):
+                params = criteria.parameters.model_dump()
+            else:
+                params = criteria.parameters.dict()
             
-        return (raw_score - min_threshold) / (max_threshold - min_threshold)
+            # 1. 状态检查
+            if criteria.name == "status_check":
+                target_status = params.get("target_status", "")
+                target_lower = target_status.lower()
+                
+                # 映射多种表达方式到数据库实际值（涵蓋繁/簡體中文與英文）
+                completed_keywords = [
+                    "complet", "finish", "ended", "done",
+                    "完結", "完结", "已完結", "已完结"
+                ]
+                ongoing_keywords = [
+                    "ongoing", "serializ", "running", "active",
+                    "連載", "连载", "連載中", "连载中"
+                ]
+                
+                if any(x in target_lower or x in target_status for x in completed_keywords):
+                    status_value = "完結"
+                elif any(x in target_lower or x in target_status for x in ongoing_keywords):
+                    status_value = "連載"
+                else:
+                    print(f"[Filter] 無法辨識狀態值: '{target_status}'，跳過")
+                    continue
+                
+                conditions.append(
+                    rest.FieldCondition(
+                        key="publish_status",
+                        match=rest.MatchValue(value=status_value)
+                    )
+                )
+                print(f"[Filter] 狀態過濾: {status_value}")
+            
+            # 2. 作者匹配
+            elif criteria.name == "author_match":
+                author_name = params.get("author_name", "").strip()
+                if author_name:
+                    # 優先使用 MatchText（支持部分匹配，需要 full-text index）
+                    # 若 Qdrant 版本不支持或欄位無 index 則回退到 MatchValue
+                    try:
+                        conditions.append(
+                            rest.FieldCondition(
+                                key="author",
+                                match=rest.MatchText(text=author_name)
+                            )
+                        )
+                    except Exception:
+                        conditions.append(
+                            rest.FieldCondition(
+                                key="author",
+                                match=rest.MatchValue(value=author_name)
+                            )
+                        )
+                    print(f"[Filter] 作者過濾: {author_name}")
+            
+            # 3. 字数范围（仅支持 words_total 字段）
+            elif criteria.name == "numeric_range":
+                field = params.get("field")
+                if field == "words_total":
+                    min_val = params.get("min_val")
+                    max_val = params.get("max_val")
+                    
+                    def _fmt_words(val):
+                        """安全格式化字數為萬字單位"""
+                        if val is None or val == 0:
+                            return "0"
+                        return f"{int(val / 10000)}"
+                    
+                    if min_val is not None and max_val is not None:
+                        conditions.append(
+                            rest.FieldCondition(
+                                key="words_total",
+                                range=rest.Range(gte=min_val, lte=max_val)
+                            )
+                        )
+                        print(f"[Filter] 字數範圍: {_fmt_words(min_val)}-{_fmt_words(max_val)}萬字")
+                    elif min_val is not None:
+                        conditions.append(
+                            rest.FieldCondition(
+                                key="words_total",
+                                range=rest.Range(gte=min_val)
+                            )
+                        )
+                        print(f"[Filter] 字數 >= {_fmt_words(min_val)}萬字")
+                    elif max_val is not None:
+                        conditions.append(
+                            rest.FieldCondition(
+                                key="words_total",
+                                range=rest.Range(lte=max_val)
+                            )
+                        )
+                        print(f"[Filter] 字數 <= {_fmt_words(max_val)}萬字")
+        
+        if conditions:
+            return rest.Filter(must=conditions)
+        return None
 
     def calculate_score(
         self,
         item: Dict[str, Any],
         criteria_list: List[Any],
         vector_score: float = 0.0,
-        normalized_vector_score: Optional[float] = None,
+        negative_semantic_scores: Optional[Dict[str, float]] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
-        total_score = 0.0
+        """
+        简化评分逻辑：只计算语义分数（纯分数，不归一化）
+        
+        Args:
+            item: 候选书籍项
+            criteria_list: 评分条件列表
+            vector_score: 原始向量分数
+            negative_semantic_scores: 负向语义分数字典 {item_id: negative_score}
+        
+        Returns:
+            (总分, 评分明细)
+        """
         breakdown = []
         
-        # --- 1. 處理向量分數 ---
-        semantic_criteria = next((c for c in criteria_list if c.name == "semantic_similarity"), None)
-        
-        is_sem_negative = getattr(semantic_criteria, 'is_negative', False) if semantic_criteria else False
-        sem_weight = -1.0 if is_sem_negative else 1.0
-        reason_suffix = "(反向權重)" if is_sem_negative else "(固定權重)"
-
-        normalized_v_score = (
-            normalized_vector_score
-            if normalized_vector_score is not None
-            else self._normalize_vector_score(vector_score)
-        )
-        v_score_contrib = normalized_v_score * sem_weight
-        total_score += v_score_contrib
+        # --- 1. 正向语义分数（纯分数）---
+        total_score = vector_score
         
         breakdown.append({
             "criteria": "semantic_similarity",
-            "label": "語意與內容相似度",
-            "weight": sem_weight,
-            "raw_score": vector_score,       
-            "normalized_score": normalized_v_score, 
-            "weighted_score": v_score_contrib,
-            "reason": f"語意相似度 {vector_score:.3f} -> Norm {normalized_v_score:.2f} {reason_suffix}"
+            "label": "語意相似度 (文本×0.7 + 標籤×0.3)",
+            "raw_score": vector_score,
+            "weighted_score": vector_score,
+            "is_filter": False,
+            "reason": f"多向量融合分數: {vector_score:.4f}"
         })
+        
+        # --- 2. 负向语义分数（纯分数）---
+        item_id = str(item.get("id"))
+        if negative_semantic_scores and item_id in negative_semantic_scores:
+            neg_score = negative_semantic_scores[item_id]
+            total_score -= neg_score
+            
+            breakdown.append({
+                "criteria": "semantic_similarity",
+                "label": "[排除] 負向語意",
+                "raw_score": neg_score,
+                "weighted_score": -neg_score,
+                "is_negative": True,
+                "is_filter": False,
+                "reason": f"排除內容相似度: {neg_score:.4f}"
+            })
 
-        # --- 2. 處理其他規則分數 ---
+        # --- 3. 过滤条件（仅记录，不计分）---
         for criteria in criteria_list:
-            func_name = criteria.name
-            
-            if func_name == "semantic_similarity":
-                continue
-                
-            is_negative = getattr(criteria, 'is_negative', False)
-            weight = -1.0 if is_negative else 1.0
-            
             if hasattr(criteria.parameters, 'model_dump'):
                 params = criteria.parameters.model_dump()
             else:
                 params = criteria.parameters.dict()
             
-            func = ScoringRegistry.get(func_name)
-            if not func:
-                continue
-                
-            result = func(item, params)
+            # 状态检查
+            if criteria.name == "status_check":
+                target_status = params.get("target_status", "").lower()
+                status_label = "完結" if any(x in target_status for x in ["complet", "finish", "完結"]) else "連載"
+                breakdown.append({
+                    "criteria": "status_check",
+                    "label": f"[過濾] 狀態: {status_label}",
+                    "matched": True,
+                    "is_filter": True,
+                    "reason": "已在檢索層過濾（Qdrant Filter）"
+                })
             
-            if isinstance(result, tuple):
-                raw_score, reason_msg = result
-            else:
-                raw_score = float(result)
-                reason_msg = f"評分: {raw_score:.2f}"
-
-            score_contrib = raw_score * weight
-            total_score += score_contrib
+            # 作者匹配
+            elif criteria.name == "author_match":
+                author_name = params.get("author_name", "")
+                breakdown.append({
+                    "criteria": "author_match",
+                    "label": f"[過濾] 作者: {author_name}",
+                    "matched": True,
+                    "is_filter": True,
+                    "reason": "已在檢索層過濾（Qdrant Filter）"
+                })
             
-            label = func_name
-            if func_name == "keyword_match":
-                field = params.get("field", "")
-                field_str = "分類" if field == "classification" else ("標籤" if field == "tags" else field)
-                label = f"{field_str}: {params.get('keyword', '關鍵字')}"
-            elif func_name == "numeric_range":
+            # 字数范围
+            elif criteria.name == "numeric_range" and params.get("field") == "words_total":
                 min_v = params.get("min_val")
                 max_v = params.get("max_val")
                 if min_v and max_v:
-                    label = f"字數: {int(min_v/10000)}萬-{int(max_v/10000)}萬"
+                    label = f"[過濾] 字數: {int(min_v/10000)}-{int(max_v/10000)}萬字"
                 elif min_v:
-                    label = f"字數 > {int(min_v/10000)}萬"
+                    label = f"[過濾] 字數 >= {int(min_v/10000)}萬字"
                 elif max_v:
-                    label = f"字數 < {int(max_v/10000)}萬"
+                    label = f"[過濾] 字數 <= {int(max_v/10000)}萬字"
                 else:
-                    label = "字數範圍"
-            elif func_name == "status_check":
-                label = f"狀態: {params.get('target_status', '狀態')}"
-            elif func_name == "author_match":
-                label = f"作者: {params.get('author_name', '作者')}"
-
-            if is_negative:
-                label = f"[排除] {label}"
-
-            breakdown.append({
-                "criteria": func_name,
-                "label": label,
-                "weight": weight,
-                "raw_score": raw_score,
-                "weighted_score": score_contrib,
-                "params": params,
-                "reason": reason_msg
-            })
+                    label = "[過濾] 字數範圍"
+                
+                breakdown.append({
+                    "criteria": "numeric_range",
+                    "label": label,
+                    "matched": True,
+                    "is_filter": True,
+                    "reason": "已在檢索層過濾（Qdrant Filter）"
+                })
             
         return total_score, breakdown
+
+    def _extract_reference_novel_tags(self, user_query: str) -> List[str]:
+        """
+        从用户查询中提取参考小说名，并返回该小说的标签
+        """
+        import re
+        
+        # 提取书名（使用《》或引号括起来的内容）
+        book_patterns = [
+            r'《([^》]+)》',
+            r'「([^」]+)」',
+            r'『([^』]+)』',
+            r'"([^"]+)"',
+        ]
+        
+        extracted_tags = []
+        
+        for pattern in book_patterns:
+            matches = re.findall(pattern, user_query)
+            for match in matches:
+                # 搜索数据库
+                results = self.db.search_by_title_fuzzy(match)
+                if results:
+                    book = results[0]  # 取第一个匹配
+                    tags = book.get('tags', [])
+                    if tags:
+                        print(f"[Engine] 检测到参考书籍: 《{book['name']}》")
+                        print(f"[Engine] 提取标签: {', '.join(tags[:5])}")
+                        extracted_tags.extend(tags)
+        
+        # 也检查常见书名（不带书名号）
+        common_books = [
+            '為美好的世界獻上祝福', '无职转生', '從零開始', 'overlord',
+            '转生史莱姆', '關於我轉生', '蜘蛛', '影之強者', '美好的世界'
+        ]
+        
+        for book_name in common_books:
+            if book_name.lower() in user_query.lower():
+                results = self.db.search_by_title_fuzzy(book_name)
+                if results:
+                    book = results[0]
+                    tags = book.get('tags', [])
+                    if tags:
+                        print(f"[Engine] 检测到参考书籍: 《{book['name']}》")
+                        print(f"[Engine] 提取标签: {', '.join(tags[:5])}")
+                        extracted_tags.extend(tags)
+                        break
+        
+        # 去重
+        return list(dict.fromkeys(extracted_tags))
 
     async def search(
         self,
@@ -169,27 +319,58 @@ class HybridEngine:
         explain: bool = True,
     ) -> Dict[str, Any]:
         """
-        Executes the full search pipeline.
+        简化的搜索流程：语义搜索 + 硬过滤 + 负向语义
         """
         # 1. Parse Query
         parse_result = parse_query(user_query, model_id=model_id)
         
-        # 2. 準備檢索字詞 (不使用 Qdrant 硬過濾，讓所有書籍進入多維度加權)
+        # 1.5 提取参考小说标签
+        reference_tags = self._extract_reference_novel_tags(user_query)
+        
+        # 2. 构建 Qdrant 硬过滤器
+        qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
+        
+        # 3. 準備檢索字詞（擴展查詢 + 正向語義條件 + 參考標籤）
         base_terms = " ".join(parse_result.search_terms) or parse_result.original_query
         
         expanded_terms = base_terms
+        
+        # 3.1 將正向 semantic_similarity 的 query_text 加入搜索查詢
+        #     這是關鍵：LLM 解析出的標籤/概念語義必須參與向量搜索
+        positive_semantic = [c for c in parse_result.criteria 
+                            if c.name == "semantic_similarity" and not getattr(c, 'is_negative', False)]
+        if positive_semantic:
+            semantic_texts = []
+            for sc in positive_semantic:
+                params = sc.parameters.model_dump() if hasattr(sc.parameters, 'model_dump') else sc.parameters.dict()
+                qt = params.get("query_text", "").strip()
+                if qt:
+                    semantic_texts.append(qt)
+            if semantic_texts:
+                semantic_expansion = " ".join(semantic_texts)
+                print(f"[Engine] 正向語義條件加入搜索: {semantic_expansion}")
+                expanded_terms += f" {semantic_expansion}"
+        
+        # 3.2 LLM 生成的擴展關鍵字
         if parse_result.generated_keywords:
             cleaned_keywords = [kw.replace(" ", "") for kw in parse_result.generated_keywords]
             expansion_str = " ".join(cleaned_keywords)
             print(f"[Engine] LLM-expanded keywords: {expansion_str}")
             expanded_terms += f" {expansion_str}"
         
+        # 3.3 添加参考小说的标签到查询中
+        if reference_tags:
+            tags_str = " ".join(reference_tags[:8])  # 最多使用8个标签
+            print(f"[Engine] 添加參考標籤到查詢: {tags_str}")
+            expanded_terms += f" {tags_str}"
+        
+        # 3.4 HyDE 假設文檔嵌入
         if parse_result.hypothetical_intro:
             print(f"[Engine] HyDE hypothetical intro: {parse_result.hypothetical_intro[:80]}...")
             expanded_terms += f" {parse_result.hypothetical_intro}"
         
-        # 取回全部資料進行純 Python 多維度軟評分
-        retrieval_limit = 10000
+        # 4. 执行正向语义搜索（带硬过滤）
+        retrieval_limit = 100  # 减少检索数量，因为有硬过滤
         
         # Use multi-vector search if available
         query_vector = None
@@ -197,7 +378,7 @@ class HybridEngine:
             vector_results, query_vector = self.vs.search_multi_vector(
                 expanded_terms,
                 limit=retrieval_limit,
-                query_filter=None,
+                query_filter=qdrant_filter,  # 应用硬过滤
                 with_payload=True,
                 text_weight=0.7,  # Text semantic priority
                 tag_weight=0.3    # Tag semantic secondary
@@ -207,31 +388,47 @@ class HybridEngine:
             vector_results, query_vector = self.vs.search(
                 expanded_terms,
                 limit=retrieval_limit,
-                query_filter=None,  # 移除硬過濾
+                query_filter=qdrant_filter,  # 应用硬过滤
                 with_payload=True
             )
         
-        is_relaxed = True  # 標記為放寬，因為我們沒有用任何硬條件
-        
+        # 5. 收集候选项（並補充完整資料）
         candidates_map = {} 
         vector_score_map = {}
         payload_map = {} 
 
         for hit in vector_results:
-            # Use payload data directly from Qdrant (includes original string ID)
-            # hit["id"] is numeric ID (MD5), but payload has the complete item data
+            # Use payload data directly from Qdrant
             if hit.get('payload') and hit['payload'].get("name"):
-                # Extract original string ID from payload
                 str_id = hit['payload'].get("id")
                 if not str_id:
                     continue
                     
                 bid = str(str_id)
-                candidates_map[bid] = hit['payload']  # Use payload as item
+                payload = hit['payload']
+                
+                # 檢查 payload 是否缺少關鍵字段（classification, words_total, author 等）
+                # novels_multi_vector collection 只有 id, name, intro, tags 四個字段
+                missing_fields = not payload.get('classification') or not payload.get('words_total')
+                
+                if missing_fields:
+                    # 從資料庫補充完整數據
+                    db_item = self.db.get_item(bid)
+                    if db_item:
+                        # 合併：保留 payload 的 intro/tags（可能更新），補充資料庫的其他字段
+                        full_item = {**db_item, **payload}  # payload 覆蓋 db_item
+                        candidates_map[bid] = full_item
+                    else:
+                        # 資料庫也沒有？只能用 payload 的部分數據
+                        candidates_map[bid] = payload
+                else:
+                    # Payload 已完整
+                    candidates_map[bid] = payload
+                
                 vector_score_map[bid] = hit["score"]
-                payload_map[bid] = hit['payload']
+                payload_map[bid] = payload
             else:
-                # Fallback: try to get from database if payload is missing
+                # Fallback: try to get from database
                 item = self.db.get_item(hit.get("id"))
                 if item and item.get("name"):
                     bid = str(item["id"])
@@ -240,70 +437,68 @@ class HybridEngine:
                     if hit.get('payload'):
                         payload_map[bid] = hit['payload']
         
-        # 3. Structural Retrieval (Title & Author Match)
-        # 3a. Title Match (Newly Added for Exact Title Search)
-        # Utilizes search_terms to find exact book matches
-        for term in parse_result.search_terms:
-            if len(term) < 2: continue # Skip single chars
-            title_matches = self.db.search_by_title_fuzzy(term)
-            for book in title_matches:
-                b_id = str(book["id"])
-                # Only add if robust match (e.g. term is significant part of title)
-                # For now, trust the keyword search but assign high score
-                if b_id not in candidates_map:
-                    print(f"[Engine] [Title Match] {book['name']} (term: {term})")
-                    candidates_map[b_id] = book
-                    # Assign max vector score for direct title match
-                    vector_score_map[b_id] = 1.0
-
-        # 3b. Author Match
-        for criterion in parse_result.criteria:
-            if criterion.name == "author_match":
-                # Handle parameter extraction more safely
-                if hasattr(criterion.parameters, 'author_name'):
-                    author_name = criterion.parameters.author_name
-                elif isinstance(criterion.parameters, dict):
-                    author_name = criterion.parameters.get("author_name")
-                else: 
-                    author_name = None
-                
-                if author_name:
-                    author_books = self.db.search_by_author(author_name)
-                    for book in author_books:
-                        b_id = str(book["id"])
-                        if b_id not in candidates_map:
-                            candidates_map[b_id] = book
-                            vector_score_map[b_id] = 0.5 
-
         candidates = list(candidates_map.values())
+        print(f"[Engine] Retrieved {len(candidates)} candidates after filtering")
 
-        # 4. Scoring
-        # Dynamic normalization within current query candidates (restores discrimination)
-        vector_norm_map: Dict[str, float] = {}
-        if vector_score_map:
-            vector_values = [float(v) for v in vector_score_map.values()]
-            min_vector = min(vector_values)
-            max_vector = max(vector_values)
+        # 6. 计算负向语义分数（如果有排除条件）
+        negative_semantic_scores = {}
+        negative_criteria = [c for c in parse_result.criteria 
+                             if c.name == "semantic_similarity" and getattr(c, 'is_negative', False)]
+        
+        if negative_criteria and candidates:
+            print(f"[Engine] Computing negative semantic scores for {len(negative_criteria)} exclusion(s)...")
+            
+            # 对每个负向条件进行向量嵌入
+            for neg_crit in negative_criteria:
+                params = neg_crit.parameters.model_dump() if hasattr(neg_crit.parameters, 'model_dump') else neg_crit.parameters.dict()
+                neg_query_text = params.get("query_text", "")
+                
+                if not neg_query_text:
+                    continue
+                
+                print(f"[Engine] Negative semantic: '{neg_query_text}'")
+                
+                # 嵌入负向查询
+                if self.use_multi_vector:
+                    neg_results, neg_vector = self.vs.search_multi_vector(
+                        neg_query_text,
+                        limit=len(candidates),  # 只需要对候选项计算
+                        query_filter=None,  # 不应用过滤
+                        with_payload=False,  # 只需要分数
+                        text_weight=0.7,
+                        tag_weight=0.3
+                    )
+                else:
+                    neg_results, neg_vector = self.vs.search(
+                        neg_query_text,
+                        limit=len(candidates),
+                        query_filter=None,
+                        with_payload=False
+                    )
+                
+                # 构建负向分数映射
+                neg_score_map = {str(hit.get('payload', {}).get('id', hit.get('id'))): hit['score'] 
+                                 for hit in neg_results if hit.get('score')}
+                
+                # 累加每个候选项的负向分数（纯分数）
+                for bid in candidates_map.keys():
+                    if bid in neg_score_map:
+                        current_neg = negative_semantic_scores.get(bid, 0.0)
+                        raw_neg = neg_score_map[bid]
+                        negative_semantic_scores[bid] = current_neg + raw_neg
 
-            if max_vector - min_vector > 1e-9:
-                for bid, raw_v in vector_score_map.items():
-                    vector_norm_map[bid] = (float(raw_v) - min_vector) / (max_vector - min_vector)
-            else:
-                for bid, raw_v in vector_score_map.items():
-                    vector_norm_map[bid] = self._normalize_vector_score(float(raw_v))
-
+        # 7. 评分和排序（纯分数，不归一化）
         scored_items = []
         for item in candidates:
             bid = str(item["id"])
             v_score = vector_score_map.get(bid, 0.0)
-            v_norm = vector_norm_map.get(bid, self._normalize_vector_score(float(v_score)))
             
-            # Calculate final hybrid score (Rule + Vector)
+            # Calculate final score with negative semantics (raw scores only)
             score_val, breakdown = self.calculate_score(
                 item,
                 parse_result.criteria,
                 vector_score=v_score,
-                normalized_vector_score=v_norm,
+                negative_semantic_scores=negative_semantic_scores,
             )
 
             final_score = float(score_val)
@@ -319,33 +514,20 @@ class HybridEngine:
         # 最終排序
         scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
         
-        # 放寬搜尋的最低語意門檻：過濾掉向量分數太低的雜訊
-        # Multi-vector Late Interaction scores are weighted sums (text_weight * score + tag_weight * score)
-        # Observed range: 0.15-0.25 for typical queries, so use very low threshold
-        threshold = 0.15 if self.use_multi_vector else 0.5
-        
-        # Debug: print top scores before filtering
-        if scored_items:
-            top_scores = [r['vector_score'] for r in scored_items[:5]]
-            print(f"[Engine] Top 5 vector scores before threshold: {top_scores}")
-            print(f"[Engine] Using threshold: {threshold}")
-        
-        if is_relaxed:
-            scored_items = [r for r in scored_items if float(r['vector_score']) > threshold]
-            
         if not scored_items:
-            print("[Engine] ℹ️ 無足夠相關結果，回傳空結果。")
+            print("[Engine] ℹ️ 無足夠相關結果")
             return {
                 "query": user_query,
                 "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-                "query_vector": query_vector,  # Already converted to list in vector_store.py
+                "query_vector": query_vector,
                 "results": [],
-                "is_relaxed": is_relaxed,
                 "message": "資料庫中無相關書籍，請嘗試其他搜尋條件。",
-                "engine": "HybridEngine"
+                "engine": "HybridEngine (Simplified)"
             }
+        
         final_results = scored_items[:limit]
 
+        # 9. 生成解释（可选）
         top_n_explain = 3 if explain else 0 
         explainer_runtime_state = {
             "gemini_fail_count": 0,
@@ -382,8 +564,7 @@ class HybridEngine:
         return {
             "query": user_query,
             "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
-            "query_vector": query_vector,  # Already converted to list in vector_store.py
+            "query_vector": query_vector,
             "results": final_results,
-            "is_relaxed": is_relaxed,
-            "engine": "HybridEngine",
+            "engine": "HybridEngine (Simplified: Semantic + Filters)",
         }

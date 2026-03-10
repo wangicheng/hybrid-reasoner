@@ -121,7 +121,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     else:
         models_to_try = FALLBACK_MODELS
 
-    # 手動定義 Schema (保留原有的 schema 定義)
+    # 手動定義 Schema (简化为语义搜索 + 硬过滤模式)
     manual_schema = {
         "type": "object",
         "properties": {
@@ -130,7 +130,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
             "generated_keywords": {
                 "type": "array", 
                 "items": {"type": "string"},
-                "description": "5-10 specific domain keywords."
+                "description": "5-10 specific domain keywords for semantic expansion."
             },
             "hypothetical_intro": {
                 "type": "string",
@@ -141,21 +141,43 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                 "items": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string"},
-                        "is_negative": {"type": "boolean"},
+                        "name": {
+                            "type": "string",
+                            "enum": ["semantic_similarity", "status_check", "author_match", "numeric_range"],
+                            "description": "Function name. Only use: semantic_similarity (for main search), status_check (completed/ongoing), author_match (specific author), numeric_range (word count only)"
+                        },
+                        "is_negative": {
+                            "type": "boolean",
+                            "description": "Only applicable for semantic_similarity. True for exclusions like '不要龍傲天'"
+                        },
                         "description": {"type": "string"},
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "field": {"type": "string"},
-                                "keyword": {"type": "string"},
-                                "min_val": {"type": "number"},
-                                "max_val": {"type": "number"},
-                                "target_status": {"type": "string"},
-                                "query_text": {"type": "string"},
-                                "author_name": {"type": "string"},
-                                "ranking_direction": {"type": "string"},
-                                "normalize_max": {"type": "number"}
+                                "query_text": {
+                                    "type": "string",
+                                    "description": "For semantic_similarity: the semantic concept to search/exclude"
+                                },
+                                "target_status": {
+                                    "type": "string",
+                                    "description": "For status_check: 'completed', 'finished', 'ongoing', 'serializing'"
+                                },
+                                "author_name": {
+                                    "type": "string",
+                                    "description": "For author_match: author name"
+                                },
+                                "field": {
+                                    "type": "string",
+                                    "description": "For numeric_range: must be 'words_total'"
+                                },
+                                "min_val": {
+                                    "type": "number",
+                                    "description": "For numeric_range: minimum word count"
+                                },
+                                "max_val": {
+                                    "type": "number",
+                                    "description": "For numeric_range: maximum word count"
+                                }
                             }
                         }
                     },
@@ -172,42 +194,75 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     """
     
     full_system_instruction = """
-    You are a web novel recommendation assistant. Your goal is to break down the user's query into scoring criteria.
+    You are a web novel recommendation assistant. Your goal is to parse user queries into semantic search + optional filters.
     
-    ### Available Scoring Functions
-    1. **keyword_match** (field, keyword): 'classification', 'tags', 'name'.
-    2. **numeric_range** (field, min_val, max_val): ONLY 'words_total', 'bookmark_count', 'rating_score', 'total_recommendations'. DO NOT invent fields!
-    3. **numeric_ranking** (field, ranking_direction, normalize_max): ONLY 'words_total', 'bookmark_count', 'rating_score', 'total_recommendations'. Soft ranking.
-    4. **status_check** (target_status): 'completed', 'ongoing'.
-    5. **author_match** (author_name).
-    6. **semantic_similarity** (query_text): Concepts that do not fit in tags, e.g. "主角聰明", "角色少".
-
-    Strategy: Use `keyword_match` ONLY for explicit existing genres/tags. Use `semantic_similarity` for story features (like "角色少").
+    ### CORE PRINCIPLE
+    - **Primary Method**: Semantic Vector Search (rely on embedding similarity)
+    - **Optional Filters**: Only use when user explicitly specifies hard constraints
     
-    ### Rules for `is_negative`
-    Use `is_negative: true` ONLY for explicit EXCLUSIONS (e.g., "不要龍傲天" -> `is_negative: true`, keyword: "龍傲天").
-    DO NOT use `is_negative: true` if the user is asking for a trait, even if it uses negative words! 
-    For example, "角色不要太多" means the user WANTS "few characters". You should use `semantic_similarity` with query_text="角色少" and `is_negative: false`.
+    ### Available Filter Functions (Database-level filtering, NOT scoring)
+    Use these ONLY when user explicitly mentions these constraints:
     
-    ### TASK: DYNAMIC QUERY EXPANSION
-    In `generated_keywords`, generate 5-10 specific terms (Traditional Chinese) relevant to the query concepts.
+    1. **status_check**(target_status): Use ONLY when user explicitly wants "完結" (completed) or "連載" (ongoing)
+       - Valid values: "completed", "finished", "ongoing", "serializing"
+       - Example: "找完結小說" → status_check(target_status="completed")
     
-    ### TASK: HYPOTHETICAL DOCUMENT EMBEDDINGS (HyDE)
-    In addition to keywords, generate a `hypothetical_intro`.
-    Imagine a perfect novel exists that satisfies the user's query. Write a short **Book Intro (Blurb)** for it.
-    - **Style**: Use the tone typical of web novels (dramatic, engaging, using genre tropes).
-    - **Language**: Traditional Chinese (繁體中文).
-    - **Length**: 50 to 100 words.
-
+    2. **author_match**(author_name): Use ONLY when user specifies an author name
+       - Example: "猫腻的小說" → author_match(author_name="猫腻")
+    
+    3. **numeric_range**(field="words_total", min_val, max_val): Use for HARD word count requirements
+       - field MUST be "words_total" (no other fields allowed)
+       - min_val/max_val in actual word count (e.g., 20萬字 = 200000)
+       - **IMPORTANT**: Only use for STRICT requirements. If user says "最好", "推薦", "建議", "希望" (soft preferences), DO NOT use this filter
+       - Example: "20萬字以上" (strict) → numeric_range(field="words_total", min_val=200000)
+       - Example: "最好10萬字以上" (soft) → DO NOT use numeric_range, rely on semantic search
+       - Example: "必須20-50萬字" (strict) → numeric_range(field="words_total", min_val=200000, max_val=500000)
+    
+    ### Semantic Search Strategy
+    For ALL other requirements (genre, tags, plot, character traits, style), rely on semantic similarity:
+    - **DO NOT use** `keyword_match` - it's deprecated
+    - **DO NOT use** `numeric_ranking` - it's deprecated
+    - Use `semantic_similarity` for positive semantic requirements (genre, tags, themes, tropes, etc.)
+    - Use `semantic_similarity` with `is_negative: true` for exclusions
+    
+    ### IMPORTANT: Tag & Genre Search
+    When user mentions specific tags or genres (e.g., "異世界", "後宮", "奇幻", "搞笑"), you MUST:
+    1. Add a `semantic_similarity` criteria with `query_text` containing the tag/genre keywords
+    2. Also include these terms in `search_terms` for direct vector matching
+    3. Example: "找異世界後宮小說" → 
+       - search_terms: ["異世界 後宮 小說"]
+       - criteria: semantic_similarity(query_text="異世界轉生 後宮 冒險")
+       - generated_keywords: ["穿越", "轉生", "魔法", "勇者", "冒險者", "女主角"]
+    
+    ### IMPORTANT: `is_negative` Rules
+    - Use `is_negative: true` ONLY for explicit EXCLUSIONS
+    - Example: "不要龍傲天" → semantic_similarity(query_text="龍傲天", is_negative=true)
+    - Example: "不要修仙" → semantic_similarity(query_text="修仙", is_negative=true)
+    - If user says "角色不要太多", it means WANTS "few characters" → semantic_similarity(query_text="角色少", is_negative=false)
+    
+    ### TASK 1: Query Expansion (generated_keywords)
+    Generate 5-10 specific domain keywords in Traditional Chinese that capture the semantic intent.
+    - Focus on genre-specific terms, tropes, themes
+    - Example for "科幻": ["太空", "未來", "科技", "星際", "機器人", "時間旅行"]
+    
+    ### TASK 2: Hypothetical Document Embeddings (hypothetical_intro)
+    Generate a hypothetical book introduction (50-100 words) that matches the query perfectly.
+    - **Style**: Dramatic, engaging, using web novel tropes
+    - **Language**: Traditional Chinese (繁體中文)
+    - **Goal**: Create text semantically similar to actual book summaries in database
+    
     **Examples:**
     - Query: "網遊小說"
-      - hypothetical_intro: "一款劃時代的虛擬實境遊戲《榮耀》橫空出世，主角葉修手持千機傘，帶領一群菜鳥重返巔峰..."
+      hypothetical_intro: "一款劃時代的虛擬實境遊戲《榮耀》橫空出世，主角葉修手持千機傘，帶領一群菜鳥重返巔峰..."
+    
     - Query: "打臉爽文"
-      - hypothetical_intro: "家族棄少受盡冷眼，一朝覺醒無上血脈。曾經羞辱我的人，如今都要跪在我腳下顫抖！三十年河東，三十年河西..."
+      hypothetical_intro: "家族棄少受盡冷眼，一朝覺醒無上血脈。曾經羞辱我的人，如今都要跪在我腳下顫抖！"
+    
     - Query: "輕鬆治癒"
-      - hypothetical_intro: "厭倦了城市的喧囂，他回到鄉下繼承了一間破舊的小食堂。沒想到，這裡的客人竟然都是..."
-
-    Your goal is to create a text chunk that is semantically similar to the *actual summaries* in the database.
+      hypothetical_intro: "厭倦了城市的喧囂，他回到鄉下繼承了一間破舊的小食堂。溫暖的料理，治癒了每一位客人的心靈..."
+    
+    ### Output Format
+    Always include: original_query, search_terms, generated_keywords, hypothetical_intro, criteria
     """
 
     last_exception = None
@@ -299,47 +354,25 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     if last_exception:
         print(f"[llm] 所有模型皆失敗，最後錯誤: {last_exception}")
         
-        # --- Fallback Logic ---
-        import re
+        # --- Simplified Fallback Logic: Pure Semantic Search ---
         from src.models.schemas import ScoringCriteria, ScoringParameters
         
-        quoted_matches = re.findall(r"['\"](.*?)['\"]", user_query)
-        fallback_criteria = []
+        print("[llm] 進入簡化 Fallback 模式：純語意搜尋")
         
-        if quoted_matches:
-            for tag in quoted_matches:
-                if tag.strip():
-                    fallback_criteria.append(
-                        ScoringCriteria(
-                            name="keyword_match",
-                            is_negative=False,
-                            parameters=ScoringParameters(field="tags", keyword=tag.strip())
-                        )
-                    )
-        elif ',' in user_query or ' ' in user_query:
-            parts = [p.strip() for p in user_query.replace(',', ' ').split()]
-            if len(parts) > 1:
-                for p in parts[:5]:
-                   fallback_criteria.append(
-                        ScoringCriteria(
-                            name="keyword_match",
-                            is_negative=False,
-                            parameters=ScoringParameters(field="tags", keyword=p)
-                        )
-                    )
-
-        fallback_criteria.append(
+        # 只生成一个 semantic_similarity criteria
+        fallback_criteria = [
             ScoringCriteria(
                 name="semantic_similarity", 
                 is_negative=False,
                 parameters=ScoringParameters(query_text=user_query)
             )
-        )
+        ]
 
         return QueryParseResult(
             original_query=user_query,
-            search_terms=quoted_matches if quoted_matches else [user_query],
-            hypothetical_intro="",
+            search_terms=[user_query],
+            generated_keywords=[],  # Fallback 不生成关键词
+            hypothetical_intro="",  # Fallback 不生成假设简介
             criteria=fallback_criteria
         )
 
