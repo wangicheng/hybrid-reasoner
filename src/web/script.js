@@ -34,7 +34,7 @@ async function performSearch() {
 
     // --- Display Search Interpretation ---
     if (data.parsed_criteria && data.parsed_criteria.length > 0) {
-      displayInterpretation(interpretationBox, data.parsed_criteria, data.query_vector);
+      displayInterpretation(interpretationBox, data.parsed_criteria, data.query_vector, data);
     }
 
     if (data.error) {
@@ -70,68 +70,111 @@ async function performSearch() {
   }
 }
 
-function displayInterpretation(container, criteriaList, queryVector) {
+function displayInterpretation(container, criteriaList, queryVector, data) {
   container.classList.remove('hidden');
 
-  // Group by type for cleaner display
-  const tags = [];
-  const keywords = [];
-  let semanticQuery = null;
+  // --- 從 criteria 中提取各類條件 ---
+  const semanticQueries = [];
+  const filters = [];
 
   criteriaList.forEach(c => {
-    if (c.name === 'keyword_match') {
-      const field = c.parameters.field;
-      const kw = c.parameters.keyword;
-      if (field === 'tags') tags.push(kw);
-      else keywords.push(`${field}:${kw}`);
-    } else if (c.name === 'semantic_similarity') {
-      semanticQuery = c.parameters.query_text;
+    if (c.name === 'semantic_similarity') {
+      const qt = c.parameters.query_text;
+      if (qt) semanticQueries.push({ text: qt, is_negative: c.is_negative });
+    } else if (c.name === 'status_check') {
+      filters.push(`狀態: ${c.parameters.target_status}`);
+    } else if (c.name === 'author_match') {
+      filters.push(`作者: ${c.parameters.author_name}`);
+    } else if (c.name === 'numeric_range' && c.parameters.field === 'words_total') {
+      const minV = c.parameters.min_val ? Math.round(c.parameters.min_val / 10000) + '萬' : null;
+      const maxV = c.parameters.max_val ? Math.round(c.parameters.max_val / 10000) + '萬' : null;
+      if (minV && maxV) filters.push(`字數: ${minV}~${maxV}`);
+      else if (minV) filters.push(`字數 ≥ ${minV}`);
+      else if (maxV) filters.push(`字數 ≤ ${maxV}`);
     }
   });
 
-  let html = `<h3><i class="fa-solid fa-robot"></i> AI 搜尋解析</h3>`;
-  html += `<div>`;
+  const searchTerms = (data && data.search_terms) || [];
+  const genKeywords = (data && data.generated_keywords) || [];
+  const refTags = (data && data.reference_tags) || [];
+  const hypoIntro = (data && data.hypothetical_intro) || '';
 
-  if (tags.length > 0) {
-    html += `<strong><i class="fa-solid fa-tags"></i> 鎖定標籤：</strong> `;
-    html += tags.map(t => `<span class="criteria-tag">${t}</span>`).join('');
-    html += `<br>`;
-  }
+  let html = `<h3><i class="fa-solid fa-robot"></i> AI 搜尋解析</h3><div>`;
 
-  if (keywords.length > 0) {
-    html += `<strong><i class="fa-solid fa-filter"></i> 關鍵字篩選：</strong> `;
-    html += keywords.map(k => `<span class="criteria-tag">${k}</span>`).join('');
-    html += `<br>`;
-  }
-
-  if (semanticQuery) {
-    html += `<div style="margin-top:5px; font-size:0.9em; color:#555;">`;
-    html += `<strong><i class="fa-solid fa-layer-group"></i> 語意檢索：</strong> 使用向量搜尋相近內容`;
-    // Only show if it's different from tags (to avoid clutter)
-    if (tags.length === 0) {
-      html += ` ("${semanticQuery}")`;
-    }
+  // 1. 搜尋關鍵字（LLM 從問題提取）
+  if (searchTerms.length > 0) {
+    html += `<div style="margin-bottom:6px;"><strong><i class="fa-solid fa-magnifying-glass"></i> 提取關鍵字：</strong> `;
+    html += searchTerms.map(t => `<span class="criteria-tag">${t}</span>`).join('');
     html += `</div>`;
   }
 
+  // 2. LLM 擴展關鍵字
+  if (genKeywords.length > 0) {
+    html += `<div style="margin-bottom:6px;"><strong><i class="fa-solid fa-wand-magic-sparkles"></i> 擴展關鍵字：</strong> `;
+    html += genKeywords.map(k => `<span class="criteria-tag" style="background:#e8f5e9;color:#2e7d32;">${k}</span>`).join('');
+    html += `</div>`;
+  }
+
+  // 3. 語意向量查詢（正向）
+  const posSemantic = semanticQueries.filter(s => !s.is_negative);
+  if (posSemantic.length > 0) {
+    html += `<div style="margin-bottom:6px;"><strong><i class="fa-solid fa-layer-group"></i> 語意向量查詢：</strong> `;
+    html += posSemantic.map(s => `<span class="criteria-tag" style="background:#e3f2fd;color:#1565c0;">${s.text}</span>`).join('');
+    html += `</div>`;
+  }
+
+  // 4. 排除條件（負向語意）
+  const negSemantic = semanticQueries.filter(s => s.is_negative);
+  if (negSemantic.length > 0) {
+    html += `<div style="margin-bottom:6px;"><strong><i class="fa-solid fa-ban"></i> 排除條件：</strong> `;
+    html += negSemantic.map(s => `<span class="criteria-tag" style="background:#ffebee;color:#c62828;">${s.text}</span>`).join('');
+    html += `</div>`;
+  }
+
+  // 5. 硬過濾器
+  if (filters.length > 0) {
+    html += `<div style="margin-bottom:6px;"><strong><i class="fa-solid fa-filter"></i> 硬過濾器：</strong> `;
+    html += filters.map(f => `<span class="criteria-tag" style="background:#fff3e0;color:#e65100;">${f}</span>`).join('');
+    html += `</div>`;
+  }
+
+  // 5.5 參考書籍標籤
+  if (refTags.length > 0) {
+    html += `<div style="margin-bottom:6px;"><strong><i class="fa-solid fa-book"></i> 參考書籍標籤：</strong> `;
+    html += refTags.map(t => `<span class="criteria-tag" style="background:#fce4ec;color:#ad1457;">#${t}</span>`).join('');
+    html += `</div>`;
+  }
+
+  // 6. HyDE 假設簡介（折疊顯示）
+  if (hypoIntro) {
+    html += `
+      <div style="margin-top:8px;">
+        <div onclick="togglePayload(this)" style="cursor:pointer;color:var(--primary-color);font-size:0.85em;display:inline-block;">
+          <i class="fa-solid fa-file-lines"></i> <span class="toggle-text">顯示 HyDE 假設簡介</span>
+        </div>
+        <div class="raw-payload hidden" style="background:#f8f4ff;border-left:3px solid #7c4dff;padding:10px 14px;border-radius:0 6px 6px 0;font-size:0.85em;color:#333;margin-top:8px;">${hypoIntro}</div>
+      </div>`;
+  }
+
+  // 7. 向量座標
   if (queryVector && Array.isArray(queryVector) && queryVector.length > 0) {
     const dim = queryVector.length;
     const preview = queryVector.slice(0, 5).map(v => Number(v).toFixed(3)).join(', ');
-    html += `<div style="margin-top:8px; padding-top:8px; border-top:1px dashed #ccc; font-size:0.85em; color:#666;">`;
-    html += `<strong><i class="fa-solid fa-location-crosshairs"></i> 向量座標：</strong> [${preview}, ...] <span style="background:#eee; padding:2px 6px; border-radius:4px; font-size:0.8em;">${dim} 維度</span>`;
+    html += `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ccc;font-size:0.85em;color:#666;">`;
+    html += `<strong><i class="fa-solid fa-location-crosshairs"></i> 向量座標：</strong> [${preview}, ...] <span style="background:#eee;padding:2px 6px;border-radius:4px;font-size:0.8em;">${dim} 維度</span>`;
     html += `</div>`;
   }
 
   html += `</div>`;
 
-  // 加入顯示原始 Payload 的按鈕和區塊
+  // 8. 原始 Payload JSON（折疊）
   const payloadJson = JSON.stringify(criteriaList, null, 2);
   html += `
-    <div style="margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 10px;">
-      <div onclick="togglePayload(this)" style="cursor: pointer; color: var(--primary-color); font-size: 0.9em; display: inline-block;">
+    <div style="margin-top:12px;border-top:1px dashed #ccc;padding-top:10px;">
+      <div onclick="togglePayload(this)" style="cursor:pointer;color:var(--primary-color);font-size:0.85em;display:inline-block;">
         <i class="fa-solid fa-code"></i> <span class="toggle-text">顯示查詢 Payload JSON</span>
       </div>
-      <pre class="raw-payload hidden" style="background: #282c34; color: #abb2bf; padding: 12px; border-radius: 6px; font-size: 0.85em; overflow-x: auto; margin-top: 10px; max-height: 300px;">${payloadJson}</pre>
+      <pre class="raw-payload hidden" style="background:#282c34;color:#abb2bf;padding:12px;border-radius:6px;font-size:0.85em;overflow-x:auto;margin-top:10px;max-height:300px;">${payloadJson}</pre>
     </div>
   `;
 

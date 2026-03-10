@@ -41,6 +41,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
         "original_query": user_query,
         "search_terms": [user_query], # Default
         "generated_keywords": [],
+        "reference_books": [],
         "hypothetical_intro": "",
         "criteria": []
     }
@@ -51,6 +52,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
         if "original_query" in parsed: final_result["original_query"] = parsed["original_query"]
         if "search_terms" in parsed: final_result["search_terms"] = parsed["search_terms"]
         if "generated_keywords" in parsed: final_result["generated_keywords"] = parsed["generated_keywords"]
+        if "reference_books" in parsed: final_result["reference_books"] = parsed["reference_books"]
         if "hypothetical_intro" in parsed: final_result["hypothetical_intro"] = parsed["hypothetical_intro"]
         
         # Handle criteria/scoring_criteria alias
@@ -69,9 +71,11 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
         for item in final_result["criteria"]:
             if not isinstance(item, dict): continue
             
-            # Fix Name/Function
+            # Fix Name/Function/Type aliases
             if "function" in item and "name" not in item:
                 item["name"] = item.pop("function")
+            if "type" in item and "name" not in item:
+                item["name"] = item.pop("type")
             if "name" not in item: continue # Skip if no name
 
             # Fix Parameters
@@ -89,6 +93,10 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
                         item["parameters"][param] = item.pop(param)
                     else:
                         item.pop(param) # Duplicate
+            
+            # Remove non-schema keys Gemma might add (e.g. "weight", "type")
+            for extra_key in ["weight", "type", "function"]:
+                item.pop(extra_key, None)
             
             # Fix Is Negative
             if "is_negative" not in item:
@@ -135,6 +143,11 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
             "hypothetical_intro": {
                 "type": "string",
                 "description": "A creative, hypothetical book introduction (blurb) in Traditional Chinese that perfectly matches the user's intent. About 50-100 words."
+            },
+            "reference_books": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of book/novel/anime titles explicitly mentioned or referenced in the user query. Extract the title as-is from the query. Examples: '為美好世界獻上祝福' from '跟為美好世界獻上祝福差不多的', 'overlord' from '像overlord一樣的'"
             },
             "criteria": {
                 "type": "array",
@@ -185,7 +198,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
                 }
             }
         },
-        "required": ["original_query", "criteria", "search_terms", "generated_keywords", "hypothetical_intro"]
+        "required": ["original_query", "criteria", "search_terms", "generated_keywords", "hypothetical_intro", "reference_books"]
     }
 
     system_instruction = """
@@ -240,12 +253,20 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     - Example: "不要修仙" → semantic_similarity(query_text="修仙", is_negative=true)
     - If user says "角色不要太多", it means WANTS "few characters" → semantic_similarity(query_text="角色少", is_negative=false)
     
-    ### TASK 1: Query Expansion (generated_keywords)
+    ### TASK 1: Reference Books (reference_books)
+    If the user mentions ANY book, novel, anime, manga, or light novel title (with or without 《》), extract the title as-is.
+    - Example: "跟為美好世界獻上祝福差不多的" → reference_books: ["為美好世界獻上祝福"]
+    - Example: "像overlord一樣的" → reference_books: ["overlord"]
+    - Example: "《無職轉生》風格" → reference_books: ["無職轉生"]
+    - Example: "找類似轉生史萊姆跟盾之勇者的書" → reference_books: ["轉生史萊姆", "盾之勇者"]
+    - If no book is mentioned, return an empty list: reference_books: []
+    
+    ### TASK 2: Query Expansion (generated_keywords)
     Generate 5-10 specific domain keywords in Traditional Chinese that capture the semantic intent.
     - Focus on genre-specific terms, tropes, themes
     - Example for "科幻": ["太空", "未來", "科技", "星際", "機器人", "時間旅行"]
     
-    ### TASK 2: Hypothetical Document Embeddings (hypothetical_intro)
+    ### TASK 3: Hypothetical Document Embeddings (hypothetical_intro)
     Generate a hypothetical book introduction (50-100 words) that matches the query perfectly.
     - **Style**: Dramatic, engaging, using web novel tropes
     - **Language**: Traditional Chinese (繁體中文)
@@ -262,7 +283,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
       hypothetical_intro: "厭倦了城市的喧囂，他回到鄉下繼承了一間破舊的小食堂。溫暖的料理，治癒了每一位客人的心靈..."
     
     ### Output Format
-    Always include: original_query, search_terms, generated_keywords, hypothetical_intro, criteria
+    Always include: original_query, search_terms, generated_keywords, reference_books, hypothetical_intro, criteria
     """
 
     last_exception = None

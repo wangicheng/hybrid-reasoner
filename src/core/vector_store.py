@@ -3,6 +3,7 @@ from qdrant_client.http import models as rest
 from google import genai
 from google.genai import types
 from src.config import settings
+from src.core.api_utils import get_api_key_rotator
 from typing import List, Dict, Any, Optional, Tuple
 import os
 from pathlib import Path
@@ -145,23 +146,15 @@ class VectorStore:
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
         Performs Late Interaction multi-vector semantic search (text + tag).
-        
-        Methodology:
-        1. Embed query text once
-        2. Query both vector spaces independently (Late Interaction)
-        3. Merge results with weighted score fusion
-        
-        Args:
-            query_text: The search query text to embed and search.
-            limit: Maximum number of results to return.
-            query_filter: Optional Qdrant Filter object for logic push-down.
-            with_payload: Whether to return the payload with the results.
-            text_weight: Weight for text_semantic vector (default 0.7).
-            tag_weight: Weight for tag_semantic vector (default 0.3).
-            batch_size: Number of results to fetch per vector space. Reduce memory usage.
-        
-        Returns:
-            Tuple of (fused search results, query_vector as list).
+
+        This implementation queries both vector spaces independently, collects
+        per-space scores, then computes the fused score as:
+
+            - Both spaces found: fused = text_score * tag_score
+            - Only one space found: fused = that single score
+
+        This avoids giving a bonus for missing data (old default=1.0) or
+        zeroing out items that only appear in one space (old default=0.0).
         """
         # Step 1: Embed query once
         embed_response = self.genai_client.models.embed_content(
@@ -169,13 +162,12 @@ class VectorStore:
             contents=query_text,
             config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
         )
-        # Convert to list for JSON serialization
         query_vector = list(embed_response.embeddings[0].values)
-        
-        # Step 2: Late Interaction - Query both vector spaces independently
-        fetch_limit = max(batch_size, limit * 2)
-        
-        # Query text_semantic space
+
+        # Step 2: Query both vector spaces
+        # Use a generous fetch_limit to maximize overlap between the two spaces
+        fetch_limit = max(batch_size, limit * 5)
+
         text_response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
@@ -184,8 +176,7 @@ class VectorStore:
             with_payload=with_payload,
             using="text_semantic"
         )
-        
-        # Query tag_semantic space
+
         tag_response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
@@ -194,38 +185,54 @@ class VectorStore:
             with_payload=with_payload,
             using="tag_semantic"
         )
-        
-        # Step 3: Score fusion at score layer (Late Interaction property)
-        combined_scores = {}
-        payload_cache = {}  # Cache payloads to avoid O(n²) lookup
-        
-        # Process text results
+
+        # Collect per-space scores and payloads
+        text_scores: Dict[Any, float] = {}
+        tag_scores: Dict[Any, float] = {}
+        payload_cache: Dict[Any, Any] = {}
+
         for hit in text_response.points:
-            combined_scores[hit.id] = text_weight * hit.score
+            text_scores[hit.id] = float(hit.score)
             if hit.payload:
                 payload_cache[hit.id] = hit.payload
-        
-        # Process tag results - merge with existing scores
+
         for hit in tag_response.points:
-            current_score = combined_scores.get(hit.id, 0.0)
-            combined_scores[hit.id] = current_score + (tag_weight * hit.score)
+            tag_scores[hit.id] = float(hit.score)
             if hit.payload and hit.id not in payload_cache:
                 payload_cache[hit.id] = hit.payload
-        
-        # Step 4: Sort and return top-k results
-        sorted_ids = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:limit]
-        
-        formatted_results = []
-        for point_id, fused_score in sorted_ids:
+
+        # Union candidate ids
+        all_ids = set(text_scores.keys()) | set(tag_scores.keys())
+
+        # Compute fused scores:
+        # Scale found scores by 10 (0.X → X.X) then multiply.
+        # Missing component defaults to 1.0 (neutral in multiplication).
+        # Example: both found 0.6, 0.5 → 6*5=30; only text 0.6 → 6*1=6
+        # This ensures both-found always beats single-found.
+        fused_map: Dict[Any, Dict[str, float]] = {}
+        for pid in all_ids:
+            t_raw = text_scores.get(pid, 0.0)
+            g_raw = tag_scores.get(pid, 0.0)
+
+            t_comp = (t_raw * 10) if pid in text_scores else 1.0
+            g_comp = (g_raw * 10) if pid in tag_scores else 1.0
+
+            fused = t_comp * g_comp
+
+            fused_map[pid] = {"fused": fused, "text_score": t_raw, "tag_score": g_raw}
+
+        # Sort and return top-k
+        sorted_ids = sorted(fused_map.items(), key=lambda x: x[1]["fused"], reverse=True)[:limit]
+        formatted_results: List[Dict[str, Any]] = []
+        for pid, metrics in sorted_ids:
             formatted_results.append({
-                "id": point_id,
-                "score": fused_score,
-                "payload": payload_cache.get(point_id),
-                "text_score": combined_scores.get(point_id, 0.0) / text_weight if text_weight > 0 else 0.0,
-                "tag_score": combined_scores.get(point_id, 0.0) / tag_weight if tag_weight > 0 else 0.0
+                "id": pid,
+                "score": metrics["fused"],
+                "payload": payload_cache.get(pid),
+                "text_score": metrics.get("text_score", 0.0),
+                "tag_score": metrics.get("tag_score", 0.0),
             })
-        
-        # Return single vector (already converted to list above)
+
         return formatted_results, query_vector
 
     def add_items(self, items: List[Dict[str, Any]]):
@@ -299,7 +306,6 @@ class VectorStore:
                 continue # Skip batch if all items are already embedded
             
             from src.core.api_utils import retry_on_rate_limit, _is_retryable
-            
             # Retry with API key rotation on rate limit
             attempt = 0
             max_attempts = 3
@@ -353,6 +359,7 @@ class VectorStore:
         Args:
             items: 書籍信息字典列表
         """
+        from src.core.api_utils import get_api_key_rotator
         import hashlib
         
         valid_items = []

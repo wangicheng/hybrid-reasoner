@@ -144,9 +144,19 @@ class Database:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
+        # Strategy 1: direct LIKE
         pattern = f"%{keyword}%"
         cursor.execute("SELECT * FROM novels WHERE name LIKE ?", (pattern,))
         rows = cursor.fetchall()
+        
+        # Strategy 2: if no results and keyword is long enough,
+        # try per-character gap matching (e.g. "為美好世界" → "%為%美%好%世%界%")
+        # This handles cases where user drops particles (的/了/之) or slightly misspells
+        if not rows and len(keyword) >= 4:
+            gap_pattern = "%" + "%".join(keyword) + "%"
+            cursor.execute("SELECT * FROM novels WHERE name LIKE ?", (gap_pattern,))
+            rows = cursor.fetchall()
+        
         conn.close()
         
         items = []

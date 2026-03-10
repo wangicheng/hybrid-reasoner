@@ -5,6 +5,7 @@ from src.core.llm import parse_query
 from src.models.schemas import QueryParseResult
 from src.core.vector_store import VectorStore
 from src.core.database import Database
+from src.core.book_matcher import BookMatcher
 from src.logic.registry import ScoringRegistry
 import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
@@ -39,6 +40,7 @@ class HybridEngine:
         
         self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
         self.use_fused_vectors = use_fused_vectors
+        self.book_matcher = BookMatcher(self.db)
 
     def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
         """
@@ -185,7 +187,7 @@ class HybridEngine:
         
         breakdown.append({
             "criteria": "semantic_similarity",
-            "label": "語意相似度 (文本×0.7 + 標籤×0.3)",
+            "label": "語意相似度 (文本×標籤)",
             "raw_score": vector_score,
             "weighted_score": vector_score,
             "is_filter": False,
@@ -261,55 +263,18 @@ class HybridEngine:
             
         return total_score, breakdown
 
-    def _extract_reference_novel_tags(self, user_query: str) -> List[str]:
-        """
-        从用户查询中提取参考小说名，并返回该小说的标签
-        """
-        import re
-        
-        # 提取书名（使用《》或引号括起来的内容）
-        book_patterns = [
-            r'《([^》]+)》',
-            r'「([^」]+)」',
-            r'『([^』]+)』',
-            r'"([^"]+)"',
-        ]
-        
-        extracted_tags = []
-        
-        for pattern in book_patterns:
-            matches = re.findall(pattern, user_query)
-            for match in matches:
-                # 搜索数据库
-                results = self.db.search_by_title_fuzzy(match)
-                if results:
-                    book = results[0]  # 取第一个匹配
-                    tags = book.get('tags', [])
-                    if tags:
-                        print(f"[Engine] 检测到参考书籍: 《{book['name']}》")
-                        print(f"[Engine] 提取标签: {', '.join(tags[:5])}")
-                        extracted_tags.extend(tags)
-        
-        # 也检查常见书名（不带书名号）
-        common_books = [
-            '為美好的世界獻上祝福', '无职转生', '從零開始', 'overlord',
-            '转生史莱姆', '關於我轉生', '蜘蛛', '影之強者', '美好的世界'
-        ]
-        
-        for book_name in common_books:
-            if book_name.lower() in user_query.lower():
-                results = self.db.search_by_title_fuzzy(book_name)
-                if results:
-                    book = results[0]
-                    tags = book.get('tags', [])
-                    if tags:
-                        print(f"[Engine] 检测到参考书籍: 《{book['name']}》")
-                        print(f"[Engine] 提取标签: {', '.join(tags[:5])}")
-                        extracted_tags.extend(tags)
-                        break
-        
-        # 去重
-        return list(dict.fromkeys(extracted_tags))
+    def _extract_reference_novel_tags(
+        self,
+        user_query: str,
+        search_terms: List[str] = None,
+        reference_books: List[str] = None,
+    ) -> List[str]:
+        """委派給 BookMatcher 進行三層書名比對。"""
+        return self.book_matcher.extract_reference_tags(
+            user_query,
+            search_terms=search_terms,
+            reference_books=reference_books,
+        )
 
     async def search(
         self,
@@ -324,8 +289,12 @@ class HybridEngine:
         # 1. Parse Query
         parse_result = parse_query(user_query, model_id=model_id)
         
-        # 1.5 提取参考小说标签
-        reference_tags = self._extract_reference_novel_tags(user_query)
+        # 1.5 提取参考小说标签（用 search_terms 做模糊查詢）
+        reference_tags = self._extract_reference_novel_tags(
+            user_query, 
+            search_terms=parse_result.search_terms,
+            reference_books=parse_result.reference_books,
+        )
         
         # 2. 构建 Qdrant 硬过滤器
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
@@ -564,6 +533,10 @@ class HybridEngine:
         return {
             "query": user_query,
             "parsed_criteria": [c.dict() if hasattr(c, 'dict') else c.model_dump() for c in parse_result.criteria],
+            "search_terms": parse_result.search_terms,
+            "generated_keywords": parse_result.generated_keywords,
+            "hypothetical_intro": parse_result.hypothetical_intro,
+            "reference_tags": reference_tags,
             "query_vector": query_vector,
             "results": final_results,
             "engine": "HybridEngine (Simplified: Semantic + Filters)",
