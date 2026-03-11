@@ -215,10 +215,19 @@ function createResultCard(result) {
       const originalScore = b.criteria === 'semantic_similarity'
         ? Number(b.raw_score || 0)
         : (b.normalized_score !== undefined ? Number(b.normalized_score) : Number(b.raw_score || 0));
-      const rawScore = typeof b.raw_score === 'number' ? b.raw_score : Number(b.raw_score || 0);
-
       const weightedScore = b.weighted_score !== undefined ? Number(b.weighted_score || 0) : Number(originalScore || 0);
-      const scoreText = Number(weightedScore).toFixed(3);
+
+      let scoreText = '';
+      if (b.criteria === 'semantic_similarity' && result.text_score !== undefined && result.tag_score !== undefined && !b.is_negative) {
+        // format the multi-vector addition string instead of single score
+        const tWeight = 0.7;
+        const oWeight = 0.3;
+        const textContrib = (result.text_score * tWeight).toFixed(3);
+        const tagContrib = (result.tag_score * oWeight).toFixed(3);
+        scoreText = `${textContrib} + ${tagContrib} = ${Number(weightedScore).toFixed(4)}`;
+      } else {
+        scoreText = Number(weightedScore).toFixed(3);
+      }
 
       // 如果分數小於 0，代表是扣分項（排除條件），我們用紅色顯示，絕對值做為寬度表示「懲罰力度」
       const isNegative = weightedScore < 0;

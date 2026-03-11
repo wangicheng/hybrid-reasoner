@@ -205,19 +205,15 @@ class VectorStore:
         all_ids = set(text_scores.keys()) | set(tag_scores.keys())
 
         # Compute fused scores:
-        # Scale found scores by 10 (0.X → X.X) then multiply.
-        # Missing component defaults to 1.0 (neutral in multiplication).
-        # Example: both found 0.6, 0.5 → 6*5=30; only text 0.6 → 6*1=6
-        # This ensures both-found always beats single-found.
+        # Summing the weighted scores directly.
+        # The engine uses text_weight=0.7 and tag_weight=0.3
         fused_map: Dict[Any, Dict[str, float]] = {}
         for pid in all_ids:
             t_raw = text_scores.get(pid, 0.0)
             g_raw = tag_scores.get(pid, 0.0)
 
-            t_comp = (t_raw * 10) if pid in text_scores else 1.0
-            g_comp = (g_raw * 10) if pid in tag_scores else 1.0
-
-            fused = t_comp * g_comp
+            # direct addition
+            fused = (t_raw * text_weight) + (g_raw * tag_weight)
 
             fused_map[pid] = {"fused": fused, "text_score": t_raw, "tag_score": g_raw}
 

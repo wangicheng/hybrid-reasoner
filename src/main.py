@@ -107,7 +107,8 @@ def main():
             
             print(f"\n⏳ 正在搜尋 \"{query}\"...\n")
             
-            result = engine.search(query, limit=5)
+            import asyncio
+            result = asyncio.run(engine.search(query, limit=5))
             display_results(result)
             
         except KeyboardInterrupt:
