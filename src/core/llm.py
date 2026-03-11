@@ -39,7 +39,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
 
     final_result = {
         "original_query": user_query,
-        "search_terms": [user_query], # Default
+        "search_terms": user_query, # Default
         "generated_keywords": [],
         "reference_books": [],
         "hypothetical_intro": "",
@@ -134,7 +134,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
         "type": "object",
         "properties": {
             "original_query": {"type": "string"},
-            "search_terms": {"type": "array", "items": {"type": "string"}},
+            "search_terms": {"type": "string"},
             "generated_keywords": {
                 "type": "array", 
                 "items": {"type": "string"},
@@ -243,7 +243,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     1. Add a `semantic_similarity` criteria with `query_text` containing the tag/genre keywords
     2. Also include these terms in `search_terms` for direct vector matching
     3. Example: "找異世界後宮小說" → 
-       - search_terms: ["異世界 後宮 小說"]
+       - search_terms: "異世界 後宮 小說"
        - criteria: semantic_similarity(query_text="異世界轉生 後宮 冒險")
        - generated_keywords: ["穿越", "轉生", "魔法", "勇者", "冒險者", "女主角"]
     
@@ -391,7 +391,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
 
         return QueryParseResult(
             original_query=user_query,
-            search_terms=[user_query],
+            search_terms=user_query,
             generated_keywords=[],  # Fallback 不生成关键词
             hypothetical_intro="",  # Fallback 不生成假设简介
             criteria=fallback_criteria

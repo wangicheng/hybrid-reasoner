@@ -21,25 +21,27 @@ class HybridEngine:
     - 可选过滤：状态、作者、字数（Qdrant 硬过滤）
     - 负向语义：二次向量查询实现排除功能
     """
-    def __init__(self, db=None, vs=None, use_fused_vectors: bool = True, use_multi_vector: bool = True):
+    def __init__(self, db=None, vs=None, retrieval_mode: str = "multi_multiplicative"):
         self.db = db if db is not None else Database()
+        self.retrieval_mode = retrieval_mode
+        self.fusion_mode = "multiplicative" if "multiplicative" in retrieval_mode else "additive"
         
-        # 使用多向量搜尋 (優先於融合向量)
-        # 多向量包含：text_semantic (書名 + 簡介) 和 tag_semantic (標籤)
-        if use_multi_vector:
+        # Determine collection name and use_multi_vector flag
+        if retrieval_mode.startswith("multi_"):
             collection_name = "novels_multi_vector"
             self.use_multi_vector = True
-            print("[HybridEngine] Using multi-vector embeddings for semantic search")
-            print("[HybridEngine] Vectors: text_semantic (Title+Introduction) + tag_semantic (Tags)")
+            print(f"[HybridEngine] Using multi-vector embeddings for semantic search ({retrieval_mode})")
+            print(f"[HybridEngine] Vectors: text_semantic (Title+Introduction) + tag_semantic (Tags)")
         else:
-            collection_name = "novels_fused" if use_fused_vectors else "novels"
+            collection_name = "novels_fused" if retrieval_mode == "fused" else "novels"
             self.use_multi_vector = False
-            if use_fused_vectors:
+            if retrieval_mode == "fused":
                 print("[HybridEngine] Using fused embeddings for semantic search")
                 print("[HybridEngine] Fused content: Title + Tags + Introduction")
+            else:
+                print("[HybridEngine] Using baseline embeddings for semantic search")
         
         self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
-        self.use_fused_vectors = use_fused_vectors
         self.book_matcher = BookMatcher(self.db)
 
     def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
@@ -266,8 +268,8 @@ class HybridEngine:
     def _extract_reference_novel_tags(
         self,
         user_query: str,
-        search_terms: List[str] = None,
-        reference_books: List[str] = None,
+        search_terms: str = "",
+        reference_books: Optional[List[str]] = None,
     ) -> List[str]:
         """委派給 BookMatcher 進行三層書名比對。"""
         return self.book_matcher.extract_reference_tags(
@@ -300,7 +302,7 @@ class HybridEngine:
         qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
         
         # 3. 準備檢索字詞（擴展查詢 + 正向語義條件 + 參考標籤）
-        base_terms = " ".join(parse_result.search_terms) or parse_result.original_query
+        base_terms = parse_result.search_terms or parse_result.original_query
         
         expanded_terms = base_terms
         
@@ -333,10 +335,19 @@ class HybridEngine:
             print(f"[Engine] 添加參考標籤到查詢: {tags_str}")
             expanded_terms += f" {tags_str}"
         
-        # 3.4 HyDE 假設文檔嵌入
-        if parse_result.hypothetical_intro:
-            print(f"[Engine] HyDE hypothetical intro: {parse_result.hypothetical_intro[:80]}...")
-            expanded_terms += f" {parse_result.hypothetical_intro}"
+        # 3.4 HyDE 假設文檔嵌入 (Disabled manually)
+        # if parse_result.hypothetical_intro:
+        #     print(f"[Engine] HyDE hypothetical intro: {parse_result.hypothetical_intro[:80]}...")
+        #     expanded_terms += f" {parse_result.hypothetical_intro}"
+        
+        # 构建 pure tags string for tag_semantic
+        tag_terms_list = []
+        if parse_result.generated_keywords:
+            tag_terms_list.extend([kw.replace(" ", "") for kw in parse_result.generated_keywords])
+        if reference_tags:
+            tag_terms_list.extend([t.replace(" ", "") for t in reference_tags[:8]])
+        tag_query_text = " ".join(tag_terms_list)
+        print(f"[Engine] Pure tags query for tag_semantic: '{tag_query_text}'")
         
         # 4. 执行正向语义搜索（带硬过滤）
         retrieval_limit = 100  # 减少检索数量，因为有硬过滤
@@ -350,9 +361,11 @@ class HybridEngine:
                 query_filter=qdrant_filter,  # 应用硬过滤
                 with_payload=True,
                 text_weight=0.7,  # Text semantic priority
-                tag_weight=0.3    # Tag semantic secondary
+                tag_weight=0.3,   # Tag semantic secondary
+                fusion_mode=self.fusion_mode,
+                tag_query_text=tag_query_text
             )
-            print(f"[Engine] Multi-vector search: text_weight=0.7, tag_weight=0.3")
+            print(f"[Engine] Multi-vector search: text_weight=0.7, tag_weight=0.3, fusion_mode={self.fusion_mode}")
         else:
             vector_results, query_vector = self.vs.search(
                 expanded_terms,
@@ -435,7 +448,8 @@ class HybridEngine:
                         query_filter=None,  # 不应用过滤
                         with_payload=False,  # 只需要分数
                         text_weight=0.7,
-                        tag_weight=0.3
+                        tag_weight=0.3,
+                        fusion_mode=self.fusion_mode
                     )
                 else:
                     neg_results, neg_vector = self.vs.search(

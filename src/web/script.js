@@ -94,7 +94,8 @@ function displayInterpretation(container, criteriaList, queryVector, data) {
     }
   });
 
-  const searchTerms = (data && data.search_terms) || [];
+  const searchTermsRaw = (data && data.search_terms) || "";
+  const searchTerms = typeof searchTermsRaw === 'string' ? (searchTermsRaw ? [searchTermsRaw] : []) : searchTermsRaw;
   const genKeywords = (data && data.generated_keywords) || [];
   const refTags = (data && data.reference_tags) || [];
   const hypoIntro = (data && data.hypothetical_intro) || '';

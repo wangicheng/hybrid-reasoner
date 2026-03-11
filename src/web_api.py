@@ -25,8 +25,8 @@ async def startup_event():
     global engine
     print("Initializing Hybrid Engine... (This may take a few seconds)")
     try:
-        # Enable multi-vector search (text + tag semantic with fusion)
-        engine = HybridEngine(use_fused_vectors=True, use_multi_vector=True)
+        # 初始化引擎 (預設使用多向量 + 乘法模型)
+        engine = HybridEngine(retrieval_mode="multi_multiplicative")
         print("Hybrid Engine initialized successfully!")
         print("Search mode: Multi-vector (text_semantic + tag_semantic with 0.7:0.3 weighting)")
     except RuntimeError as e:

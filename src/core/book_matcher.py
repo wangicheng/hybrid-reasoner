@@ -27,8 +27,8 @@ class BookMatcher:
     def extract_reference_tags(
         self,
         user_query: str,
-        search_terms: List[str] = None,
-        reference_books: List[str] = None,
+        search_terms: str = "",
+        reference_books: Optional[List[str]] = None,
     ) -> List[str]:
         """
         從使用者查詢提取參考小說的標籤（去重保序）。
@@ -57,9 +57,8 @@ class BookMatcher:
                 _try(match, "書名號")
 
         # Layer 3: search_terms >= 4 chars
-        for term in (search_terms or []):
-            if len(term) >= 4:
-                _try(term, "search_term")
+        if search_terms and len(search_terms) >= 4:
+            _try(search_terms, "search_term")
 
         return list(dict.fromkeys(extracted_tags))
 

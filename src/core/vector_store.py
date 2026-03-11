@@ -142,7 +142,9 @@ class VectorStore:
         with_payload: bool = True,
         text_weight: float = 0.7,
         tag_weight: float = 0.3,
-        batch_size: int = 20  # Limit pre-fetch to avoid excessive merging
+        batch_size: int = 20,  # Limit pre-fetch to avoid excessive merging
+        fusion_mode: str = "multiplicative",
+        tag_query_text: str = ""
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
         Performs Late Interaction multi-vector semantic search (text + tag).
@@ -156,13 +158,24 @@ class VectorStore:
         This avoids giving a bonus for missing data (old default=1.0) or
         zeroing out items that only appear in one space (old default=0.0).
         """
-        # Step 1: Embed query once
+        # Step 1: Embed query text
         embed_response = self.genai_client.models.embed_content(
             model=self.embedding_model,
             contents=query_text,
             config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
         )
         query_vector = list(embed_response.embeddings[0].values)
+        
+        # Step 1.5: Embed tag query text (if provided separately)
+        if tag_query_text and tag_query_text.strip():
+            tag_embed_response = self.genai_client.models.embed_content(
+                model=self.embedding_model,
+                contents=tag_query_text.strip(),
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+            )
+            tag_query_vector = list(tag_embed_response.embeddings[0].values)
+        else:
+            tag_query_vector = query_vector
 
         # Step 2: Query both vector spaces
         # Use a generous fetch_limit to maximize overlap between the two spaces
@@ -179,7 +192,7 @@ class VectorStore:
 
         tag_response = self.client.query_points(
             collection_name=self.collection_name,
-            query=query_vector,
+            query=tag_query_vector,
             query_filter=query_filter,
             limit=fetch_limit,
             with_payload=with_payload,
@@ -205,19 +218,20 @@ class VectorStore:
         all_ids = set(text_scores.keys()) | set(tag_scores.keys())
 
         # Compute fused scores:
-        # Scale found scores by 10 (0.X → X.X) then multiply.
-        # Missing component defaults to 1.0 (neutral in multiplication).
-        # Example: both found 0.6, 0.5 → 6*5=30; only text 0.6 → 6*1=6
-        # This ensures both-found always beats single-found.
+        # Compute fused scores based on fusion_mode
         fused_map: Dict[Any, Dict[str, float]] = {}
         for pid in all_ids:
             t_raw = text_scores.get(pid, 0.0)
             g_raw = tag_scores.get(pid, 0.0)
 
-            t_comp = (t_raw * 10) if pid in text_scores else 1.0
-            g_comp = (g_raw * 10) if pid in tag_scores else 1.0
-
-            fused = t_comp * g_comp
+            if fusion_mode == "additive":
+                fused = (t_raw * text_weight) + (g_raw * tag_weight)
+            else:  # "multiplicative"
+                # Scale found scores by 10 (0.X → X.X) then multiply.
+                # Missing component defaults to 1.0 (neutral in multiplication).
+                t_comp = (t_raw * 10) if pid in text_scores else 1.0
+                g_comp = (g_raw * 10) if pid in tag_scores else 1.0
+                fused = t_comp * g_comp
 
             fused_map[pid] = {"fused": fused, "text_score": t_raw, "tag_score": g_raw}
 
