@@ -111,7 +111,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
 
 
 @functools.lru_cache(maxsize=100)
-def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseResult:
+def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optional[List[str]] = None) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
     支援多模型 fallback：當主要模型遇到配額限制或錯誤時，自動嘗試下一個模型。
@@ -285,6 +285,10 @@ def parse_query(user_query: str, model_id: Optional[str] = None) -> QueryParseRe
     ### Output Format
     Always include: original_query, search_terms, generated_keywords, reference_books, hypothetical_intro, criteria
     """
+    
+    if tag_list:
+        tag_hint = f"\n\n### AVAILABLE TAGS (Method 2)\nUse the following tags for reference when generating keywords:\n{', '.join(tag_list)}"
+        full_system_instruction += tag_hint
 
     last_exception = None
 

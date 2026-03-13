@@ -89,6 +89,34 @@ class VectorStore:
                 )
             )
 
+    def _embed_with_retry(self, text: str, task_type: str = "RETRIEVAL_QUERY") -> List[float]:
+        """Embeds text with automatic retry and API key rotation."""
+        from src.core.api_utils import _is_retryable, get_rate_limiter
+        import time
+        
+        attempt = 0
+        max_attempts = 5
+        while attempt < max_attempts:
+            try:
+                # Enforce shared rate limit
+                get_rate_limiter().wait()
+                
+                response = self.genai_client.models.embed_content(
+                    model=self.embedding_model,
+                    contents=text,
+                    config=types.EmbedContentConfig(task_type=task_type)
+                )
+                return list(response.embeddings[0].values)
+            except Exception as e:
+                attempt += 1
+                if _is_retryable(e) and attempt < max_attempts:
+                    print(f"[VectorStore] Embedding retryable error: {e}. Rotating key...")
+                    self._update_api_key_on_rate_limit()
+                    time.sleep(1) # Small buffer
+                else:
+                    raise
+        raise Exception("Max embed retries exceeded")
+
     def search(
         self, 
         query_text: str, 
@@ -109,14 +137,8 @@ class VectorStore:
         Returns:
             Tuple of (search results, query vector).
         """
-        # Embed query text using text-embedding-004
-        embed_response = self.genai_client.models.embed_content(
-            model=self.embedding_model,
-            contents=query_text,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
-        )
-        # Convert to list for JSON serialization
-        vector = list(embed_response.embeddings[0].values)
+        # Embed query text with retry/rotation
+        vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
         
         response = self.client.query_points(
             collection_name=self.collection_name,
@@ -144,82 +166,96 @@ class VectorStore:
         tag_weight: float = 0.3,
         batch_size: int = 20,  # Limit pre-fetch to avoid excessive merging
         fusion_mode: str = "multiplicative",
-        tag_query_text: str = ""
+        tag_query_text: str = "",
+        tag_query_list: Optional[List[str]] = None
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
         Performs Late Interaction multi-vector semantic search (text + tag).
 
         This implementation queries both vector spaces independently, collects
-        per-space scores, then computes the fused score as:
+        per-space scores, then computes the fused score.
 
-            - Both spaces found: fused = text_score * tag_score
-            - Only one space found: fused = that single score
-
-        This avoids giving a bonus for missing data (old default=1.0) or
-        zeroing out items that only appear in one space (old default=0.0).
+        Exp 3 vs Exp 5 Difference:
+        - Exp 3 (Individual): Embeds each query tag separately and uses MaxSim aggregation.
+        - Exp 5 (Joined): Embeds tags as a single joined string.
         """
-        # Step 1: Embed query text
-        embed_response = self.genai_client.models.embed_content(
-            model=self.embedding_model,
-            contents=query_text,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
-        )
-        query_vector = list(embed_response.embeddings[0].values)
+        # Step 1: Embed query text with retry
+        query_vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
         
-        # Step 1.5: Embed tag query text (if provided separately)
-        if tag_query_text and tag_query_text.strip():
-            tag_embed_response = self.genai_client.models.embed_content(
-                model=self.embedding_model,
-                contents=tag_query_text.strip(),
-                config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
-            )
-            tag_query_vector = list(tag_embed_response.embeddings[0].values)
-        else:
-            tag_query_vector = query_vector
-
-        # Step 2: Query both vector spaces
-        # Use a generous fetch_limit to maximize overlap between the two spaces
+        # Step 2: Prepare Tag Queries
         fetch_limit = max(batch_size, limit * 5)
-
-        text_response = self.client.query_points(
-            collection_name=self.collection_name,
-            query=query_vector,
-            query_filter=query_filter,
-            limit=fetch_limit,
-            with_payload=with_payload,
-            using="text_semantic"
-        )
-
-        tag_response = self.client.query_points(
-            collection_name=self.collection_name,
-            query=tag_query_vector,
-            query_filter=query_filter,
-            limit=fetch_limit,
-            with_payload=with_payload,
-            using="tag_semantic"
-        )
-
-        # Collect per-space scores and payloads
         text_scores: Dict[Any, float] = {}
         tag_scores: Dict[Any, float] = {}
         payload_cache: Dict[Any, Any] = {}
 
+        # 1. Query Text collection (Baseline collection)
+        text_response = self.client.query_points(
+            collection_name="novels",
+            query=query_vector,
+            query_filter=query_filter,
+            limit=fetch_limit,
+            with_payload=with_payload
+        )
         for hit in text_response.points:
             text_scores[hit.id] = float(hit.score)
             if hit.payload:
                 payload_cache[hit.id] = hit.payload
 
-        for hit in tag_response.points:
-            tag_scores[hit.id] = float(hit.score)
-            if hit.payload and hit.id not in payload_cache:
-                payload_cache[hit.id] = hit.payload
+        # 2. Query Tag-only collection
+        # Note: novels_tags uses the same UUID IDs as novels
+        if tag_query_list and len(tag_query_list) > 0:
+            # [Exp 3] Individual Matching
+            print(f"[VectorStore] Exp 3: Individual matching for {len(tag_query_list)} tags")
+            from google.genai import types
+            
+            # Batch embed query tags
+            embed_resp = self.genai_client.models.embed_content(
+                model=self.embedding_model,
+                contents=tag_query_list,
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+            )
+            tag_vectors = [list(e.values) for e in embed_resp.embeddings]
+            
+            # Search across tags individually
+            for v in tag_vectors:
+                indiv_tag_response = self.client.query_points(
+                    collection_name="novels_tags",
+                    query=v,
+                    query_filter=query_filter,
+                    limit=fetch_limit,
+                    score_threshold=0.85, # [Exp 3] Must be > 0.85 as per user request
+                    with_payload=with_payload
+                )
+                
+                # Aggregate tag scores using MaxSim (best match for any tag)
+                for hit in indiv_tag_response.points:
+                    tag_scores[hit.id] = max(tag_scores.get(hit.id, 0.0), float(hit.score))
+                    if hit.payload and hit.id not in payload_cache:
+                        payload_cache[hit.id] = hit.payload
+        else:
+            # [Exp 5] Joined Matching
+            if tag_query_text and tag_query_text.strip():
+                print(f"[VectorStore] Exp 5: Joined matching for tags: '{tag_query_text}'")
+                tag_query_vector = self._embed_with_retry(tag_query_text.strip(), task_type="RETRIEVAL_QUERY")
+            else:
+                tag_query_vector = query_vector
 
-        # Union candidate ids
+            tag_response = self.client.query_points(
+                collection_name="novels_tags",
+                query=tag_query_vector,
+                query_filter=query_filter, 
+                limit=fetch_limit,
+                with_payload=with_payload
+            )
+            for hit in tag_response.points:
+                tag_scores[hit.id] = float(hit.score)
+                if hit.payload and hit.id not in payload_cache:
+                    payload_cache[hit.id] = hit.payload
+
+        # Step 3: Fusion
         all_ids = set(text_scores.keys()) | set(tag_scores.keys())
-
-        # Compute fused scores:
-        # Compute fused scores based on fusion_mode
         fused_map: Dict[Any, Dict[str, float]] = {}
+        
         for pid in all_ids:
             t_raw = text_scores.get(pid, 0.0)
             g_raw = tag_scores.get(pid, 0.0)
@@ -248,6 +284,39 @@ class VectorStore:
             })
 
         return formatted_results, query_vector
+
+    def search_tags(
+        self,
+        query_text: str,
+        limit: int = 10,
+        similarity_threshold: float = 0.6
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for actual tags semantically similar to the provided query text.
+        """
+        embed_response = self.genai_client.models.embed_content(
+            model=self.embedding_model,
+            contents=query_text,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+        )
+        query_vector = list(embed_response.embeddings[0].values)
+        
+        response = self.client.query_points(
+            collection_name="novel_tags",
+            query=query_vector,
+            limit=limit,
+            score_threshold=similarity_threshold,
+            with_payload=True
+        )
+        
+        results = []
+        for hit in response.points:
+            if hit.payload and "tag" in hit.payload:
+                results.append({
+                    "tag": hit.payload["tag"],
+                    "score": hit.score
+                })
+        return results
 
     def add_items(self, items: List[Dict[str, Any]]):
         """

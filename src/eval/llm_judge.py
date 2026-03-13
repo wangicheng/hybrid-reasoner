@@ -21,7 +21,7 @@ from typing import List, Dict, Any, Optional
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from src.core.api_utils import retry_on_rate_limit, _is_retryable
+from src.core.api_utils import retry_on_rate_limit, _is_retryable, get_current_api_key
 
 # Load environment variables from .env file
 load_dotenv()
@@ -81,9 +81,10 @@ class LLMJudge:
     """使用 LLM 進行自動化關聯度評分"""
 
     def __init__(self, model_id: Optional[str] = None):
-        api_key = os.environ.get("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("請設定 GOOGLE_API_KEY 環境變數")
+        try:
+            api_key = get_current_api_key()
+        except ValueError as e:
+            raise ValueError(f"無法取得 API Key: {e}")
 
         self.client = genai.Client(api_key=api_key)
         self.model_id = model_id or JUDGE_MODELS[0]

@@ -24,25 +24,47 @@ class HybridEngine:
     def __init__(self, db=None, vs=None, retrieval_mode: str = "multi_multiplicative"):
         self.db = db if db is not None else Database()
         self.retrieval_mode = retrieval_mode
-        self.fusion_mode = "multiplicative" if "multiplicative" in retrieval_mode else "additive"
+        # [USET-REQUEST] Ensure ALL fusion strategies use Multiplicative
+        self.fusion_mode = "multiplicative"
         
-        # Determine collection name and use_multi_vector flag
-        if retrieval_mode.startswith("multi_"):
-            collection_name = "novels_multi_vector"
+        # Exp 5: multi_multiplicative (Joined tag matching) - The ONLY mode using multi-vector now
+        if (retrieval_mode.startswith("multi_multiplicative") or retrieval_mode.startswith("multi_additive")) and "embedded_tags" not in retrieval_mode:
+            collection_name = "novels"
             self.use_multi_vector = True
-            print(f"[HybridEngine] Using multi-vector embeddings for semantic search ({retrieval_mode})")
-            print(f"[HybridEngine] Vectors: text_semantic (Title+Introduction) + tag_semantic (Tags)")
+            print(f"[HybridEngine] Exp 5: Using multi-vector (Joined Tag Matching) for: {retrieval_mode}")
         else:
-            collection_name = "novels_fused" if retrieval_mode == "fused" else "novels"
+            collection_name = "novels_fused" if retrieval_mode.startswith("fused") else "novels"
             self.use_multi_vector = False
-            if retrieval_mode == "fused":
-                print("[HybridEngine] Using fused embeddings for semantic search")
-                print("[HybridEngine] Fused content: Title + Tags + Introduction")
+            if "embedded_tags" in retrieval_mode:
+                print(f"[HybridEngine] Exp 3: Using single-vector + embedded_tags for: {retrieval_mode}")
+            elif retrieval_mode.startswith("fused"):
+                print(f"[HybridEngine] Using single-vector fused embeddings for: {retrieval_mode}")
             else:
-                print("[HybridEngine] Using baseline embeddings for semantic search")
-        
+                print(f"[HybridEngine] Using baseline embeddings for: {retrieval_mode}")
+    
         self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
         self.book_matcher = BookMatcher(self.db)
+        
+        # Method 2 Cache: Pre-load tags if using baseline_prompt mode
+        self.all_tags_cache = None
+        if self.retrieval_mode.startswith("baseline_prompt"):
+            self._load_tags_cache()
+
+    def _load_tags_cache(self):
+        """Pre-load all tags from JSON for Method 2 to avoid frequent I/O."""
+        import json
+        import os
+        tags_path = "data/all_tags.json"
+        if os.path.exists(tags_path):
+            try:
+                with open(tags_path, "r", encoding="utf-8") as f:
+                    self.all_tags_cache = json.load(f)
+                print(f"[HybridEngine] Method 2: Pre-loaded {len(self.all_tags_cache)} tags for cache")
+            except Exception as e:
+                print(f"[HybridEngine] Warning: Failed to load {tags_path}: {e}")
+        else:
+             print(f"[HybridEngine] Warning: {tags_path} not found for Method 2")
+
 
     def _build_qdrant_filter(self, criteria_list: List[Any]) -> Optional[rest.Filter]:
         """
@@ -168,7 +190,9 @@ class HybridEngine:
         item: Dict[str, Any],
         criteria_list: List[Any],
         vector_score: float = 0.0,
-        negative_semantic_scores: Optional[Dict[str, float]] = None,
+        tag_terms_list: Optional[List[str]] = None,
+        tag_weights: Optional[Dict[str, float]] = None,
+        negative_tag_terms: Optional[List[str]] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         """
         简化评分逻辑：只计算语义分数（纯分数，不归一化）
@@ -177,7 +201,6 @@ class HybridEngine:
             item: 候选书籍项
             criteria_list: 评分条件列表
             vector_score: 原始向量分数
-            negative_semantic_scores: 负向语义分数字典 {item_id: negative_score}
         
         Returns:
             (总分, 评分明细)
@@ -196,21 +219,72 @@ class HybridEngine:
             "reason": f"多向量融合分數: {vector_score:.4f}"
         })
         
-        # --- 2. 负向语义分数（纯分数）---
-        item_id = str(item.get("id"))
-        if negative_semantic_scores and item_id in negative_semantic_scores:
-            neg_score = negative_semantic_scores[item_id]
-            total_score -= neg_score
+
+        # --- 2.5 標籤硬性匹配分數 (Limit to Baseline & Method 3) ---
+        is_baseline = self.retrieval_mode.startswith("baseline")
+        is_method3 = "embedded_tags" in self.retrieval_mode
+        
+        if (is_baseline or is_method3) and tag_terms_list:
+            match_count = 0
+            bonus_sum = 0.0
+            matched_tags = []
+            book_tags = item.get("tags", [])
+            if isinstance(book_tags, str):
+                import json
+                try: book_tags = json.loads(book_tags)
+                except: book_tags = []
+                
+            for target in tag_terms_list:
+                for b_tag in book_tags:
+                    if target in b_tag or b_tag in target:
+                        match_count += 1
+                        weight = tag_weights.get(target, 1.0) if tag_weights else 1.0
+                        bonus_sum += 0.1 * weight
+                        matched_tags.append(f"{b_tag}({weight:.2f})")
+                        break
             
-            breakdown.append({
-                "criteria": "semantic_similarity",
-                "label": "[排除] 負向語意",
-                "raw_score": neg_score,
-                "weighted_score": -neg_score,
-                "is_negative": True,
-                "is_filter": False,
-                "reason": f"排除內容相似度: {neg_score:.4f}"
-            })
+            if match_count > 0:
+                bonus = bonus_sum
+                method_label = "Embedded Tags" if is_method3 else "Baseline"
+                if self.fusion_mode == "multiplicative":
+                    total_score *= (1.0 + bonus)
+                    reason_str = f"關聯 {match_count} 個標籤 (依相似度乘法倍率: {1.0+bonus:.2f}x): {', '.join(matched_tags)}"
+                else:
+                    total_score += bonus
+                    reason_str = f"關聯 {match_count} 個標籤 (依相似度線性加分: +{bonus:.2f}): {', '.join(matched_tags)}"
+                
+                breakdown.append({
+                    "criteria": "keyword_match",
+                    "label": f"標籤匹配加成 ({method_label} - {self.fusion_mode})",
+                    "raw_score": match_count,
+                    "weighted_score": bonus,
+                    "is_filter": False,
+                    "reason": reason_str
+                })
+
+        # --- 2.6 負面標籤硬性排除 (Threshold 0.85) ---
+        if (is_baseline or is_method3 or "multi_" in self.retrieval_mode) and negative_tag_terms:
+            book_tags = item.get("tags", [])
+            if isinstance(book_tags, str):
+                try: book_tags = json.loads(book_tags)
+                except: book_tags = []
+            
+            hit_neg_tags = []
+            for neg_t in negative_tag_terms:
+                for b_t in book_tags:
+                    if neg_t in b_t or b_t in neg_t:
+                        hit_neg_tags.append(b_t)
+            
+            if hit_neg_tags:
+                # [USER-SET] Hard exclusion with 0.85 threshold mapping result
+                return 0.0, [{
+                    "criteria": "negative_tag_exclusion",
+                    "label": "[排除] 負面標籤命中",
+                    "raw_score": 0.0,
+                    "weighted_score": 0.0,
+                    "is_filter": True,
+                    "reason": f"書中包含排除標籤: {', '.join(hit_neg_tags)}"
+                }]
 
         # --- 3. 过滤条件（仅记录，不计分）---
         for criteria in criteria_list:
@@ -289,7 +363,11 @@ class HybridEngine:
         简化的搜索流程：语义搜索 + 硬过滤 + 负向语义
         """
         # 1. Parse Query
-        parse_result = parse_query(user_query, model_id=model_id)
+        tag_list = self.all_tags_cache if self.retrieval_mode.startswith("baseline_prompt") else None
+        if tag_list:
+            print(f"[Engine] Method 2: Using cached {len(tag_list)} tags for LLM reference")
+        
+        parse_result = parse_query(user_query, model_id=model_id, tag_list=tag_list)
         
         # 1.5 提取参考小说标签（用 search_terms 做模糊查詢）
         reference_tags = self._extract_reference_novel_tags(
@@ -340,14 +418,73 @@ class HybridEngine:
         #     print(f"[Engine] HyDE hypothetical intro: {parse_result.hypothetical_intro[:80]}...")
         #     expanded_terms += f" {parse_result.hypothetical_intro}"
         
-        # 构建 pure tags string for tag_semantic
         tag_terms_list = []
+        tag_weights = {}
         if parse_result.generated_keywords:
             tag_terms_list.extend([kw.replace(" ", "") for kw in parse_result.generated_keywords])
         if reference_tags:
             tag_terms_list.extend([t.replace(" ", "") for t in reference_tags[:8]])
         tag_query_text = " ".join(tag_terms_list)
         print(f"[Engine] Pure tags query for tag_semantic: '{tag_query_text}'")
+
+        # Method 3: Maps LLM tags to system tags individually via embedding similarity
+        if "embedded_tags" in self.retrieval_mode and tag_terms_list:
+            print(f"[Engine] Method 3: Mapping {len(tag_terms_list)} tags individually with Thres 0.85")
+            original_tags = list(tag_terms_list)
+            tag_terms_list = []
+            
+            for t in original_tags:
+                try:
+                    # [USER-SET] Consistent 0.85 threshold for tag mapping
+                    # Increase limit to capture all relevant tags
+                    similar = self.vs.search_tags(t, limit=20, similarity_threshold=0.85)
+                    for res in similar:
+                        s_tag = res["tag"]
+                        s_score = res["score"]
+                        # Store best score for calculating bonus
+                        if s_tag not in tag_weights or s_score > tag_weights[s_tag]:
+                            tag_weights[s_tag] = s_score
+                        if s_tag not in tag_terms_list:
+                            tag_terms_list.append(s_tag)
+                except Exception as e:
+                    print(f"[Engine] Method 3 mapping failed for '{t}': {e}")
+            
+            print(f"[Engine] Method 3: Final mapped tags -> {tag_terms_list}")
+        
+        # --- Negative Tag Terms Handling ---
+        negative_tag_terms = []
+        negative_criteria_list = [c for c in parse_result.criteria if c.name == "semantic_similarity" and getattr(c, 'is_negative', False)]
+        
+        for nc in negative_criteria_list:
+            p = nc.parameters.model_dump() if hasattr(nc.parameters, 'model_dump') else nc.parameters.dict()
+            qt = p.get("query_text", "").strip()
+            if not qt: continue
+            
+            # For Method 3 / Multi-Vector: Try to map negative keyword to system tags
+            if "embedded_tags" in self.retrieval_mode or "multi_" in self.retrieval_mode:
+                try:
+                    neg_mapped = self.vs.search_tags(qt, limit=5, similarity_threshold=0.85)
+                    negative_tag_terms.extend([res["tag"] for res in neg_mapped])
+                    if neg_mapped:
+                        print(f"[Engine] Negative mapped tags (Thres 0.85) for '{qt}': {[res['tag'] for res in neg_mapped]}")
+                except Exception as e:
+                    print(f"[Engine] Warning: Negative tag mapping failed: {e}")
+            else:
+                # Baseline: exact keyword matching
+                negative_tag_terms.append(qt)
+                
+        # Method 4 (Feature Fusion): Format query into structured components
+        if self.retrieval_mode.startswith("fused"):
+            # Structure: [TITLE] ... [/TITLE] [TAGS] ... [/TAGS] [ABSTRACT] ... [/ABSTRACT]
+            pseudo_title = " ".join(parse_result.reference_books) if parse_result.reference_books else ""
+            pseudo_tags = tag_query_text
+            pseudo_abstract = base_terms
+            if "semantic_expansion" in locals() and "semantic_expansion" in dir():
+               pseudo_abstract += f" {semantic_expansion}"
+            
+            expanded_terms = f"[TITLE] {pseudo_title} [/TITLE] [TAGS] {pseudo_tags} [/TAGS] [ABSTRACT] {pseudo_abstract} [/ABSTRACT]"
+            print(f"[Engine] Method 4: Fused query format applied -> {expanded_terms}")
+        
         
         # 4. 执行正向语义搜索（带硬过滤）
         retrieval_limit = 100  # 减少检索数量，因为有硬过滤
@@ -355,6 +492,10 @@ class HybridEngine:
         # Use multi-vector search if available
         query_vector = None
         if self.use_multi_vector:
+            # Pass tag_terms_list for Exp 3 (Individual matching) 
+            # or tag_query_text for Exp 5 (Joined matching)
+            tag_query_list = tag_terms_list if "embedded_tags" in self.retrieval_mode else None
+            
             vector_results, query_vector = self.vs.search_multi_vector(
                 expanded_terms,
                 limit=retrieval_limit,
@@ -363,7 +504,8 @@ class HybridEngine:
                 text_weight=0.7,  # Text semantic priority
                 tag_weight=0.3,   # Tag semantic secondary
                 fusion_mode=self.fusion_mode,
-                tag_query_text=tag_query_text
+                tag_query_text=tag_query_text,
+                tag_query_list=tag_query_list
             )
             print(f"[Engine] Multi-vector search: text_weight=0.7, tag_weight=0.3, fusion_mode={self.fusion_mode}")
         else:
@@ -422,53 +564,6 @@ class HybridEngine:
         candidates = list(candidates_map.values())
         print(f"[Engine] Retrieved {len(candidates)} candidates after filtering")
 
-        # 6. 计算负向语义分数（如果有排除条件）
-        negative_semantic_scores = {}
-        negative_criteria = [c for c in parse_result.criteria 
-                             if c.name == "semantic_similarity" and getattr(c, 'is_negative', False)]
-        
-        if negative_criteria and candidates:
-            print(f"[Engine] Computing negative semantic scores for {len(negative_criteria)} exclusion(s)...")
-            
-            # 对每个负向条件进行向量嵌入
-            for neg_crit in negative_criteria:
-                params = neg_crit.parameters.model_dump() if hasattr(neg_crit.parameters, 'model_dump') else neg_crit.parameters.dict()
-                neg_query_text = params.get("query_text", "")
-                
-                if not neg_query_text:
-                    continue
-                
-                print(f"[Engine] Negative semantic: '{neg_query_text}'")
-                
-                # 嵌入负向查询
-                if self.use_multi_vector:
-                    neg_results, neg_vector = self.vs.search_multi_vector(
-                        neg_query_text,
-                        limit=len(candidates),  # 只需要对候选项计算
-                        query_filter=None,  # 不应用过滤
-                        with_payload=False,  # 只需要分数
-                        text_weight=0.7,
-                        tag_weight=0.3,
-                        fusion_mode=self.fusion_mode
-                    )
-                else:
-                    neg_results, neg_vector = self.vs.search(
-                        neg_query_text,
-                        limit=len(candidates),
-                        query_filter=None,
-                        with_payload=False
-                    )
-                
-                # 构建负向分数映射
-                neg_score_map = {str(hit.get('payload', {}).get('id', hit.get('id'))): hit['score'] 
-                                 for hit in neg_results if hit.get('score')}
-                
-                # 累加每个候选项的负向分数（纯分数）
-                for bid in candidates_map.keys():
-                    if bid in neg_score_map:
-                        current_neg = negative_semantic_scores.get(bid, 0.0)
-                        raw_neg = neg_score_map[bid]
-                        negative_semantic_scores[bid] = current_neg + raw_neg
 
         # 7. 评分和排序（纯分数，不归一化）
         scored_items = []
@@ -476,12 +571,14 @@ class HybridEngine:
             bid = str(item["id"])
             v_score = vector_score_map.get(bid, 0.0)
             
-            # Calculate final score with negative semantics (raw scores only)
+            # Calculate final score
             score_val, breakdown = self.calculate_score(
                 item,
                 parse_result.criteria,
                 vector_score=v_score,
-                negative_semantic_scores=negative_semantic_scores,
+                tag_terms_list=tag_terms_list,
+                tag_weights=tag_weights,
+                negative_tag_terms=negative_tag_terms
             )
 
             final_score = float(score_val)

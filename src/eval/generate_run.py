@@ -5,96 +5,147 @@ from typing import List, Dict, Any
 from pathlib import Path
 
 # ==========================================
-# ⚙️ 實驗設定區 (測試不同引擎時請修改這裡)
+# ⚙️ 實驗設定區
 # ==========================================
-# 在不同的分支或實驗中，載入你想要測試的引擎
-from src.core.engine import HybridEngine as TestEngine
-
-# 設定這個引擎的名稱，將會作為輸出的檔名 (e.g., HybridReasoner.json)
-ENGINE_NAME = "HybridReasoner"
-# ==========================================
+from src.core.engine import HybridEngine
+from src.core.database import Database
+from src.core.vector_store import VectorStore
 
 class RunGenerator:
     """
-    單一引擎執行器
-    負責對輸入的多個 Query 執行「一個」指定的系統檢索，並將結果存成 JSON。
+    多實驗執行器
+    負責對輸入的多個 Query 跑遍所有指定的實驗模式。
     """
     def __init__(self, k_per_engine: int = 10):
         self.k = k_per_engine
-        print(f"Initializing {ENGINE_NAME} Engine...")
-        from src.core.database import Database
-        from src.core.vector_store import VectorStore
-        
         self.db = Database()
-        self.vs = VectorStore(collection_name="novels")
         
-        self.engine = TestEngine(db=self.db, vs=self.vs)
+    def generate_run(self, queries_config: List[Dict], engine_name: str, retrieval_mode: str, output_dir: Path):
+        print(f"\n🚀 [Batch] Starting Experiment: {engine_name} (Mode: {retrieval_mode})")
         
-    def close(self):
-        """Explicitly close Qdrant connection to avoid shutdown errors."""
-        if hasattr(self, 'vs') and self.vs is not None:
-            self.vs.client.close()
-
-    def generate_run(self, queries_config: List[Dict], output_dir: Path):
+        # 根據模式動態選擇向量集合
+        if retrieval_mode.startswith("fused"):
+            collection = "novels_fused"
+        else:
+            # Baseline, Method 3, and Method 5 (Join) all start with 'novels'
+            collection = "novels"
+            
+        print(f"   Using collection: {collection}")
+        vs = VectorStore(collection_name=collection)
+        engine = HybridEngine(db=self.db, vs=vs, retrieval_mode=retrieval_mode)
+        
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{ENGINE_NAME}.json"
+        output_path = output_dir / f"{engine_name}.json"
         
         run_data = []
+        processed_query_ids = set()
         
-        for q_conf in queries_config:
-            q_id = q_conf["id"]
-            query = q_conf["query"]
-            print(f"\nProcessing query: {query}")
-            
-            # 使用引擎抽取 Top-K (關閉 AI 解釋以節省 API 成本)
-            response = self.engine.search(query, limit=self.k, explain=False)
-            if asyncio.iscoroutine(response):
-                response = asyncio.run(response)
+        if output_path.exists():
+            try:
+                with open(output_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    for item in existing_data:
+                        # 如果有 'error' 欄位，代表上次失敗了，我們不把它加入跳過名單讓它重跑
+                        if "error" not in item:
+                            run_data.append(item)
+                            processed_query_ids.add(item.get("query_id"))
+                print(f"   ► Loaded {len(processed_query_ids)} completed queries from existing file. Resuming...")
+            except Exception as e:
+                print(f"   ⚠️ Could not load existing file: {e}")
+
+        try:
+            for q_conf in queries_config:
+                q_id = q_conf["id"]
+                query = q_conf["query"]
                 
-            results = response.get("results", [])
-            extracted_results = []
-            
-            for rank, res in enumerate(results):
-                item = res.get("item", {})
-                b_id = str(item.get("id"))
-                if not b_id:
+                if q_id in processed_query_ids:
+                    print(f"   - Skipping query: {q_id} (already completed)")
                     continue
                     
-                # 處理新舊 Author Schema
-                author_name = ""
-                if isinstance(item.get('user'), dict):
-                    author_name = item.get('user', {}).get('name', '')
-                else:
-                    author_name = item.get('author', '')
-                    
-                extracted_results.append({
-                    "book_id": b_id,
-                    "title": item.get("name", ""),
-                    "author": author_name,
-                    "intro": item.get("intro", ""),
-                    "words_total": item.get("words_total", 0),
-                    "publish_status": item.get("publish_status", ""),
-                    "tags": item.get("tags", []),
-                    "rank": rank + 1  # 1-based rank
-                })
+                print(f"   - Processing query: {query[:30]}...")
                 
-            run_data.append({
-                "query_id": q_id,
-                "query": query,
-                "results": extracted_results
-            })
-            
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(run_data, f, ensure_ascii=False, indent=2)
-            
-        print(f"\n✅ [{ENGINE_NAME}] Run complete! Saved to {output_path}")
+                try:
+                    # 使用引擎抽取 Top-K (關閉 AI 解釋以節省 API 成本)
+                    response = engine.search(query, limit=self.k, explain=False)
+                    if asyncio.iscoroutine(response):
+                        response = asyncio.run(response)
+                        
+                    results = response.get("results", [])
+                    extracted_results = []
+                    
+                    for rank, res in enumerate(results):
+                        item = res.get("item", {})
+                        b_id = str(item.get("id"))
+                        if not b_id: continue
+                            
+                        author_name = item.get('author') or item.get('user', {}).get('name', '')
+                            
+                        extracted_results.append({
+                            "book_id": b_id,
+                            "title": item.get("name", ""),
+                            "author": author_name,
+                            "intro": item.get("intro", ""),
+                            "words_total": item.get("words_total", 0),
+                            "publish_status": item.get("publish_status", ""),
+                            "tags": item.get("tags", []),
+                            "rank": rank + 1
+                        })
+                        
+                    run_data.append({
+                        "query_id": q_id,
+                        "query": query,
+                        "results": extracted_results
+                    })
+                except Exception as query_err:
+                    print(f"     ⚠️ Error processing query {q_id}: {query_err}")
+                    # 添加空的結果，確保評估時對應得到 query_id
+                    run_data.append({
+                        "query_id": q_id,
+                        "query": query,
+                        "results": [],
+                        "error": str(query_err)
+                    })
+                
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(run_data, f, ensure_ascii=False, indent=2)
+                
+            print(f"✅ [{engine_name}] Run complete! Saved to {output_path}")
+        finally:
+            # 關閉連線以防 Qdrant lock
+            vs.client.close()
 
 if __name__ == "__main__":
-    with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
+    # 讀取問題集
+    queries_path = Path("data/experiments/queries.json")
+    if not queries_path.exists():
+        print(f"❌ Error: {queries_path} not found!")
+        exit(1)
+        
+    with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
         
+    # 定義所有要跑的實驗 (對應 docs/experiments/tag_processing.md)
+    EXPERIMENTS = [
+        {"name": "exp1_baseline", "mode": "baseline"},
+        {"name": "exp2_baseline_prompt", "mode": "baseline_prompt"},
+        {"name": "exp3_embedded_tags", "mode": "multi_multiplicative_embedded_tags"},
+        {"name": "exp4_feature_fusion", "mode": "fused_multiplicative"},
+        {"name": "exp5_multi_vector", "mode": "multi_multiplicative"},
+    ]
+    
     generator = RunGenerator(k_per_engine=10)
-    try:
-        generator.generate_run(sample_queries, Path("data/experiments/runs"))
-    finally:
-        generator.close()
+    output_folder = Path("data/experiments/runs")
+    
+    for exp in EXPERIMENTS:
+        try:
+            generator.generate_run(
+                queries_config=sample_queries,
+                engine_name=exp["name"],
+                retrieval_mode=exp["mode"],
+                output_dir=output_folder
+            )
+        except Exception as e:
+            print(f"❌ Failed experiment {exp['name']}: {e}")
+
+    print("\n🎉 All scheduled experiments finished!")
+
