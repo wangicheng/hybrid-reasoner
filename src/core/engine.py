@@ -27,20 +27,27 @@ class HybridEngine:
         # [USET-REQUEST] Ensure ALL fusion strategies use Multiplicative
         self.fusion_mode = "multiplicative"
         
-        # Exp 5: multi_multiplicative (Joined tag matching) - The ONLY mode using multi-vector now
-        if (retrieval_mode.startswith("multi_multiplicative") or retrieval_mode.startswith("multi_additive")) and "embedded_tags" not in retrieval_mode:
+        # [USER-SET] Logic Reconstruction for accurate Experiment Definitions
+        if "fused" in retrieval_mode:
+            # Exp 4: Feature Fusion (Single-Vector, All-in-one pre-fused)
+            collection_name = "novels_fused"
+            self.use_multi_vector = False
+            print(f"[HybridEngine] Exp 4: Feature Fusion (Single-Vector)")
+        elif retrieval_mode == "multi_multiplicative":
+            # Exp 5: Joined Matching (Multi-Vector Fusion)
             collection_name = "novels"
             self.use_multi_vector = True
-            print(f"[HybridEngine] Exp 5: Using multi-vector (Joined Tag Matching) for: {retrieval_mode}")
-        else:
-            collection_name = "novels_fused" if retrieval_mode.startswith("fused") else "novels"
+            print(f"[HybridEngine] Exp 5: Joined Matching (Multi-Vector Fusion)")
+        elif "embedded_tags" in retrieval_mode:
+            # Exp 3: Individual Mapping (Hard Matching)
+            collection_name = "novels"
             self.use_multi_vector = False
-            if "embedded_tags" in retrieval_mode:
-                print(f"[HybridEngine] Exp 3: Using single-vector + embedded_tags for: {retrieval_mode}")
-            elif retrieval_mode.startswith("fused"):
-                print(f"[HybridEngine] Using single-vector fused embeddings for: {retrieval_mode}")
-            else:
-                print(f"[HybridEngine] Using baseline embeddings for: {retrieval_mode}")
+            print(f"[HybridEngine] Exp 3: Individual Mapping (Hard Matching)")
+        else:
+            # Exp 1 & 2: Baseline Hybrid (Vector Text + SQL Hard Tag)
+            collection_name = "novels"
+            self.use_multi_vector = False
+            print(f"[HybridEngine] Exp 1/2: Baseline Hybrid (Vector Text + SQL Hard Tag)")
     
         self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
         self.book_matcher = BookMatcher(self.db)
@@ -207,63 +214,65 @@ class HybridEngine:
         """
         breakdown = []
         
-        # --- 1. 正向语义分数（纯分数）---
-        total_score = vector_score
+        # --- 1. 基礎文本語義分數 (Base Text Score) ---
+        # [USER-SET] Scaling to avoid 0: 0.1 + 0.9 * s
+        # For Exp 5: vector_score is already the fused (0.1+0.9*t)*(0.1+0.9*g)
+        # For Exp 1, 2, 3: vector_score is the raw vector similarity.
+        if self.use_multi_vector:
+            base_score = vector_score
+        else:
+            base_score = 0.1 + 0.9 * vector_score
+            
+        total_score = base_score
         
         breakdown.append({
             "criteria": "semantic_similarity",
-            "label": "語意相似度 (文本×標籤)",
+            "label": "基礎語意相似度 (Text Score)",
             "raw_score": vector_score,
-            "weighted_score": vector_score,
+            "weighted_score": base_score,
             "is_filter": False,
-            "reason": f"多向量融合分數: {vector_score:.4f}"
+            "reason": f"調整後基礎分: {base_score:.4f} (已縮放避免 0 分)"
         })
         
 
-        # --- 2.5 標籤硬性匹配分數 (Limit to Baseline & Method 3) ---
-        is_baseline = self.retrieval_mode.startswith("baseline")
-        is_method3 = "embedded_tags" in self.retrieval_mode
+        # --- 2.5 標籤匹配得分 (Exp 1, 2, 3) ---
+        is_hard_match = self.retrieval_mode.startswith("baseline") or "embedded_tags" in self.retrieval_mode
         
-        if (is_baseline or is_method3) and tag_terms_list:
+        if is_hard_match and tag_terms_list:
             match_count = 0
-            bonus_sum = 0.0
+            n_total = len(tag_terms_list)
             matched_tags = []
+            
             book_tags = item.get("tags", [])
             if isinstance(book_tags, str):
                 import json
                 try: book_tags = json.loads(book_tags)
                 except: book_tags = []
                 
+            # 計算命中數量 m
             for target in tag_terms_list:
                 for b_tag in book_tags:
                     if target in b_tag or b_tag in target:
                         match_count += 1
-                        weight = tag_weights.get(target, 1.0) if tag_weights else 1.0
-                        bonus_sum += 0.1 * weight
-                        matched_tags.append(f"{b_tag}({weight:.2f})")
+                        matched_tags.append(b_tag)
                         break
             
-            if match_count > 0:
-                bonus = bonus_sum
-                method_label = "Embedded Tags" if is_method3 else "Baseline"
-                if self.fusion_mode == "multiplicative":
-                    total_score *= (1.0 + bonus)
-                    reason_str = f"關聯 {match_count} 個標籤 (依相似度乘法倍率: {1.0+bonus:.2f}x): {', '.join(matched_tags)}"
-                else:
-                    total_score += bonus
-                    reason_str = f"關聯 {match_count} 個標籤 (依相似度線性加分: +{bonus:.2f}): {', '.join(matched_tags)}"
+            # [USER-SET] New Formula: Score = BaseScore * (0.1 + 0.9 * m/n)
+            if n_total > 0:
+                tag_multiplier = 0.1 + 0.9 * (match_count / n_total)
+                total_score = base_score * tag_multiplier
                 
                 breakdown.append({
                     "criteria": "keyword_match",
-                    "label": f"標籤匹配加成 ({method_label} - {self.fusion_mode})",
+                    "label": f"標籤匹配得分 (Hard Matching - {tag_multiplier:.2f}x)",
                     "raw_score": match_count,
-                    "weighted_score": bonus,
+                    "weighted_score": tag_multiplier,
                     "is_filter": False,
-                    "reason": reason_str
+                    "reason": f"基礎分 {base_score:.4f} × 標籤權重 {tag_multiplier:.4f} (命中 {match_count}/{n_total})"
                 })
 
         # --- 2.6 負面標籤硬性排除 (Threshold 0.85) ---
-        if (is_baseline or is_method3 or "multi_" in self.retrieval_mode) and negative_tag_terms:
+        if (is_hard_match or "multi_" in self.retrieval_mode) and negative_tag_terms:
             book_tags = item.get("tags", [])
             if isinstance(book_tags, str):
                 try: book_tags = json.loads(book_tags)
@@ -400,18 +409,24 @@ class HybridEngine:
                 print(f"[Engine] 正向語義條件加入搜索: {semantic_expansion}")
                 expanded_terms += f" {semantic_expansion}"
         
-        # 3.2 LLM 生成的擴展關鍵字
+        # 3.2 LLM 生成的擴展關鍵字 (Only add to text query if NOT using multi-vector)
         if parse_result.generated_keywords:
             cleaned_keywords = [kw.replace(" ", "") for kw in parse_result.generated_keywords]
             expansion_str = " ".join(cleaned_keywords)
-            print(f"[Engine] LLM-expanded keywords: {expansion_str}")
-            expanded_terms += f" {expansion_str}"
+            if not self.use_multi_vector:
+                print(f"[Engine] Exp 4: adding LLM-expanded keywords to text query: {expansion_str}")
+                expanded_terms += f" {expansion_str}"
+            else:
+                print(f"[Engine] Multi-Vector: Keywords reserved for tag_semantic: {expansion_str}")
         
-        # 3.3 添加参考小说的标签到查询中
+        # 3.3 添加参考小说的标签到查询中 (Only add to text query if NOT using multi-vector)
         if reference_tags:
-            tags_str = " ".join(reference_tags[:8])  # 最多使用8个标签
-            print(f"[Engine] 添加參考標籤到查詢: {tags_str}")
-            expanded_terms += f" {tags_str}"
+            tags_str = " ".join(reference_tags[:8])
+            if not self.use_multi_vector:
+                print(f"[Engine] Exp 4: adding reference tags to text query: {tags_str}")
+                expanded_terms += f" {tags_str}"
+            else:
+                print(f"[Engine] Multi-Vector: Reference tags reserved for tag_semantic: {tags_str}")
         
         # 3.4 HyDE 假設文檔嵌入 (Disabled manually)
         # if parse_result.hypothetical_intro:
@@ -473,8 +488,8 @@ class HybridEngine:
                 # Baseline: exact keyword matching
                 negative_tag_terms.append(qt)
                 
-        # Method 4 (Feature Fusion): Format query into structured components
-        if self.retrieval_mode.startswith("fused"):
+        # [USER-SET] Exp 4 (Feature Fusion): Must format query into structure before embedding
+        if "fused" in self.retrieval_mode:
             # Structure: [TITLE] ... [/TITLE] [TAGS] ... [/TAGS] [ABSTRACT] ... [/ABSTRACT]
             pseudo_title = " ".join(parse_result.reference_books) if parse_result.reference_books else ""
             pseudo_tags = tag_query_text
@@ -483,86 +498,75 @@ class HybridEngine:
                pseudo_abstract += f" {semantic_expansion}"
             
             expanded_terms = f"[TITLE] {pseudo_title} [/TITLE] [TAGS] {pseudo_tags} [/TAGS] [ABSTRACT] {pseudo_abstract} [/ABSTRACT]"
-            print(f"[Engine] Method 4: Fused query format applied -> {expanded_terms}")
+            print(f"[Engine] Exp 4 (Single-Vector) Fused Query Format: {expanded_terms}")
         
         
-        # 4. 执行正向语义搜索（带硬过滤）
-        retrieval_limit = 100  # 减少检索数量，因为有硬过滤
+        # 4. 执行召回 (Hybrid Retrieval Logic)
+        retrieval_limit = 100
+        candidates_map = {}
+        vector_score_map = {}
+        payload_map = {}
         
-        # Use multi-vector search if available
+        # Path A: Vector Search (Plot/Semantic)
         query_vector = None
         if self.use_multi_vector:
-            # Pass tag_terms_list for Exp 3 (Individual matching) 
-            # or tag_query_text for Exp 5 (Joined matching)
+            # Exp 3 & 5 Path: Score Fusion (Text Vector + Tag Vector)
             tag_query_list = tag_terms_list if "embedded_tags" in self.retrieval_mode else None
-            
             vector_results, query_vector = self.vs.search_multi_vector(
                 expanded_terms,
                 limit=retrieval_limit,
-                query_filter=qdrant_filter,  # 应用硬过滤
+                query_filter=qdrant_filter,
                 with_payload=True,
-                text_weight=0.7,  # Text semantic priority
-                tag_weight=0.3,   # Tag semantic secondary
+                text_weight=0.7,
+                tag_weight=0.3,
                 fusion_mode=self.fusion_mode,
                 tag_query_text=tag_query_text,
                 tag_query_list=tag_query_list
             )
-            print(f"[Engine] Multi-vector search: text_weight=0.7, tag_weight=0.3, fusion_mode={self.fusion_mode}")
         else:
+            # Exp 1, 2, 4 Path (Single Vector Search)
             vector_results, query_vector = self.vs.search(
                 expanded_terms,
                 limit=retrieval_limit,
-                query_filter=qdrant_filter,  # 应用硬过滤
+                query_filter=qdrant_filter,
                 with_payload=True
             )
-        
-        # 5. 收集候选项（並補充完整資料）
-        candidates_map = {} 
-        vector_score_map = {}
-        payload_map = {} 
-
+            
+        # Collect results from Vector Search
         for hit in vector_results:
-            # Use payload data directly from Qdrant
-            if hit.get('payload') and hit['payload'].get("name"):
-                str_id = hit['payload'].get("id")
-                if not str_id:
-                    continue
-                    
-                bid = str(str_id)
-                payload = hit['payload']
-                
-                # 檢查 payload 是否缺少關鍵字段（classification, words_total, author 等）
-                # novels_multi_vector collection 只有 id, name, intro, tags 四個字段
-                missing_fields = not payload.get('classification') or not payload.get('words_total')
-                
-                if missing_fields:
-                    # 從資料庫補充完整數據
-                    db_item = self.db.get_item(bid)
-                    if db_item:
-                        # 合併：保留 payload 的 intro/tags（可能更新），補充資料庫的其他字段
-                        full_item = {**db_item, **payload}  # payload 覆蓋 db_item
-                        candidates_map[bid] = full_item
-                    else:
-                        # 資料庫也沒有？只能用 payload 的部分數據
-                        candidates_map[bid] = payload
-                else:
-                    # Payload 已完整
-                    candidates_map[bid] = payload
-                
+            if hit.get('payload') and hit['payload'].get("id"):
+                bid = str(hit['payload']["id"])
+                candidates_map[bid] = hit['payload']
                 vector_score_map[bid] = hit["score"]
-                payload_map[bid] = payload
-            else:
-                # Fallback: try to get from database
-                item = self.db.get_item(hit.get("id"))
-                if item and item.get("name"):
-                    bid = str(item["id"])
+                payload_map[bid] = hit['payload']
+
+        # Path B: Hard Keyword Search (Exp 1 & 2 ONLY - Hybrid Retrieval)
+        is_hard_baseline = not self.use_multi_vector and "fused" not in self.retrieval_mode
+        if is_hard_baseline and tag_terms_list:
+            print(f"[Engine] Exp 1/2: Triggering Hybrid Retrieval Path B (SQL Tag Search) for: {tag_terms_list}")
+            sql_results = self.db.search_by_tags_fuzzy(tag_terms_list, limit=50)
+            
+            for item in sql_results:
+                bid = str(item["id"])
+                if bid not in candidates_map:
+                    # [Hybrid] This book matched tags but NOT the vector search initially
                     candidates_map[bid] = item
-                    vector_score_map[bid] = hit["score"]
-                    if hit.get('payload'):
-                        payload_map[bid] = hit['payload']
-        
-        candidates = list(candidates_map.values())
-        print(f"[Engine] Retrieved {len(candidates)} candidates after filtering")
+                    vector_score_map[bid] = 0.0  # It has no vector score yet
+                    payload_map[bid] = item
+                    print(f"  + Added via SQL Tag Match: 《{item.get('name')}》")
+
+        # 5. 补充资料 (Ensure candidates have full fields)
+        candidates = []
+        for bid, item in candidates_map.items():
+            # If item is missing critical fields (common in slim vector payloads)
+            if not item.get('classification') or not item.get('words_total'):
+                db_item = self.db.get_item(bid)
+                if db_item:
+                    item = {**db_item, **item}
+                    candidates_map[bid] = item
+            candidates.append(item)
+            
+        print(f"[Engine] Final Hybrid Candidate Pool size: {len(candidates)}")
 
 
         # 7. 评分和排序（纯分数，不归一化）

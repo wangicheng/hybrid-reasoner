@@ -23,11 +23,11 @@ class RunGenerator:
     def generate_run(self, queries_config: List[Dict], engine_name: str, retrieval_mode: str, output_dir: Path):
         print(f"\n🚀 [Batch] Starting Experiment: {engine_name} (Mode: {retrieval_mode})")
         
-        # 根據模式動態選擇向量集合
-        if retrieval_mode.startswith("fused"):
+        # [USER-SET] Re-sync with Engine: Only Exp 4 (fused) uses the pre-fused collection.
+        # Exp 1, 2, 3, 5 all use Multi-Vector Score Fusion on the 'novels' collection.
+        if "fused" in retrieval_mode:
             collection = "novels_fused"
         else:
-            # Baseline, Method 3, and Method 5 (Join) all start with 'novels'
             collection = "novels"
             
         print(f"   Using collection: {collection}")

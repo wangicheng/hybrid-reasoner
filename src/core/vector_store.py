@@ -263,13 +263,13 @@ class VectorStore:
             if fusion_mode == "additive":
                 fused = (t_raw * text_weight) + (g_raw * tag_weight)
             else:  # "multiplicative"
-                # Scale found scores by 10 (0.X → X.X) then multiply.
-                # Missing component defaults to 1.0 (neutral in multiplication).
-                t_comp = (t_raw * 10) if pid in text_scores else 1.0
-                g_comp = (g_raw * 10) if pid in tag_scores else 1.0
+                # [USER-SET] Exp 5 Multi-Vector Fusion Formula: (0.1 + 0.9 * t) * (0.1 + 0.9 * g)
+                # Unifying logic: Both Text and Tag scores are scaled to [0.1, 1.0]
+                t_comp = 0.1 + 0.9 * text_scores.get(pid, 0.0) 
+                g_comp = 0.1 + 0.9 * tag_scores.get(pid, 0.0)
                 fused = t_comp * g_comp
 
-            fused_map[pid] = {"fused": fused, "text_score": t_raw, "tag_score": g_raw}
+            fused_map[pid] = {"fused": fused, "text_score": text_scores.get(pid, 0.0), "tag_score": tag_scores.get(pid, 0.0)}
 
         # Sort and return top-k
         sorted_ids = sorted(fused_map.items(), key=lambda x: x[1]["fused"], reverse=True)[:limit]
