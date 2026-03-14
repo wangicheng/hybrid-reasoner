@@ -188,8 +188,15 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True):
     print(f"🔹 啟用強硬條件仲裁 (Strict Filter): {use_strict_filter}")
     print("-"*40)
     
+    summary = []
     for engine_name, scores in engine_ndcg.items():
         avg_ndcg = sum(scores) / len(scores) if scores else 0
+        summary.append((engine_name, avg_ndcg))
+    
+    # Sort by NDCG score descending
+    summary.sort(key=lambda x: x[1], reverse=True)
+    
+    for engine_name, avg_ndcg in summary:
         print(f"  🏆 {engine_name:20s} | NDCG@10: {avg_ndcg:.4f}")
     print("="*40 + "\n")
 
