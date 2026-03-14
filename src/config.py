@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     QDRANT_PATH: str = str(PROJECT_ROOT / "data" / "qdrant_storage")
     DB_PATH: str = str(PROJECT_ROOT / "data" / "hybrid_reasoner.db")
     
+    # Fusion Settings for Experiments (Exp 1, 2, 3, 5)
+    # Default: 0.7 Text + 0.3 Tag
+    FUSION_MODE: str = "multiplicative" # Options: "multiplicative", "additive"
+    TEXT_WEIGHT: float = 0.5
+    TAG_WEIGHT: float = 0.5
+
     class Config:
         env_file = ".env"
         extra = "ignore"

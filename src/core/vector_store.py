@@ -162,10 +162,10 @@ class VectorStore:
         limit: int = 10,
         query_filter: Optional[rest.Filter] = None,
         with_payload: bool = True,
-        text_weight: float = 0.7,
-        tag_weight: float = 0.3,
+        text_weight: float = settings.TEXT_WEIGHT,
+        tag_weight: float = settings.TAG_WEIGHT,
         batch_size: int = 20,  # Limit pre-fetch to avoid excessive merging
-        fusion_mode: str = "multiplicative",
+        fusion_mode: str = settings.FUSION_MODE,
         tag_query_text: str = "",
         tag_query_list: Optional[List[str]] = None
     ) -> Tuple[List[Dict[str, Any]], List[float]]:

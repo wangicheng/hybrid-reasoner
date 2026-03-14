@@ -126,11 +126,11 @@ if __name__ == "__main__":
         
     # 定義所有要跑的實驗 (對應 docs/experiments/tag_processing.md)
     EXPERIMENTS = [
-        {"name": "exp1_baseline", "mode": "baseline"},
-        {"name": "exp2_baseline_prompt", "mode": "baseline_prompt"},
-        {"name": "exp3_embedded_tags", "mode": "multi_multiplicative_embedded_tags"},
-        {"name": "exp4_feature_fusion", "mode": "fused_multiplicative"},
-        {"name": "exp5_multi_vector", "mode": "multi_multiplicative"},
+        {"name": "exp1_a_5-5", "mode": "baseline"},
+        {"name": "exp2_a_5-5", "mode": "baseline_prompt"},
+        {"name": "exp3_a_5-5", "mode": "multi_multiplicative_embedded_tags"},
+        {"name": "exp4", "mode": "fused_multiplicative"},
+        {"name": "exp5_a_5-5", "mode": "multi_multiplicative"},
     ]
     
     generator = RunGenerator(k_per_engine=10)

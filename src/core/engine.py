@@ -24,30 +24,38 @@ class HybridEngine:
     def __init__(self, db=None, vs=None, retrieval_mode: str = "multi_multiplicative"):
         self.db = db if db is not None else Database()
         self.retrieval_mode = retrieval_mode
-        # [USET-REQUEST] Ensure ALL fusion strategies use Multiplicative
-        self.fusion_mode = "multiplicative"
         
-        # [USER-SET] Logic Reconstruction for accurate Experiment Definitions
-        if "fused" in retrieval_mode:
+        # Load Fusion weights and mode from settings
+        self.fusion_mode = settings.FUSION_MODE
+        self.text_weight = settings.TEXT_WEIGHT
+        self.tag_weight = settings.TAG_WEIGHT
+        
+        # [USER-SET] Architecture Flags to avoid logic overlap
+        self.is_feature_fusion = "fused" in retrieval_mode  # Exp 4
+        self.is_exp3_mapping = "embedded_tags" in retrieval_mode  # Exp 3
+        self.is_exp5_multi = retrieval_mode == "multi_multiplicative"  # Exp 5
+        self.is_baseline_hybrid = not (self.is_feature_fusion or self.is_exp3_mapping or self.is_exp5_multi) # Exp 1, 2
+
+        if self.is_feature_fusion:
             # Exp 4: Feature Fusion (Single-Vector, All-in-one pre-fused)
             collection_name = "novels_fused"
             self.use_multi_vector = False
-            print(f"[HybridEngine] Exp 4: Feature Fusion (Single-Vector)")
-        elif retrieval_mode == "multi_multiplicative":
+            print(f"[HybridEngine] Exp 4: Feature Fusion")
+        elif self.is_exp5_multi:
             # Exp 5: Joined Matching (Multi-Vector Fusion)
             collection_name = "novels"
             self.use_multi_vector = True
-            print(f"[HybridEngine] Exp 5: Joined Matching (Multi-Vector Fusion)")
-        elif "embedded_tags" in retrieval_mode:
+            print(f"[HybridEngine] Exp 5: Multi-Vector Fusion")
+        elif self.is_exp3_mapping:
             # Exp 3: Individual Mapping (Hard Matching)
             collection_name = "novels"
             self.use_multi_vector = False
-            print(f"[HybridEngine] Exp 3: Individual Mapping (Hard Matching)")
+            print(f"[HybridEngine] Exp 3: Tag Mapping")
         else:
             # Exp 1 & 2: Baseline Hybrid (Vector Text + SQL Hard Tag)
             collection_name = "novels"
             self.use_multi_vector = False
-            print(f"[HybridEngine] Exp 1/2: Baseline Hybrid (Vector Text + SQL Hard Tag)")
+            print(f"[HybridEngine] Exp 1/2: Baseline Hybrid")
     
         self.vs = vs if vs is not None else VectorStore(collection_name=collection_name)
         self.book_matcher = BookMatcher(self.db)
@@ -257,18 +265,24 @@ class HybridEngine:
                         matched_tags.append(b_tag)
                         break
             
-            # [USER-SET] New Formula: Score = BaseScore * (0.1 + 0.9 * m/n)
+            # [USER-SET] Fusion Logic according to FUSION_MODE config
             if n_total > 0:
-                tag_multiplier = 0.1 + 0.9 * (match_count / n_total)
-                total_score = base_score * tag_multiplier
+                tag_component = 0.1 + 0.9 * (match_count / n_total)
+                
+                if self.fusion_mode == "additive":
+                    total_score = (base_score * self.text_weight) + (tag_component * self.tag_weight)
+                    fusion_type_label = "Linear Weighted"
+                else:
+                    total_score = base_score * tag_component
+                    fusion_type_label = "Multiplicative"
                 
                 breakdown.append({
                     "criteria": "keyword_match",
-                    "label": f"標籤匹配得分 (Hard Matching - {tag_multiplier:.2f}x)",
+                    "label": f"標籤匹配得分 ({fusion_type_label} - {tag_component:.2f}x)",
                     "raw_score": match_count,
-                    "weighted_score": tag_multiplier,
+                    "weighted_score": tag_component,
                     "is_filter": False,
-                    "reason": f"基礎分 {base_score:.4f} × 標籤權重 {tag_multiplier:.4f} (命中 {match_count}/{n_total})"
+                    "reason": f"融合模式: {fusion_type_label} (Text: {self.text_weight}, Tag: {self.tag_weight})" if self.fusion_mode == "additive" else f"基礎分 {base_score:.4f} × 標籤權重 {tag_component:.4f} (命中 {match_count}/{n_total})"
                 })
 
         # --- 2.6 負面標籤硬性排除 (Threshold 0.85) ---
@@ -409,24 +423,30 @@ class HybridEngine:
                 print(f"[Engine] 正向語義條件加入搜索: {semantic_expansion}")
                 expanded_terms += f" {semantic_expansion}"
         
-        # 3.2 LLM 生成的擴展關鍵字 (Only add to text query if NOT using multi-vector)
+        # 3.2 LLM 生成的擴展關鍵字 
         if parse_result.generated_keywords:
             cleaned_keywords = [kw.replace(" ", "") for kw in parse_result.generated_keywords]
             expansion_str = " ".join(cleaned_keywords)
-            if not self.use_multi_vector:
+            # [FIX] Only Exp 4 (Feature Fusion) should add tags to the SINGLE vector query string
+            if self.is_feature_fusion:
                 print(f"[Engine] Exp 4: adding LLM-expanded keywords to text query: {expansion_str}")
                 expanded_terms += f" {expansion_str}"
-            else:
+            elif self.use_multi_vector:
                 print(f"[Engine] Multi-Vector: Keywords reserved for tag_semantic: {expansion_str}")
+            else:
+                print(f"[Engine] Baseline/Exp3: Keywords handled separately (SQL or Score Fusion)")
         
-        # 3.3 添加参考小说的标签到查询中 (Only add to text query if NOT using multi-vector)
+        # 3.3 添加参考小说的标签到查询中
         if reference_tags:
             tags_str = " ".join(reference_tags[:8])
-            if not self.use_multi_vector:
+            # [FIX] Only Exp 4 (Feature Fusion) should add tags to the SINGLE vector query string
+            if self.is_feature_fusion:
                 print(f"[Engine] Exp 4: adding reference tags to text query: {tags_str}")
                 expanded_terms += f" {tags_str}"
-            else:
+            elif self.use_multi_vector:
                 print(f"[Engine] Multi-Vector: Reference tags reserved for tag_semantic: {tags_str}")
+            else:
+                print(f"[Engine] Baseline/Exp3: Reference tags handled separately (SQL or Score Fusion)")
         
         # 3.4 HyDE 假設文檔嵌入 (Disabled manually)
         # if parse_result.hypothetical_intro:
@@ -517,8 +537,8 @@ class HybridEngine:
                 limit=retrieval_limit,
                 query_filter=qdrant_filter,
                 with_payload=True,
-                text_weight=0.7,
-                tag_weight=0.3,
+                text_weight=self.text_weight,
+                tag_weight=self.tag_weight,
                 fusion_mode=self.fusion_mode,
                 tag_query_text=tag_query_text,
                 tag_query_list=tag_query_list
@@ -541,8 +561,7 @@ class HybridEngine:
                 payload_map[bid] = hit['payload']
 
         # Path B: Hard Keyword Search (Exp 1 & 2 ONLY - Hybrid Retrieval)
-        is_hard_baseline = not self.use_multi_vector and "fused" not in self.retrieval_mode
-        if is_hard_baseline and tag_terms_list:
+        if self.is_baseline_hybrid and tag_terms_list:
             print(f"[Engine] Exp 1/2: Triggering Hybrid Retrieval Path B (SQL Tag Search) for: {tag_terms_list}")
             sql_results = self.db.search_by_tags_fuzzy(tag_terms_list, limit=50)
             
