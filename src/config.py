@@ -20,11 +20,11 @@ class Settings(BaseSettings):
     QDRANT_PATH: str = str(PROJECT_ROOT / "data" / "qdrant_storage")
     DB_PATH: str = str(PROJECT_ROOT / "data" / "hybrid_reasoner.db")
     
-    # Fusion Settings for Experiments (Exp 1, 2, 3, 5)
-    # Default: 0.7 Text + 0.3 Tag
+    # Dual-Track Fusion Weights (語意-屬性雙軌融合權重)
+    # w1 = SEMANTIC_WEIGHT, w2 = ATTRIBUTE_WEIGHT
     FUSION_MODE: str = "multiplicative" # Options: "multiplicative", "additive"
-    TEXT_WEIGHT: float = 0.5
-    TAG_WEIGHT: float = 0.5
+    SEMANTIC_WEIGHT: float = 0.5
+    ATTRIBUTE_WEIGHT: float = 0.5
 
     class Config:
         env_file = ".env"

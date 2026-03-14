@@ -162,8 +162,8 @@ class VectorStore:
         limit: int = 10,
         query_filter: Optional[rest.Filter] = None,
         with_payload: bool = True,
-        text_weight: float = settings.TEXT_WEIGHT,
-        tag_weight: float = settings.TAG_WEIGHT,
+        text_weight: float = settings.SEMANTIC_WEIGHT,
+        tag_weight: float = settings.ATTRIBUTE_WEIGHT,
         batch_size: int = 20,  # Limit pre-fetch to avoid excessive merging
         fusion_mode: str = settings.FUSION_MODE,
         tag_query_text: str = "",

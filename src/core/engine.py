@@ -27,8 +27,8 @@ class HybridEngine:
         
         # Load Fusion weights and mode from settings
         self.fusion_mode = settings.FUSION_MODE
-        self.text_weight = settings.TEXT_WEIGHT
-        self.tag_weight = settings.TAG_WEIGHT
+        self.semantic_weight = settings.SEMANTIC_WEIGHT
+        self.attribute_weight = settings.ATTRIBUTE_WEIGHT
         
         # [USER-SET] Architecture Flags to avoid logic overlap
         self.is_feature_fusion = "fused" in retrieval_mode  # Exp 4
@@ -210,41 +210,62 @@ class HybridEngine:
         negative_tag_terms: Optional[List[str]] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         """
-        简化评分逻辑：只计算语义分数（纯分数，不归一化）
+        語意-屬性雙軌評分 (Semantic-Attribute Dual-Track Scoring)
+        
+        Track 1 - 語意音軌 (Semantic Track):
+            計算隱性語意相似度 (向量分)。
+        
+        Track 2 - 屬性音軌 (Attribute Track):
+            2a. 加權累加 (Additive Aggregation): 標籤命中率等顯性特徵。
+            2b. 乘性抑制 (Multiplicative Regulation): 硬條件懲罰。
+            屬性分 = 累加分 × 懲罰因子
+        
+        全域融合:
+            總分 = f(語意分, 屬性分)  (由 fusion_mode 決定)
         
         Args:
-            item: 候选书籍项
-            criteria_list: 评分条件列表
-            vector_score: 原始向量分数
+            item: 候選書籍項
+            criteria_list: 評分條件列表 (來自 LLM 解析)
+            vector_score: 原始向量相似度分數
+            tag_terms_list: 正向標籤關鍵字列表
+            tag_weights: 標籤權重字典 (Exp 3 使用)
+            negative_tag_terms: 負向標籤關鍵字列表
         
         Returns:
-            (总分, 评分明细)
+            (總分, 評分明細)
         """
         breakdown = []
         
-        # --- 1. 基礎文本語義分數 (Base Text Score) ---
-        # [USER-SET] Scaling to avoid 0: 0.1 + 0.9 * s
-        # For Exp 5: vector_score is already the fused (0.1+0.9*t)*(0.1+0.9*g)
-        # For Exp 1, 2, 3: vector_score is the raw vector similarity.
+        # ================================================================
+        # Track 1: 語意音軌 (Semantic Track)
+        # ================================================================
+        # Scaling to [0.1, 1.0] to avoid zero scores.
+        # Exp 5: vector_score is already multi-vector fused.
+        # Exp 1, 2, 3, 4: vector_score is the raw cosine similarity.
         if self.use_multi_vector:
-            base_score = vector_score
+            semantic_score = vector_score
         else:
-            base_score = 0.1 + 0.9 * vector_score
-            
-        total_score = base_score
+            semantic_score = 0.1 + 0.9 * vector_score
         
         breakdown.append({
-            "criteria": "semantic_similarity",
-            "label": "基礎語意相似度 (Text Score)",
+            "criteria": "semantic_track",
+            "label": "語意音軌 (Semantic Track)",
             "raw_score": vector_score,
-            "weighted_score": base_score,
+            "weighted_score": semantic_score,
             "is_filter": False,
-            "reason": f"調整後基礎分: {base_score:.4f} (已縮放避免 0 分)"
+            "reason": f"語意相似度: {semantic_score:.4f}"
         })
         
-
-        # --- 2.5 標籤匹配得分 (Exp 1, 2, 3) ---
+        # ================================================================
+        # Track 2: 屬性音軌 (Attribute Track)
+        # ================================================================
+        PENALTY_MULTIPLIER = 0.05  # 違反硬性規範的懲罰倍率
+        
+        # --- Phase 2a: 加權累加 (Additive Aggregation) ---
+        # 處理標籤命中率等「越高越好」的顯性特徵。
         is_hard_match = self.retrieval_mode.startswith("baseline") or "embedded_tags" in self.retrieval_mode
+        attribute_accumulate = 1.0  # 預設：無標籤時不影響分數
+        has_tag_scoring = False
         
         if is_hard_match and tag_terms_list:
             match_count = 0
@@ -257,7 +278,6 @@ class HybridEngine:
                 try: book_tags = json.loads(book_tags)
                 except: book_tags = []
                 
-            # 計算命中數量 m
             for target in tag_terms_list:
                 for b_tag in book_tags:
                     if target in b_tag or b_tag in target:
@@ -265,30 +285,29 @@ class HybridEngine:
                         matched_tags.append(b_tag)
                         break
             
-            # [USER-SET] Fusion Logic according to FUSION_MODE config
             if n_total > 0:
-                tag_component = 0.1 + 0.9 * (match_count / n_total)
-                
-                if self.fusion_mode == "additive":
-                    total_score = (base_score * self.text_weight) + (tag_component * self.tag_weight)
-                    fusion_type_label = "Linear Weighted"
-                else:
-                    total_score = base_score * tag_component
-                    fusion_type_label = "Multiplicative"
+                attribute_accumulate = 0.1 + 0.9 * (match_count / n_total)
+                has_tag_scoring = True
                 
                 breakdown.append({
-                    "criteria": "keyword_match",
-                    "label": f"標籤匹配得分 ({fusion_type_label} - {tag_component:.2f}x)",
+                    "criteria": "attr_tag_match",
+                    "label": f"[屬性] 標籤累加分 ({match_count}/{n_total})",
                     "raw_score": match_count,
-                    "weighted_score": tag_component,
+                    "weighted_score": attribute_accumulate,
                     "is_filter": False,
-                    "reason": f"融合模式: {fusion_type_label} (Text: {self.text_weight}, Tag: {self.tag_weight})" if self.fusion_mode == "additive" else f"基礎分 {base_score:.4f} × 標籤權重 {tag_component:.4f} (命中 {match_count}/{n_total})"
+                    "reason": f"命中: {', '.join(matched_tags) if matched_tags else '無'}"
                 })
-
-        # --- 2.6 負面標籤硬性排除 (Threshold 0.85) ---
-        if (is_hard_match or "multi_" in self.retrieval_mode) and negative_tag_terms:
+        
+        # --- Phase 2b: 乘性抑制 (Multiplicative Regulation) ---
+        # 處理硬性規範（狀態/字數/作者/負向標籤）。
+        # 違反任一條件，懲罰因子 *= PENALTY_MULTIPLIER。
+        regulation_factor = 1.0
+        
+        # 2b-1: 負面標籤懲罰
+        if negative_tag_terms:
             book_tags = item.get("tags", [])
             if isinstance(book_tags, str):
+                import json
                 try: book_tags = json.loads(book_tags)
                 except: book_tags = []
             
@@ -299,66 +318,124 @@ class HybridEngine:
                         hit_neg_tags.append(b_t)
             
             if hit_neg_tags:
-                # [USER-SET] Hard exclusion with 0.85 threshold mapping result
-                return 0.0, [{
-                    "criteria": "negative_tag_exclusion",
-                    "label": "[排除] 負面標籤命中",
-                    "raw_score": 0.0,
-                    "weighted_score": 0.0,
-                    "is_filter": True,
-                    "reason": f"書中包含排除標籤: {', '.join(hit_neg_tags)}"
-                }]
-
-        # --- 3. 过滤条件（仅记录，不计分）---
+                regulation_factor *= PENALTY_MULTIPLIER
+                breakdown.append({
+                    "criteria": "attr_neg_tag",
+                    "label": f"[屬性] 負面標籤懲罰 (x{PENALTY_MULTIPLIER})",
+                    "raw_score": len(hit_neg_tags),
+                    "weighted_score": PENALTY_MULTIPLIER,
+                    "is_filter": False,
+                    "reason": f"命中排除標籤: {', '.join(hit_neg_tags)}"
+                })
+        
+        # 2b-2: 結構化元數據懲罰 (狀態/字數/作者)
         for criteria in criteria_list:
             if hasattr(criteria.parameters, 'model_dump'):
                 params = criteria.parameters.model_dump()
             else:
                 params = criteria.parameters.dict()
             
-            # 状态检查
             if criteria.name == "status_check":
                 target_status = params.get("target_status", "").lower()
-                status_label = "完結" if any(x in target_status for x in ["complet", "finish", "完結"]) else "連載"
-                breakdown.append({
-                    "criteria": "status_check",
-                    "label": f"[過濾] 狀態: {status_label}",
-                    "matched": True,
-                    "is_filter": True,
-                    "reason": "已在檢索層過濾（Qdrant Filter）"
-                })
+                completed_kw = ["complet", "finish", "ended", "done", "完結", "完结", "已完結", "已完结"]
+                ongoing_kw = ["ongoing", "serializ", "running", "active", "連載", "连载", "連載中", "连载中"]
+                
+                if any(x in target_status for x in completed_kw):
+                    expected_status = "完結"
+                elif any(x in target_status for x in ongoing_kw):
+                    expected_status = "連載"
+                else:
+                    expected_status = None
+                
+                if expected_status:
+                    actual_status = item.get("publish_status", "")
+                    matched = (actual_status == expected_status)
+                    if not matched:
+                        regulation_factor *= PENALTY_MULTIPLIER
+                    breakdown.append({
+                        "criteria": "attr_status",
+                        "label": f"[屬性] 狀態: {expected_status}",
+                        "matched": matched,
+                        "is_filter": False,
+                        "reason": f"實際: {actual_status}，{'符合' if matched else f'不符，懲罰 x{PENALTY_MULTIPLIER}'}"
+                    })
             
-            # 作者匹配
             elif criteria.name == "author_match":
-                author_name = params.get("author_name", "")
+                author_name = params.get("author_name", "").strip()
+                actual_author = item.get("author", "")
+                matched = author_name and (author_name in actual_author or actual_author in author_name)
+                if author_name and not matched:
+                    regulation_factor *= PENALTY_MULTIPLIER
                 breakdown.append({
-                    "criteria": "author_match",
-                    "label": f"[過濾] 作者: {author_name}",
-                    "matched": True,
-                    "is_filter": True,
-                    "reason": "已在檢索層過濾（Qdrant Filter）"
+                    "criteria": "attr_author",
+                    "label": f"[屬性] 作者: {author_name}",
+                    "matched": matched,
+                    "is_filter": False,
+                    "reason": f"實際: {actual_author}，{'符合' if matched else f'不符，懲罰 x{PENALTY_MULTIPLIER}'}"
                 })
             
-            # 字数范围
             elif criteria.name == "numeric_range" and params.get("field") == "words_total":
                 min_v = params.get("min_val")
                 max_v = params.get("max_val")
+                actual_words = item.get("words_total", 0) or 0
+                
+                violated = False
+                if min_v is not None and actual_words < min_v:
+                    violated = True
+                if max_v is not None and actual_words > max_v:
+                    violated = True
+                
+                if violated:
+                    regulation_factor *= PENALTY_MULTIPLIER
+                
+                def _fmt_words(val):
+                    if val is None or val == 0: return "0"
+                    return f"{int(val / 10000)}"
+                
                 if min_v and max_v:
-                    label = f"[過濾] 字數: {int(min_v/10000)}-{int(max_v/10000)}萬字"
+                    label = f"[屬性] 字數: {_fmt_words(min_v)}-{_fmt_words(max_v)}萬字"
                 elif min_v:
-                    label = f"[過濾] 字數 >= {int(min_v/10000)}萬字"
+                    label = f"[屬性] 字數 >= {_fmt_words(min_v)}萬字"
                 elif max_v:
-                    label = f"[過濾] 字數 <= {int(max_v/10000)}萬字"
+                    label = f"[屬性] 字數 <= {_fmt_words(max_v)}萬字"
                 else:
-                    label = "[過濾] 字數範圍"
+                    label = "[屬性] 字數範圍"
                 
                 breakdown.append({
-                    "criteria": "numeric_range",
+                    "criteria": "attr_words",
                     "label": label,
-                    "matched": True,
-                    "is_filter": True,
-                    "reason": "已在檢索層過濾（Qdrant Filter）"
+                    "matched": not violated,
+                    "is_filter": False,
+                    "reason": f"實際: {_fmt_words(actual_words)}萬字，{'符合' if not violated else f'不符，懲罰 x{PENALTY_MULTIPLIER}'}"
                 })
+        
+        # --- Attribute Track Output ---
+        # 屬性分 = 累加分 × 懲罰因子
+        attribute_score = attribute_accumulate * regulation_factor
+        
+        # ================================================================
+        # Track 3: 全域融合 (Global Fusion)
+        # ================================================================
+        if has_tag_scoring:
+            if self.fusion_mode == "additive":
+                total_score = (semantic_score * self.semantic_weight) + (attribute_score * self.attribute_weight)
+                fusion_label = f"線性融合: ({semantic_score:.4f} * {self.semantic_weight}) + ({attribute_score:.4f} * {self.attribute_weight})"
+            else:
+                total_score = semantic_score * attribute_score
+                fusion_label = f"乘性融合: {semantic_score:.4f} × {attribute_score:.4f}"
+        else:
+            # 無標籤評分時，屬性音軌僅提供懲罰
+            total_score = semantic_score * regulation_factor
+            fusion_label = f"語意分 × 懲罰因子: {semantic_score:.4f} × {regulation_factor}"
+        
+        breakdown.append({
+            "criteria": "global_fusion",
+            "label": "全域融合 (Global Fusion)",
+            "raw_score": total_score,
+            "weighted_score": total_score,
+            "is_filter": False,
+            "reason": fusion_label
+        })
             
         return total_score, breakdown
 
@@ -399,8 +476,9 @@ class HybridEngine:
             reference_books=parse_result.reference_books,
         )
         
-        # 2. 构建 Qdrant 硬过滤器
-        qdrant_filter = self._build_qdrant_filter(parse_result.criteria)
+        # 2. [ARCHITECTURE CHANGE] 不再使用 Qdrant 硬過濾器，改由評分層懲罰
+        #    硬條件（狀態、字數、作者）將在 calculate_score 中以懲罰方式處理
+        qdrant_filter = None
         
         # 3. 準備檢索字詞（擴展查詢 + 正向語義條件 + 參考標籤）
         base_terms = parse_result.search_terms or parse_result.original_query
@@ -535,10 +613,10 @@ class HybridEngine:
             vector_results, query_vector = self.vs.search_multi_vector(
                 expanded_terms,
                 limit=retrieval_limit,
-                query_filter=qdrant_filter,
+                query_filter=None,  # 不再使用硬過濾
                 with_payload=True,
-                text_weight=self.text_weight,
-                tag_weight=self.tag_weight,
+                text_weight=self.semantic_weight,
+                tag_weight=self.attribute_weight,
                 fusion_mode=self.fusion_mode,
                 tag_query_text=tag_query_text,
                 tag_query_list=tag_query_list
@@ -548,7 +626,7 @@ class HybridEngine:
             vector_results, query_vector = self.vs.search(
                 expanded_terms,
                 limit=retrieval_limit,
-                query_filter=qdrant_filter,
+                query_filter=None,  # 不再使用硬過濾
                 with_payload=True
             )
             
