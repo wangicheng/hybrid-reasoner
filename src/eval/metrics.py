@@ -68,7 +68,7 @@ def calculate_ndcg(ranked_scores: List[float], k: int) -> float:
         
     return dcg / idcg if idcg > 0 else 0.0
 
-def run_evaluation(experiment_name: str, use_strict_filter: bool = True):
+def run_evaluation(experiment_name: str, use_strict_filter: bool = True, strict_only: bool = False):
     base_dir = Path("data/experiments/pools")
     annotated_csv = base_dir / f"{experiment_name}_annotated.csv"
     truth_json = base_dir / f"{experiment_name}_truth.json"
@@ -136,19 +136,24 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True):
                 }
 
     # 3. Apply Strict Filter (The Arbitrator)
-    if use_strict_filter:
-        print("\n🔍 [Strict Filter] 正在進行強制仲裁審查 (尋找字數/狀態/標籤/動畫的違規項目)...")
+    if use_strict_filter or strict_only:
+        if strict_only:
+            print("\n🛡️ [Strict Only] 正在依據強硬條件重置所有評分 (符合=3.0, 不符合=0.0)...")
+        else:
+            print("\n🔍 [Strict Filter] 正在進行強制仲裁審查 (尋找字數/狀態/標籤/動畫的違規項目)...")
+            
         for q, books_in_query in annotations.items():
             golden_rules = golden_rules_map.get(q)
             if not golden_rules:
                 continue
                 
             for bid, score in books_in_query.items():
-                if score > 0:
-                    passed = apply_strict_filters(golden_rules, books_data[bid])
-                    if not passed:
-                        print(f"  ❌ [降維打擊] Query: '{q}'\n      Book ID: {bid} 違反硬性條件，標註員分數: {score} -> 強制降為 0！")
-                        annotations[q][bid] = 0.0
+                passed = apply_strict_filters(golden_rules, books_data[bid])
+                if strict_only:
+                    annotations[q][bid] = 3.0 if passed else 0.0
+                elif score > 0 and not passed:
+                    print(f"  ❌ [降維打擊] Query: '{q}'\n      Book ID: {bid} 違反硬性條件，標註員分數: {score} -> 強制降為 0！")
+                    annotations[q][bid] = 0.0
 
     # 4. Calculate NDCG per Engine per Query
     engine_ndcg = defaultdict(list)
@@ -185,7 +190,10 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True):
     print("📊 實驗評估報告 (Experiment Evaluation)")
     print("="*40)
     print(f"🔹 實驗名稱: {experiment_name}")
-    print(f"🔹 啟用強硬條件仲裁 (Strict Filter): {use_strict_filter}")
+    if strict_only:
+        print(f"🔹 評分模式: 強硬條件評分 (Strict Only)")
+    else:
+        print(f"🔹 啟用強硬條件仲裁 (Strict Filter): {use_strict_filter}")
     print("-"*40)
     
     summary = []
@@ -205,6 +213,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Evaluation Metrics")
     parser.add_argument("--experiment", type=str, default="pilot_test", help="Experiment name")
     parser.add_argument("--no-strict", action="store_true", help="Disable strict filtering")
+    parser.add_argument("--strict-only", action="store_true", help="Score based ONLY on strict filters (Pass=3, Fail=0)")
     args = parser.parse_args()
     
-    run_evaluation(args.experiment, use_strict_filter=not args.no_strict)
+    run_evaluation(args.experiment, use_strict_filter=not args.no_strict, strict_only=args.strict_only)
