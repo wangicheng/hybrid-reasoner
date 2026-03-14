@@ -76,17 +76,17 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True, strict_
     # 0. Load Golden Rules mapping from query -> rules
     with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
         queries_config = json.load(f)
-    golden_rules_map = {item["query"]: item["golden_rules"] for item in queries_config}
+    golden_rules_map = {item["query"]: item.get("golden_rules", {}) for item in queries_config}
     
     # 0.5 Load all crawled books to build full metadata
-    books_crawled_map = {}
+    books_data = {}   # { book_id: dict info }
     books_crawled_path = Path("data/books_crawled.json")
     if books_crawled_path.exists():
         with open(books_crawled_path, "r", encoding="utf-8") as f:
             try:
                 crawled_data = json.load(f)
                 for b in crawled_data:
-                    books_crawled_map[str(b.get("id", ""))] = b
+                    books_data[str(b.get("id", ""))] = b
             except json.JSONDecodeError:
                 print("Warning: Failed to parse books_crawled.json")
 
@@ -112,10 +112,8 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True, strict_
                 annotations[q] = {}
             annotations[q][bid] = score
             
-            # Reconstruct dummy dict for strict filter
-            if str(bid) in books_crawled_map:
-                books_data[bid] = books_crawled_map[str(bid)]
-            else:
+            # Reconstruct dummy dict for strict filter if not already in crawled data
+            if str(bid) not in books_data:
                 words_in_10k = float(row.get("Words (萬)") or 0)
                 intro = row.get("Intro", "")
                 
@@ -167,8 +165,18 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True, strict_
         
         for cand in candidates:
             bid = str(cand["book_id"])
-            # 若書本有在該 Query 的評分表裡，就抓出分數，否則預設給 0 分
-            score = annotations.get(query, {}).get(bid, 0.0)
+            
+            if strict_only:
+                # 在 Strict Only 模式下，直接依據規則判定，不管 CSV 是否有這本書
+                golden_rules = golden_rules_map.get(query, {})
+                metadata = books_data.get(bid)
+                if metadata:
+                    score = 3.0 if apply_strict_filters(golden_rules, metadata) else 0.0
+                else:
+                    score = 0.0 # 無法取得資料，視為不符
+            else:
+                # 抓取標註分數
+                score = annotations.get(query, {}).get(bid, 0.0)
             
             # 填入這本書在各個推薦引擎中的名次與分數
             for engine_name, rank in cand["original_ranks"].items():
