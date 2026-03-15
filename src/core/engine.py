@@ -21,14 +21,21 @@ class HybridEngine:
     - 可选过滤：状态、作者、字数（Qdrant 硬过滤）
     - 负向语义：二次向量查询实现排除功能
     """
-    def __init__(self, db=None, vs=None, retrieval_mode: str = "multi_multiplicative"):
+    def __init__(
+        self, 
+        db=None, 
+        vs=None, 
+        retrieval_mode: str = "multi_multiplicative",
+        semantic_weight: Optional[float] = None,
+        attribute_weight: Optional[float] = None
+    ):
         self.db = db if db is not None else Database()
         self.retrieval_mode = retrieval_mode
         
-        # Load Fusion weights and mode from settings
+        # Load Fusion weights and mode from settings, with optional overrides
         self.fusion_mode = settings.FUSION_MODE
-        self.semantic_weight = settings.SEMANTIC_WEIGHT
-        self.attribute_weight = settings.ATTRIBUTE_WEIGHT
+        self.semantic_weight = semantic_weight if semantic_weight is not None else settings.SEMANTIC_WEIGHT
+        self.attribute_weight = attribute_weight if attribute_weight is not None else settings.ATTRIBUTE_WEIGHT
         
         # [USER-SET] Architecture Flags to avoid logic overlap
         self.is_feature_fusion = "fused" in retrieval_mode  # Exp 4
@@ -206,8 +213,9 @@ class HybridEngine:
         criteria_list: List[Any],
         vector_score: float = 0.0,
         tag_terms_list: Optional[List[str]] = None,
-        tag_weights: Optional[Dict[str, float]] = None,
         negative_tag_terms: Optional[List[str]] = None,
+        text_vector_score: Optional[float] = None,
+        tag_vector_score: Optional[float] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         """
         語意-屬性雙軌評分 (Semantic-Attribute Dual-Track Scoring)
@@ -240,20 +248,21 @@ class HybridEngine:
         # Track 1: 語意音軌 (Semantic Track)
         # ================================================================
         # Scaling to [0.1, 1.0] to avoid zero scores.
-        # Exp 5: vector_score is already multi-vector fused.
-        # Exp 1, 2, 3, 4: vector_score is the raw cosine similarity.
-        if self.use_multi_vector:
-            semantic_score = vector_score
+        # Exp 5: Use text_vector_score only (tag goes to Attribute Track).
+        # Exp 1, 2, 3, 4: Use vector_score (always text-only).
+        if self.use_multi_vector and text_vector_score is not None:
+            raw_semantic = text_vector_score
         else:
-            semantic_score = 0.1 + 0.9 * vector_score
+            raw_semantic = vector_score
+        semantic_score = 0.1 + 0.9 * raw_semantic
         
         breakdown.append({
             "criteria": "semantic_track",
             "label": "語意音軌 (Semantic Track)",
-            "raw_score": vector_score,
+            "raw_score": raw_semantic,
             "weighted_score": semantic_score,
             "is_filter": False,
-            "reason": f"語意相似度: {semantic_score:.4f}"
+            "reason": f"語意相似度: {semantic_score:.4f} (raw text: {raw_semantic:.4f})"
         })
         
         # ================================================================
@@ -267,7 +276,22 @@ class HybridEngine:
         attribute_accumulate = 1.0  # 預設：無標籤時不影響分數
         has_tag_scoring = False
         
-        if is_hard_match and tag_terms_list:
+        if (self.is_exp5_multi or self.is_exp3_mapping) and tag_vector_score is not None:
+            # Exp 3 & 5: Tag vector similarity → Attribute Track
+            # Exp 3 = MaxSim(Individual), Exp 5 = Joined
+            attribute_accumulate = 0.1 + 0.9 * tag_vector_score
+            has_tag_scoring = True
+            
+            breakdown.append({
+                "criteria": "attr_tag_vector",
+                "label": f"[屬性] 標籤向量相似度 ({'個別' if self.is_exp3_mapping else '串聯'})",
+                "raw_score": tag_vector_score,
+                "weighted_score": attribute_accumulate,
+                "is_filter": False,
+                "reason": f"標籤向量分: {tag_vector_score:.4f} → 屬性分: {attribute_accumulate:.4f}"
+            })
+        elif self.is_baseline_hybrid and tag_terms_list:
+            # Only Exp 1 & 2 use SQL / Hard match binary scoring
             match_count = 0
             n_total = len(tag_terms_list)
             matched_tags = []
@@ -532,7 +556,6 @@ class HybridEngine:
         #     expanded_terms += f" {parse_result.hypothetical_intro}"
         
         tag_terms_list = []
-        tag_weights = {}
         if parse_result.generated_keywords:
             tag_terms_list.extend([kw.replace(" ", "") for kw in parse_result.generated_keywords])
         if reference_tags:
@@ -540,30 +563,6 @@ class HybridEngine:
         tag_query_text = " ".join(tag_terms_list)
         print(f"[Engine] Pure tags query for tag_semantic: '{tag_query_text}'")
 
-        # Method 3: Maps LLM tags to system tags individually via embedding similarity
-        if "embedded_tags" in self.retrieval_mode and tag_terms_list:
-            print(f"[Engine] Method 3: Mapping {len(tag_terms_list)} tags individually with Thres 0.85")
-            original_tags = list(tag_terms_list)
-            tag_terms_list = []
-            
-            for t in original_tags:
-                try:
-                    # [USER-SET] Consistent 0.85 threshold for tag mapping
-                    # Increase limit to capture all relevant tags
-                    similar = self.vs.search_tags(t, limit=20, similarity_threshold=0.85)
-                    for res in similar:
-                        s_tag = res["tag"]
-                        s_score = res["score"]
-                        # Store best score for calculating bonus
-                        if s_tag not in tag_weights or s_score > tag_weights[s_tag]:
-                            tag_weights[s_tag] = s_score
-                        if s_tag not in tag_terms_list:
-                            tag_terms_list.append(s_tag)
-                except Exception as e:
-                    print(f"[Engine] Method 3 mapping failed for '{t}': {e}")
-            
-            print(f"[Engine] Method 3: Final mapped tags -> {tag_terms_list}")
-        
         # --- Negative Tag Terms Handling ---
         negative_tag_terms = []
         negative_criteria_list = [c for c in parse_result.criteria if c.name == "semantic_similarity" and getattr(c, 'is_negative', False)]
@@ -603,42 +602,67 @@ class HybridEngine:
         retrieval_limit = 100
         candidates_map = {}
         vector_score_map = {}
+        text_score_map = {}
+        tag_score_map = {}
         payload_map = {}
         
-        # Path A: Vector Search (Plot/Semantic)
-        query_vector = None
-        if self.use_multi_vector:
-            # Exp 3 & 5 Path: Score Fusion (Text Vector + Tag Vector)
-            tag_query_list = tag_terms_list if "embedded_tags" in self.retrieval_mode else None
-            vector_results, query_vector = self.vs.search_multi_vector(
-                expanded_terms,
-                limit=retrieval_limit,
-                query_filter=None,  # 不再使用硬過濾
-                with_payload=True,
-                text_weight=self.semantic_weight,
-                tag_weight=self.attribute_weight,
-                fusion_mode=self.fusion_mode,
-                tag_query_text=tag_query_text,
-                tag_query_list=tag_query_list
-            )
-        else:
-            # Exp 1, 2, 4 Path (Single Vector Search)
-            vector_results, query_vector = self.vs.search(
-                expanded_terms,
-                limit=retrieval_limit,
-                query_filter=None,  # 不再使用硬過濾
-                with_payload=True
-            )
+        # Path A: Core Vector Search (Text/Semantic) - SAME for ALL Experiments
+        # This ensures the "Semantic Track" entry point is consistent.
+        vector_results, query_vector = self.vs.search(
+            expanded_terms,
+            limit=retrieval_limit,
+            query_filter=None,  # 不再使用硬過濾
+            with_payload=True
+        )
             
-        # Collect results from Vector Search
+        # Collect results from Track 1 (Semantic)
         for hit in vector_results:
             if hit.get('payload') and hit['payload'].get("id"):
                 bid = str(hit['payload']["id"])
                 candidates_map[bid] = hit['payload']
                 vector_score_map[bid] = hit["score"]
+                text_score_map[bid] = hit["score"]
                 payload_map[bid] = hit['payload']
 
-        # Path B: Hard Keyword Search (Exp 1 & 2 ONLY - Hybrid Retrieval)
+        # Path B: Specific Attribute Retrieval (Tag Paths)
+        # Exp 3: Individual Tag Vector Search (MaxSim)
+        if self.is_exp3_mapping and tag_terms_list:
+            print(f"[Engine] Exp 3: Triggering Path B (Individual Tag Search) for: {tag_terms_list}")
+            tag_results = self.vs.search_individual(
+                tag_terms_list,
+                limit=retrieval_limit,
+                collection_name="novels_tags"
+            )
+            for hit in tag_results:
+                bid = str(hit.get('payload', {}).get("id", hit.get("id")))
+                if bid not in candidates_map:
+                    candidates_map[bid] = hit.get('payload', {})
+                    payload_map[bid] = hit.get('payload', {})
+                    text_score_map[bid] = 0.0
+                    vector_score_map[bid] = 0.0
+                tag_score_map[bid] = hit["score"]
+                print(f"  + Added/Updated via Individual Tag: 《{candidates_map[bid].get('name')}》 (score: {hit['score']:.4f})")
+
+        # Exp 5: Joined Tag Vector Search
+        if self.is_exp5_multi and tag_query_text:
+            print(f"[Engine] Exp 5: Triggering Path B (Joined Tag Search) for: '{tag_query_text}'")
+            tag_results, _ = self.vs.search(
+                tag_query_text,
+                limit=retrieval_limit,
+                collection_name="novels_tags"
+            )
+            for hit in tag_results:
+                bid = str(hit['payload']["id"]) if hit.get('payload') else str(hit['id'])
+                if bid not in candidates_map:
+                    # Found via tags but not text
+                    candidates_map[bid] = hit.get('payload', {})
+                    payload_map[bid] = hit.get('payload', {})
+                    text_score_map[bid] = 0.0 # No text match score
+                    vector_score_map[bid] = 0.0
+                tag_score_map[bid] = hit["score"]
+                print(f"  + Added/Updated via Tag Vector: 《{candidates_map[bid].get('name')}》 (score: {hit['score']:.4f})")
+
+        # Exp 1 & 2: SQL Fuzzy Tag Search
         if self.is_baseline_hybrid and tag_terms_list:
             print(f"[Engine] Exp 1/2: Triggering Hybrid Retrieval Path B (SQL Tag Search) for: {tag_terms_list}")
             sql_results = self.db.search_by_tags_fuzzy(tag_terms_list, limit=50)
@@ -678,8 +702,9 @@ class HybridEngine:
                 parse_result.criteria,
                 vector_score=v_score,
                 tag_terms_list=tag_terms_list,
-                tag_weights=tag_weights,
-                negative_tag_terms=negative_tag_terms
+                negative_tag_terms=negative_tag_terms,
+                text_vector_score=text_score_map.get(bid),
+                tag_vector_score=tag_score_map.get(bid),
             )
 
             final_score = float(score_val)

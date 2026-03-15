@@ -20,8 +20,16 @@ class RunGenerator:
         self.k = k_per_engine
         self.db = Database()
         
-    def generate_run(self, queries_config: List[Dict], engine_name: str, retrieval_mode: str, output_dir: Path):
-        print(f"\n🚀 [Batch] Starting Experiment: {engine_name} (Mode: {retrieval_mode})")
+    def generate_run(
+        self, 
+        queries_config: List[Dict], 
+        engine_name: str, 
+        retrieval_mode: str, 
+        output_dir: Path,
+        semantic_weight: float = 0.5,
+        attribute_weight: float = 0.5
+    ):
+        print(f"\n🚀 [Batch] Starting Experiment: {engine_name} (Mode: {retrieval_mode}, W1: {semantic_weight}, W2: {attribute_weight})")
         
         # [USER-SET] Re-sync with Engine: Only Exp 4 (fused) uses the pre-fused collection.
         # Exp 1, 2, 3, 5 all use Multi-Vector Score Fusion on the 'novels' collection.
@@ -32,7 +40,13 @@ class RunGenerator:
             
         print(f"   Using collection: {collection}")
         vs = VectorStore(collection_name=collection)
-        engine = HybridEngine(db=self.db, vs=vs, retrieval_mode=retrieval_mode)
+        engine = HybridEngine(
+            db=self.db, 
+            vs=vs, 
+            retrieval_mode=retrieval_mode,
+            semantic_weight=semantic_weight,
+            attribute_weight=attribute_weight
+        )
         
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{engine_name}.json"
@@ -126,11 +140,23 @@ if __name__ == "__main__":
         
     # 定義所有要跑的實驗 (對應 docs/experiments/tag_processing.md)
     EXPERIMENTS = [
-        {"name": "exp1_a_5-5", "mode": "baseline"},
-        {"name": "exp2_a_5-5", "mode": "baseline_prompt"},
-        {"name": "exp3_a_5-5", "mode": "multi_multiplicative_embedded_tags"},
-        {"name": "exp4", "mode": "fused_multiplicative"},
-        {"name": "exp5_a_5-5", "mode": "multi_multiplicative"},
+        {"name": "exp1_a_3-7", "mode": "baseline", "w1": 0.3, "w2": 0.7},
+        {"name": "exp1_a_5-5", "mode": "baseline", "w1": 0.5, "w2": 0.5},
+        {"name": "exp1_a_7-3", "mode": "baseline", "w1": 0.7, "w2": 0.3},
+        
+        {"name": "exp2_a_3-7", "mode": "baseline_prompt", "w1": 0.3, "w2": 0.7},
+        {"name": "exp2_a_5-5", "mode": "baseline_prompt", "w1": 0.5, "w2": 0.5},
+        {"name": "exp2_a_7-3", "mode": "baseline_prompt", "w1": 0.7, "w2": 0.3},
+        
+        {"name": "exp3_a_3-7", "mode": "multi_multiplicative_embedded_tags", "w1": 0.3, "w2": 0.7},
+        {"name": "exp3_a_5-5", "mode": "multi_multiplicative_embedded_tags", "w1": 0.5, "w2": 0.5},
+        {"name": "exp3_a_7-3", "mode": "multi_multiplicative_embedded_tags", "w1": 0.7, "w2": 0.3},
+        
+        {"name": "exp4_a_5-5", "mode": "fused_multiplicative", "w1": 0.5, "w2": 0.5},
+        
+        {"name": "exp5_a_3-7", "mode": "multi_multiplicative", "w1": 0.3, "w2": 0.7},
+        {"name": "exp5_a_5-5", "mode": "multi_multiplicative", "w1": 0.5, "w2": 0.5},
+        {"name": "exp5_a_7-3", "mode": "multi_multiplicative", "w1": 0.7, "w2": 0.3},
     ]
     
     generator = RunGenerator(k_per_engine=10)
@@ -142,7 +168,9 @@ if __name__ == "__main__":
                 queries_config=sample_queries,
                 engine_name=exp["name"],
                 retrieval_mode=exp["mode"],
-                output_dir=output_folder
+                output_dir=output_folder,
+                semantic_weight=exp.get("w1", 0.5),
+                attribute_weight=exp.get("w2", 0.5)
             )
         except Exception as e:
             print(f"❌ Failed experiment {exp['name']}: {e}")

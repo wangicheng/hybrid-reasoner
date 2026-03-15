@@ -200,17 +200,26 @@ def load_blind_tasks(csv_path: str) -> List[Dict[str, Any]]:
     return tasks
 
 
-def load_existing_annotations(csv_path: str) -> Dict[str, str]:
-    """讀取已標註的結果，回傳 {query_id_book_id: score}"""
+def load_existing_annotations(csv_path: str) -> Dict[str, Dict[str, str]]:
+    """讀取已標註的結果，回傳 {query_id_book_id: {"score": score, "comment": comment}}"""
     annotated = {}
     if os.path.exists(csv_path):
         with open(csv_path, "r", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                key = f"{row['Query ID']}_{row['Book ID']}"
+                q_id = row.get("Query ID", "").strip()
+                b_id = row.get("Book ID", "").strip()
+                if not q_id or not b_id:
+                    continue
+                key = f"{q_id}_{b_id}"
                 score = row.get("Score (0-3)", "")
+                comment = row.get("Comment", "")
                 if score != "":
-                    annotated[key] = score
+                    # 儲存分數與評論，以便續傳時恢復
+                    annotated[key] = {
+                        "score": score,
+                        "comment": comment
+                    }
     return annotated
 
 
@@ -245,9 +254,18 @@ def run_judge(experiment_name: str = "pilot_test", model_id: Optional[str] = Non
 
     # 2. 讀取已標註的結果 (支援續傳)
     existing = load_existing_annotations(str(annotated_csv))
-    already_done = len(existing)
-    if already_done > 0:
-        print(f"   ⏩ 已有 {already_done} 筆已評分的紀錄，將跳過這些項目")
+    already_done_total = len(existing)
+    
+    # 找出當前 tasks 中有多少是已經評分過的
+    tasks_already_done = 0
+    for task in tasks:
+        key = f"{task.get('Query ID', '').strip()}_{task.get('Book ID', '').strip()}"
+        if key in existing:
+            tasks_already_done += 1
+            
+    if already_done_total > 0:
+        print(f"   ⏩ 資料庫中已有 {already_done_total} 筆紀錄")
+        print(f"   ⏩ 目前待評清單中有 {tasks_already_done} 筆已評分，將自動跳過")
 
     # 3. 初始化 LLM Judge
     judge = LLMJudge(model_id=model_id)
@@ -256,15 +274,21 @@ def run_judge(experiment_name: str = "pilot_test", model_id: Optional[str] = Non
 
     # 4. 逐筆評分
     total = len(tasks)
-    scored_count = already_done
+    scored_count = tasks_already_done
     skipped_unknown = 0
 
     for i, task in enumerate(tasks):
-        key = f"{task['Query ID']}_{task['Book ID']}"
+        q_id = task.get("Query ID", "").strip()
+        b_id = task.get("Book ID", "").strip()
+        key = f"{q_id}_{b_id}"
 
         # 跳過已評分的
         if key in existing:
-            task["Score (0-3)"] = existing[key]
+            task["Score (0-3)"] = existing[key]["score"]
+            if "Comment" in task or "comment" in task: # 避免 key 大小寫問題
+                task["Comment"] = existing[key]["comment"]
+            else:
+                task["Comment"] = existing[key]["comment"]
             continue
 
         query = task["Query"]
@@ -289,7 +313,7 @@ def run_judge(experiment_name: str = "pilot_test", model_id: Optional[str] = Non
 
         task["Score (0-3)"] = str(score)
         task["Comment"] = reasoning
-        existing[key] = str(score)
+        existing[key] = {"score": str(score), "comment": reasoning}
         scored_count += 1
 
         # 標記跳過的 Unknown

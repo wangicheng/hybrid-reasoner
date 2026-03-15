@@ -122,7 +122,8 @@ class VectorStore:
         query_text: str, 
         limit: int = 10, 
         query_filter: Optional[rest.Filter] = None,
-        with_payload: bool = True
+        with_payload: bool = True,
+        collection_name: Optional[str] = None
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         """
         Performs semantic search with optional filtering.
@@ -140,8 +141,10 @@ class VectorStore:
         # Embed query text with retry/rotation
         vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
         
+        target_collection = collection_name if collection_name else self.collection_name
+        
         response = self.client.query_points(
-            collection_name=self.collection_name,
+            collection_name=target_collection,
             query=vector,
             query_filter=query_filter,  # Logic push-down: filter at DB level
             limit=limit,
@@ -156,134 +159,57 @@ class VectorStore:
         
         return formatted_results, vector
 
-    def search_multi_vector(
+
+    def search_individual(
         self,
-        query_text: str,
+        query_list: List[str],
         limit: int = 10,
-        query_filter: Optional[rest.Filter] = None,
-        with_payload: bool = True,
-        text_weight: float = settings.SEMANTIC_WEIGHT,
-        tag_weight: float = settings.ATTRIBUTE_WEIGHT,
-        batch_size: int = 20,  # Limit pre-fetch to avoid excessive merging
-        fusion_mode: str = settings.FUSION_MODE,
-        tag_query_text: str = "",
-        tag_query_list: Optional[List[str]] = None
-    ) -> Tuple[List[Dict[str, Any]], List[float]]:
+        collection_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Performs Late Interaction multi-vector semantic search (text + tag).
-
-        This implementation queries both vector spaces independently, collects
-        per-space scores, then computes the fused score.
-
-        Exp 3 vs Exp 5 Difference:
-        - Exp 3 (Individual): Embeds each query tag separately and uses MaxSim aggregation.
-        - Exp 5 (Joined): Embeds tags as a single joined string.
+        [Exp 3 Strategy] 個別向量化搜尋 + MaxSim 聚合。
+        為每個查詢詞分別搜尋，並對每本書保留最高的相似度得分。
         """
-        # Step 1: Embed query text with retry
-        query_vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
+        if not query_list:
+            return []
+
+        target_collection = collection_name if collection_name else self.collection_name
         
-        # Step 2: Prepare Tag Queries
-        fetch_limit = max(batch_size, limit * 5)
-        text_scores: Dict[Any, float] = {}
-        tag_scores: Dict[Any, float] = {}
-        payload_cache: Dict[Any, Any] = {}
-
-        # 1. Query Text collection (Baseline collection)
-        text_response = self.client.query_points(
-            collection_name="novels",
-            query=query_vector,
-            query_filter=query_filter,
-            limit=fetch_limit,
-            with_payload=with_payload
+        # 1. 批次嵌入所有查詢標籤
+        from google.genai import types
+        embed_resp = self.genai_client.models.embed_content(
+            model=self.embedding_model,
+            contents=query_list,
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
         )
-        for hit in text_response.points:
-            text_scores[hit.id] = float(hit.score)
-            if hit.payload:
-                payload_cache[hit.id] = hit.payload
-
-        # 2. Query Tag-only collection
-        # Note: novels_tags uses the same UUID IDs as novels
-        if tag_query_list and len(tag_query_list) > 0:
-            # [Exp 3] Individual Matching
-            print(f"[VectorStore] Exp 3: Individual matching for {len(tag_query_list)} tags")
-            from google.genai import types
-            
-            # Batch embed query tags
-            embed_resp = self.genai_client.models.embed_content(
-                model=self.embedding_model,
-                contents=tag_query_list,
-                config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
-            )
-            tag_vectors = [list(e.values) for e in embed_resp.embeddings]
-            
-            # Search across tags individually
-            for v in tag_vectors:
-                indiv_tag_response = self.client.query_points(
-                    collection_name="novels_tags",
-                    query=v,
-                    query_filter=query_filter,
-                    limit=fetch_limit,
-                    score_threshold=0.85, # [Exp 3] Must be > 0.85 as per user request
-                    with_payload=with_payload
-                )
-                
-                # Aggregate tag scores using MaxSim (best match for any tag)
-                for hit in indiv_tag_response.points:
-                    tag_scores[hit.id] = max(tag_scores.get(hit.id, 0.0), float(hit.score))
-                    if hit.payload and hit.id not in payload_cache:
-                        payload_cache[hit.id] = hit.payload
-        else:
-            # [Exp 5] Joined Matching
-            if tag_query_text and tag_query_text.strip():
-                print(f"[VectorStore] Exp 5: Joined matching for tags: '{tag_query_text}'")
-                tag_query_vector = self._embed_with_retry(tag_query_text.strip(), task_type="RETRIEVAL_QUERY")
-            else:
-                tag_query_vector = query_vector
-
-            tag_response = self.client.query_points(
-                collection_name="novels_tags",
-                query=tag_query_vector,
-                query_filter=query_filter, 
-                limit=fetch_limit,
-                with_payload=with_payload
-            )
-            for hit in tag_response.points:
-                tag_scores[hit.id] = float(hit.score)
-                if hit.payload and hit.id not in payload_cache:
-                    payload_cache[hit.id] = hit.payload
-
-        # Step 3: Fusion
-        all_ids = set(text_scores.keys()) | set(tag_scores.keys())
-        fused_map: Dict[Any, Dict[str, float]] = {}
+        query_vectors = [list(e.values) for e in embed_resp.embeddings]
         
-        for pid in all_ids:
-            t_raw = text_scores.get(pid, 0.0)
-            g_raw = tag_scores.get(pid, 0.0)
-
-            if fusion_mode == "additive":
-                fused = (t_raw * text_weight) + (g_raw * tag_weight)
-            else:  # "multiplicative"
-                # [USER-SET] Exp 5 Multi-Vector Fusion Formula: (0.1 + 0.9 * t) * (0.1 + 0.9 * g)
-                # Unifying logic: Both Text and Tag scores are scaled to [0.1, 1.0]
-                t_comp = 0.1 + 0.9 * text_scores.get(pid, 0.0) 
-                g_comp = 0.1 + 0.9 * tag_scores.get(pid, 0.0)
-                fused = t_comp * g_comp
-
-            fused_map[pid] = {"fused": fused, "text_score": text_scores.get(pid, 0.0), "tag_score": tag_scores.get(pid, 0.0)}
-
-        # Sort and return top-k
-        sorted_ids = sorted(fused_map.items(), key=lambda x: x[1]["fused"], reverse=True)[:limit]
-        formatted_results: List[Dict[str, Any]] = []
-        for pid, metrics in sorted_ids:
-            formatted_results.append({
-                "id": pid,
-                "score": metrics["fused"],
-                "payload": payload_cache.get(pid),
-                "text_score": metrics.get("text_score", 0.0),
-                "tag_score": metrics.get("tag_score", 0.0),
-            })
-
-        return formatted_results, query_vector
+        # 2. 執行多次檢索並進行 MaxSim 聚合
+        aggregated_scores: Dict[Any, float] = {}
+        payload_cache: Dict[Any, Any] = {}
+        
+        for v in query_vectors:
+            response = self.client.query_points(
+                collection_name=target_collection,
+                query=v,
+                limit=limit * 2, # 稍微擴大範圍以確保覆蓋率
+                with_payload=True
+            )
+            for hit in response.points:
+                bid = hit.id
+                score = float(hit.score)
+                if bid not in aggregated_scores or score > aggregated_scores[bid]:
+                    aggregated_scores[bid] = score
+                    if hit.payload:
+                        payload_cache[bid] = hit.payload
+        
+        # 3. 排序並過濾
+        sorted_results = sorted(aggregated_scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+        
+        return [
+            {"id": bid, "score": score, "payload": payload_cache.get(bid, {})}
+            for bid, score in sorted_results
+        ]
 
     def search_tags(
         self,
