@@ -6,8 +6,6 @@ from src.models.schemas import QueryParseResult
 from src.core.vector_store import VectorStore
 from src.core.database import Database
 from src.core.book_matcher import BookMatcher
-from src.logic.registry import ScoringRegistry
-import src.logic.scoring_functions 
 from src.core.explainer import generate_explanation 
 from src.config import settings
 from qdrant_client.http import models as rest
@@ -213,43 +211,21 @@ class HybridEngine:
         criteria_list: List[Any],
         vector_score: float = 0.0,
         tag_terms_list: Optional[List[str]] = None,
-        negative_tag_terms: Optional[List[str]] = None,
         text_vector_score: Optional[float] = None,
         tag_vector_score: Optional[float] = None,
+        tag_mapping_weights: Optional[List[Dict[str, float]]] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         """
-        語意-屬性雙軌評分 (Semantic-Attribute Dual-Track Scoring)
+        純內容相關性評分 (Pure Content Relevance Scoring)
         
-        Track 1 - 語意音軌 (Semantic Track):
-            計算隱性語意相似度 (向量分)。
-        
-        Track 2 - 屬性音軌 (Attribute Track):
-            2a. 加權累加 (Additive Aggregation): 標籤命中率等顯性特徵。
-            2b. 乘性抑制 (Multiplicative Regulation): 硬條件懲罰。
-            屬性分 = 累加分 × 懲罰因子
-        
-        全域融合:
-            總分 = f(語意分, 屬性分)  (由 fusion_mode 決定)
-        
-        Args:
-            item: 候選書籍項
-            criteria_list: 評分條件列表 (來自 LLM 解析)
-            vector_score: 原始向量相似度分數
-            tag_terms_list: 正向標籤關鍵字列表
-            tag_weights: 標籤權重字典 (Exp 3 使用)
-            negative_tag_terms: 負向標籤關鍵字列表
-        
-        Returns:
-            (總分, 評分明細)
+        Track 1 - 語意音軌 (Semantic Track)
+        Track 2 - 屬性音軌 (Attribute Track)
         """
         breakdown = []
         
         # ================================================================
         # Track 1: 語意音軌 (Semantic Track)
         # ================================================================
-        # Scaling to [0.1, 1.0] to avoid zero scores.
-        # Exp 5: Use text_vector_score only (tag goes to Attribute Track).
-        # Exp 1, 2, 3, 4: Use vector_score (always text-only).
         if self.use_multi_vector and text_vector_score is not None:
             raw_semantic = text_vector_score
         else:
@@ -266,32 +242,69 @@ class HybridEngine:
         })
         
         # ================================================================
-        # Track 2: 屬性音軌 (Attribute Track)
+        # Track 2: 屬性音軌 (Attribute Track) — 標籤評分
         # ================================================================
-        PENALTY_MULTIPLIER = 0.05  # 違反硬性規範的懲罰倍率
-        
-        # --- Phase 2a: 加權累加 (Additive Aggregation) ---
-        # 處理標籤命中率等「越高越好」的顯性特徵。
-        is_hard_match = self.retrieval_mode.startswith("baseline") or "embedded_tags" in self.retrieval_mode
-        attribute_accumulate = 1.0  # 預設：無標籤時不影響分數
+        attribute_score = 1.0
         has_tag_scoring = False
         
-        if (self.is_exp5_multi or self.is_exp3_mapping) and tag_vector_score is not None:
-            # Exp 3 & 5: Tag vector similarity → Attribute Track
-            # Exp 3 = MaxSim(Individual), Exp 5 = Joined
-            attribute_accumulate = 0.1 + 0.9 * tag_vector_score
+        # [Priority 1] Exp 5: Joined Tag Vector Similarity (Path B Result)
+        if self.is_exp5_multi and tag_vector_score is not None:
+            attribute_score = 0.1 + 0.9 * tag_vector_score
             has_tag_scoring = True
-            
             breakdown.append({
-                "criteria": "attr_tag_vector",
-                "label": f"[屬性] 標籤向量相似度 ({'個別' if self.is_exp3_mapping else '串聯'})",
+                "criteria": "attr_tag_vector_joined",
+                "label": "[屬性] 標籤全域向量相似度 (Exp5)",
                 "raw_score": tag_vector_score,
-                "weighted_score": attribute_accumulate,
+                "weighted_score": attribute_score,
                 "is_filter": False,
-                "reason": f"標籤向量分: {tag_vector_score:.4f} → 屬性分: {attribute_accumulate:.4f}"
+                "reason": f"標籤串聯向量分: {tag_vector_score:.4f} → 屬性分: {attribute_score:.4f}"
             })
+            
+        # [Priority 2] Exp 3: Individual Mapping (Facet-based MaxSim Scoring)
+        elif self.is_exp3_mapping and tag_mapping_weights and tag_terms_list:
+            book_tags = item.get("tags", [])
+            if isinstance(book_tags, str):
+                import json
+                try: book_tags = json.loads(book_tags)
+                except: book_tags = []
+            
+            # tag_mapping_weights is now List[Dict[SystemTag, Score]] (one per target_tag)
+            n_facets = len(tag_mapping_weights)
+            total_facet_score = 0.0
+            matched_details = []
+            
+            for i, facet_map in enumerate(tag_mapping_weights):
+                target_term = tag_terms_list[i] if i < len(tag_terms_list) else f"Facet_{i}"
+                
+                # Find the best match in this book for THIS specific query facet
+                best_sim_for_facet = 0.0
+                best_tag_for_facet = None
+                
+                for bt in book_tags:
+                    sim = facet_map.get(bt, 0.0)
+                    if sim > best_sim_for_facet:
+                        best_sim_for_facet = sim
+                        best_tag_for_facet = bt
+                
+                total_facet_score += best_sim_for_facet
+                if best_sim_for_facet > 0:
+                    matched_details.append(f"{target_term}→{best_tag_for_facet}({best_sim_for_facet:.2f})")
+            
+            if n_facets > 0:
+                avg_similarity = total_facet_score / n_facets
+                attribute_score = 0.1 + 0.9 * avg_similarity
+                has_tag_scoring = True
+                breakdown.append({
+                    "criteria": "attr_tag_mapped",
+                    "label": f"[屬性] 標籤語意映射評分 (Exp3)",
+                    "raw_score": avg_similarity,
+                    "weighted_score": attribute_score,
+                    "is_filter": False,
+                    "reason": f"面向命中分: {total_facet_score:.4f} / {n_facets} 面向 = {avg_similarity:.4f}, 詳情: [{', '.join(matched_details) if matched_details else '無'}] → 屬性分: {attribute_score:.4f}"
+                })
+
+        # [Priority 3] Exp 1/2: Hard Matching (Metadata vs req terms)
         elif self.is_baseline_hybrid and tag_terms_list:
-            # Only Exp 1 & 2 use SQL / Hard match binary scoring
             match_count = 0
             n_total = len(tag_terms_list)
             matched_tags = []
@@ -310,135 +323,19 @@ class HybridEngine:
                         break
             
             if n_total > 0:
-                attribute_accumulate = 0.1 + 0.9 * (match_count / n_total)
+                attribute_score = 0.1 + 0.9 * (match_count / n_total)
                 has_tag_scoring = True
-                
                 breakdown.append({
                     "criteria": "attr_tag_match",
-                    "label": f"[屬性] 標籤累加分 ({match_count}/{n_total})",
+                    "label": f"[屬性] 標籤字面匹配 ({match_count}/{n_total})",
                     "raw_score": match_count,
-                    "weighted_score": attribute_accumulate,
+                    "weighted_score": attribute_score,
                     "is_filter": False,
-                    "reason": f"命中: {', '.join(matched_tags) if matched_tags else '無'}"
+                    "reason": f"命中標籤: {', '.join(matched_tags) if matched_tags else '無'}"
                 })
-        
-        # --- Phase 2b: 乘性抑制 (Multiplicative Regulation) ---
-        # 處理硬性規範（狀態/字數/作者/負向標籤）。
-        # 違反任一條件，懲罰因子 *= PENALTY_MULTIPLIER。
-        regulation_factor = 1.0
-        
-        # 2b-1: 負面標籤懲罰
-        if negative_tag_terms:
-            book_tags = item.get("tags", [])
-            if isinstance(book_tags, str):
-                import json
-                try: book_tags = json.loads(book_tags)
-                except: book_tags = []
-            
-            hit_neg_tags = []
-            for neg_t in negative_tag_terms:
-                for b_t in book_tags:
-                    if neg_t in b_t or b_t in neg_t:
-                        hit_neg_tags.append(b_t)
-            
-            if hit_neg_tags:
-                regulation_factor *= PENALTY_MULTIPLIER
-                breakdown.append({
-                    "criteria": "attr_neg_tag",
-                    "label": f"[屬性] 負面標籤懲罰 (x{PENALTY_MULTIPLIER})",
-                    "raw_score": len(hit_neg_tags),
-                    "weighted_score": PENALTY_MULTIPLIER,
-                    "is_filter": False,
-                    "reason": f"命中排除標籤: {', '.join(hit_neg_tags)}"
-                })
-        
-        # 2b-2: 結構化元數據懲罰 (狀態/字數/作者)
-        for criteria in criteria_list:
-            if hasattr(criteria.parameters, 'model_dump'):
-                params = criteria.parameters.model_dump()
-            else:
-                params = criteria.parameters.dict()
-            
-            if criteria.name == "status_check":
-                target_status = params.get("target_status", "").lower()
-                completed_kw = ["complet", "finish", "ended", "done", "完結", "完结", "已完結", "已完结"]
-                ongoing_kw = ["ongoing", "serializ", "running", "active", "連載", "连载", "連載中", "连载中"]
-                
-                if any(x in target_status for x in completed_kw):
-                    expected_status = "完結"
-                elif any(x in target_status for x in ongoing_kw):
-                    expected_status = "連載"
-                else:
-                    expected_status = None
-                
-                if expected_status:
-                    actual_status = item.get("publish_status", "")
-                    matched = (actual_status == expected_status)
-                    if not matched:
-                        regulation_factor *= PENALTY_MULTIPLIER
-                    breakdown.append({
-                        "criteria": "attr_status",
-                        "label": f"[屬性] 狀態: {expected_status}",
-                        "matched": matched,
-                        "is_filter": False,
-                        "reason": f"實際: {actual_status}，{'符合' if matched else f'不符，懲罰 x{PENALTY_MULTIPLIER}'}"
-                    })
-            
-            elif criteria.name == "author_match":
-                author_name = params.get("author_name", "").strip()
-                actual_author = item.get("author", "")
-                matched = author_name and (author_name in actual_author or actual_author in author_name)
-                if author_name and not matched:
-                    regulation_factor *= PENALTY_MULTIPLIER
-                breakdown.append({
-                    "criteria": "attr_author",
-                    "label": f"[屬性] 作者: {author_name}",
-                    "matched": matched,
-                    "is_filter": False,
-                    "reason": f"實際: {actual_author}，{'符合' if matched else f'不符，懲罰 x{PENALTY_MULTIPLIER}'}"
-                })
-            
-            elif criteria.name == "numeric_range" and params.get("field") == "words_total":
-                min_v = params.get("min_val")
-                max_v = params.get("max_val")
-                actual_words = item.get("words_total", 0) or 0
-                
-                violated = False
-                if min_v is not None and actual_words < min_v:
-                    violated = True
-                if max_v is not None and actual_words > max_v:
-                    violated = True
-                
-                if violated:
-                    regulation_factor *= PENALTY_MULTIPLIER
-                
-                def _fmt_words(val):
-                    if val is None or val == 0: return "0"
-                    return f"{int(val / 10000)}"
-                
-                if min_v and max_v:
-                    label = f"[屬性] 字數: {_fmt_words(min_v)}-{_fmt_words(max_v)}萬字"
-                elif min_v:
-                    label = f"[屬性] 字數 >= {_fmt_words(min_v)}萬字"
-                elif max_v:
-                    label = f"[屬性] 字數 <= {_fmt_words(max_v)}萬字"
-                else:
-                    label = "[屬性] 字數範圍"
-                
-                breakdown.append({
-                    "criteria": "attr_words",
-                    "label": label,
-                    "matched": not violated,
-                    "is_filter": False,
-                    "reason": f"實際: {_fmt_words(actual_words)}萬字，{'符合' if not violated else f'不符，懲罰 x{PENALTY_MULTIPLIER}'}"
-                })
-        
-        # --- Attribute Track Output ---
-        # 屬性分 = 累加分 × 懲罰因子
-        attribute_score = attribute_accumulate * regulation_factor
         
         # ================================================================
-        # Track 3: 全域融合 (Global Fusion)
+        # 全域融合 (Global Fusion)
         # ================================================================
         if has_tag_scoring:
             if self.fusion_mode == "additive":
@@ -448,9 +345,8 @@ class HybridEngine:
                 total_score = semantic_score * attribute_score
                 fusion_label = f"乘性融合: {semantic_score:.4f} × {attribute_score:.4f}"
         else:
-            # 無標籤評分時，屬性音軌僅提供懲罰
-            total_score = semantic_score * regulation_factor
-            fusion_label = f"語意分 × 懲罰因子: {semantic_score:.4f} × {regulation_factor}"
+            total_score = semantic_score
+            fusion_label = f"純語意分: {semantic_score:.4f}"
         
         breakdown.append({
             "criteria": "global_fusion",
@@ -476,6 +372,108 @@ class HybridEngine:
             reference_books=reference_books,
         )
 
+    def _post_filter(
+        self,
+        scored_items: List[Dict[str, Any]],
+        criteria_list: List[Any],
+        negative_tag_terms: List[str],
+    ) -> List[Dict[str, Any]]:
+        """
+        後置篩選層 (Post-Filter Layer)
+        
+        在引擎完成純內容相關性評分並排序後，以 Boolean 方式篩除
+        不符合硬性約束的候選項。
+        
+        篩選條件：
+        1. 負向標籤：命中任一排除標籤 → 移除
+        2. 發布狀態：不符合指定狀態 → 移除
+        3. 作者匹配：不符合指定作者 → 移除
+        4. 字數範圍：超出指定範圍 → 移除
+        
+        Args:
+            scored_items: 已評分並排序的候選列表
+            criteria_list: LLM 解析出的條件列表
+            negative_tag_terms: 已映射的負向標籤列表
+        
+        Returns:
+            篩選後的候選列表（保持原排序）
+        """
+        filtered = []
+        
+        # 預解析硬性約束條件
+        status_filter = None
+        author_filter = None
+        words_min = None
+        words_max = None
+        
+        for criteria in criteria_list:
+            if hasattr(criteria.parameters, 'model_dump'):
+                params = criteria.parameters.model_dump()
+            else:
+                params = criteria.parameters.dict()
+            
+            if criteria.name == "status_check":
+                target_status = params.get("target_status", "").lower()
+                completed_kw = ["complet", "finish", "ended", "done", "完結", "完结", "已完結", "已完结"]
+                ongoing_kw = ["ongoing", "serializ", "running", "active", "連載", "连载", "連載中", "连载中"]
+                if any(x in target_status for x in completed_kw):
+                    status_filter = "完結"
+                elif any(x in target_status for x in ongoing_kw):
+                    status_filter = "連載"
+            
+            elif criteria.name == "author_match":
+                author_filter = params.get("author_name", "").strip()
+            
+            elif criteria.name == "numeric_range" and params.get("field") == "words_total":
+                words_min = params.get("min_val")
+                words_max = params.get("max_val")
+        
+        for res in scored_items:
+            item = res["item"]
+            excluded = False
+            
+            # 1. 負向標籤篩除
+            if negative_tag_terms:
+                book_tags = item.get("tags", [])
+                if isinstance(book_tags, str):
+                    import json
+                    try: book_tags = json.loads(book_tags)
+                    except: book_tags = []
+                
+                for neg_t in negative_tag_terms:
+                    for b_t in book_tags:
+                        if neg_t in b_t or b_t in neg_t:
+                            excluded = True
+                            break
+                    if excluded:
+                        break
+            
+            # 2. 狀態篩除
+            if not excluded and status_filter:
+                actual_status = item.get("publish_status", "")
+                if actual_status != status_filter:
+                    excluded = True
+            
+            # 3. 作者篩除
+            if not excluded and author_filter:
+                actual_author = item.get("author", "")
+                if not (author_filter in actual_author or actual_author in author_filter):
+                    excluded = True
+            
+            # 4. 字數範圍篩除
+            if not excluded and (words_min is not None or words_max is not None):
+                actual_words = item.get("words_total", 0) or 0
+                if words_min is not None and actual_words < words_min:
+                    excluded = True
+                if not excluded and words_max is not None and actual_words > words_max:
+                    excluded = True
+            
+            if not excluded:
+                filtered.append(res)
+        
+        print(f"[PostFilter] 篩選結果: {len(scored_items)} → {len(filtered)} (移除 {len(scored_items) - len(filtered)} 筆)")
+        return filtered
+
     async def search(
         self,
         user_query: str,
@@ -484,7 +482,11 @@ class HybridEngine:
         explain: bool = True,
     ) -> Dict[str, Any]:
         """
-        简化的搜索流程：语义搜索 + 硬过滤 + 负向语义
+        搜索流程：語意檢索 → 內容評分 → 後置篩選
+        
+        架構分離原則：
+        - 引擎負責「內容符合需求」的語意評分
+        - 硬性約束（負向標籤、狀態、作者、字數）由後置篩選層處理
         """
         # 1. Parse Query
         tag_list = self.all_tags_cache if self.retrieval_mode.startswith("baseline_prompt") else None
@@ -500,8 +502,20 @@ class HybridEngine:
             reference_books=parse_result.reference_books,
         )
         
-        # 2. [ARCHITECTURE CHANGE] 不再使用 Qdrant 硬過濾器，改由評分層懲罰
-        #    硬條件（狀態、字數、作者）將在 calculate_score 中以懲罰方式處理
+        # 1.6 [Exp 3 核心修復] 預計算標籤語意映射表 (Target Tag -> System Tag Score Map)
+        tag_mapping_weights = {}
+        tag_terms_list = []
+        if parse_result.generated_keywords:
+            tag_terms_list.extend([kw.replace(" ", "") for kw in parse_result.generated_keywords])
+        if reference_tags:
+            tag_terms_list.extend([t.replace(" ", "") for t in reference_tags[:8]])
+
+        if self.is_exp3_mapping and tag_terms_list:
+            print(f"[Engine] Exp 3: Pre-mapping {len(tag_terms_list)} target tags to system tags...")
+            tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list)
+            print(f"[Engine] Exp 3: Mapped into {len(tag_mapping_weights)} facets with weight maps.")
+
+        # 2. 不使用 Qdrant 硬過濾器，硬性約束由後置篩選層 _post_filter 處理
         qdrant_filter = None
         
         # 3. 準備檢索字詞（擴展查詢 + 正向語義條件 + 參考標籤）
@@ -555,15 +569,10 @@ class HybridEngine:
         #     print(f"[Engine] HyDE hypothetical intro: {parse_result.hypothetical_intro[:80]}...")
         #     expanded_terms += f" {parse_result.hypothetical_intro}"
         
-        tag_terms_list = []
-        if parse_result.generated_keywords:
-            tag_terms_list.extend([kw.replace(" ", "") for kw in parse_result.generated_keywords])
-        if reference_tags:
-            tag_terms_list.extend([t.replace(" ", "") for t in reference_tags[:8]])
         tag_query_text = " ".join(tag_terms_list)
         print(f"[Engine] Pure tags query for tag_semantic: '{tag_query_text}'")
 
-        # --- Negative Tag Terms Handling ---
+        # --- 負向標籤：提取並映射（供後置篩選使用）---
         negative_tag_terms = []
         negative_criteria_list = [c for c in parse_result.criteria if c.name == "semantic_similarity" and getattr(c, 'is_negative', False)]
         
@@ -572,18 +581,18 @@ class HybridEngine:
             qt = p.get("query_text", "").strip()
             if not qt: continue
             
-            # For Method 3 / Multi-Vector: Try to map negative keyword to system tags
-            if "embedded_tags" in self.retrieval_mode or "multi_" in self.retrieval_mode:
-                try:
-                    neg_mapped = self.vs.search_tags(qt, limit=5, similarity_threshold=0.85)
-                    negative_tag_terms.extend([res["tag"] for res in neg_mapped])
-                    if neg_mapped:
-                        print(f"[Engine] Negative mapped tags (Thres 0.85) for '{qt}': {[res['tag'] for res in neg_mapped]}")
-                except Exception as e:
-                    print(f"[Engine] Warning: Negative tag mapping failed: {e}")
-            else:
-                # Baseline: exact keyword matching
+            try:
+                neg_mapped = self.vs.search_tags(f"標籤： {qt}", limit=1, similarity_threshold=0.7)
+                if neg_mapped:
+                    mapped_tags = [res["tag"] for res in neg_mapped]
+                    negative_tag_terms.extend(mapped_tags)
+                    print(f"[Engine] Negative mapped tags for '{qt}': {mapped_tags}")
+                else:
+                    negative_tag_terms.append(qt)
+            except Exception as e:
+                print(f"[Engine] Warning: Negative tag mapping failed: {e}")
                 negative_tag_terms.append(qt)
+
                 
         # [USER-SET] Exp 4 (Feature Fusion): Must format query into structure before embedding
         if "fused" in self.retrieval_mode:
@@ -599,7 +608,7 @@ class HybridEngine:
         
         
         # 4. 执行召回 (Hybrid Retrieval Logic)
-        retrieval_limit = 100
+        retrieval_limit = 10000  # 過採樣緩衝：後置篩選可能移除大量候選
         candidates_map = {}
         vector_score_map = {}
         text_score_map = {}
@@ -629,7 +638,7 @@ class HybridEngine:
         if self.is_exp3_mapping and tag_terms_list:
             print(f"[Engine] Exp 3: Triggering Path B (Individual Tag Search) for: {tag_terms_list}")
             tag_results = self.vs.search_individual(
-                tag_terms_list,
+                [f"標籤： {t}" for t in tag_terms_list],
                 limit=retrieval_limit,
                 collection_name="novels_tags"
             )
@@ -641,13 +650,12 @@ class HybridEngine:
                     text_score_map[bid] = 0.0
                     vector_score_map[bid] = 0.0
                 tag_score_map[bid] = hit["score"]
-                print(f"  + Added/Updated via Individual Tag: 《{candidates_map[bid].get('name')}》 (score: {hit['score']:.4f})")
 
         # Exp 5: Joined Tag Vector Search
         if self.is_exp5_multi and tag_query_text:
             print(f"[Engine] Exp 5: Triggering Path B (Joined Tag Search) for: '{tag_query_text}'")
             tag_results, _ = self.vs.search(
-                tag_query_text,
+                f"標籤： {tag_query_text}",
                 limit=retrieval_limit,
                 collection_name="novels_tags"
             )
@@ -660,7 +668,6 @@ class HybridEngine:
                     text_score_map[bid] = 0.0 # No text match score
                     vector_score_map[bid] = 0.0
                 tag_score_map[bid] = hit["score"]
-                print(f"  + Added/Updated via Tag Vector: 《{candidates_map[bid].get('name')}》 (score: {hit['score']:.4f})")
 
         # Exp 1 & 2: SQL Fuzzy Tag Search
         if self.is_baseline_hybrid and tag_terms_list:
@@ -702,9 +709,9 @@ class HybridEngine:
                 parse_result.criteria,
                 vector_score=v_score,
                 tag_terms_list=tag_terms_list,
-                negative_tag_terms=negative_tag_terms,
                 text_vector_score=text_score_map.get(bid),
                 tag_vector_score=tag_score_map.get(bid),
+                tag_mapping_weights=tag_mapping_weights,
             )
 
             final_score = float(score_val)
@@ -719,6 +726,13 @@ class HybridEngine:
 
         # 最終排序
         scored_items.sort(key=lambda x: float(x["score"]), reverse=True)
+        
+        # 後置篩選：移除不符合硬性約束的候選項
+        scored_items = self._post_filter(
+            scored_items,
+            parse_result.criteria,
+            negative_tag_terms,
+        )
         
         if not scored_items:
             print("[Engine] ℹ️ 無足夠相關結果")

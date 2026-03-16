@@ -221,9 +221,8 @@ function createResultCard(result) {
       const weightedScore = b.weighted_score !== undefined ? Number(b.weighted_score || 0) : Number(originalScore || 0);
       const scoreText = Number(weightedScore).toFixed(3);
 
-      // 如果分數小於 0，代表是扣分項（排除條件），我們用紅色顯示，絕對值做為寬度表示「懲罰力度」
-      const isNegative = weightedScore < 0;
-      const widthPercent = Math.max(0, Math.min(Math.abs(weightedScore) * 100, 100));
+      // 所有分數均為非負（負向條件已由後置篩選層直接過濾）
+      const widthPercent = Math.max(0, Math.min(weightedScore * 100, 100));
       const label = b.label || b.criteria;
 
       const reasonTextRaw = b.reason ? String(b.reason) : '';
@@ -236,7 +235,7 @@ function createResultCard(result) {
                     <span class="score-label">${label}</span>
                     <span class="score-value">${scoreText}</span>
                     <div class="progress-track">
-                        <div class="progress-fill" style="width: ${widthPercent}%; background-color: ${isNegative ? '#ef5350' : getColorForCriteria(b.criteria)}"></div>
+                        <div class="progress-fill" style="width: ${widthPercent}%; background-color: ${getColorForCriteria(b.criteria)}"></div>
                     </div>
                 </div>
                 ${reasonText ? `<div class="score-reason">${reasonText}</div>` : ''}

@@ -150,7 +150,6 @@ def run_evaluation(experiment_name: str, use_strict_filter: bool = True, strict_
                 if strict_only:
                     annotations[q][bid] = 3.0 if passed else 0.0
                 elif score > 0 and not passed:
-                    print(f"  ❌ [降維打擊] Query: '{q}'\n      Book ID: {bid} 違反硬性條件，標註員分數: {score} -> 強制降為 0！")
                     annotations[q][bid] = 0.0
 
     # 4. Calculate NDCG per Engine per Query

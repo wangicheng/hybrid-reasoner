@@ -89,13 +89,15 @@ class VectorStore:
                 )
             )
 
-    def _embed_with_retry(self, text: str, task_type: str = "RETRIEVAL_QUERY") -> List[float]:
-        """Embeds text with automatic retry and API key rotation."""
+    def _embed_with_retry(self, text: Any, task_type: str = "RETRIEVAL_QUERY") -> Any:
+        """Embeds text or list of texts with automatic retry and API key rotation."""
         from src.core.api_utils import _is_retryable, get_rate_limiter
         import time
         
         attempt = 0
         max_attempts = 5
+        is_list = isinstance(text, list)
+        
         while attempt < max_attempts:
             try:
                 # Enforce shared rate limit
@@ -106,13 +108,22 @@ class VectorStore:
                     contents=text,
                     config=types.EmbedContentConfig(task_type=task_type)
                 )
-                return list(response.embeddings[0].values)
+                
+                if is_list:
+                    return [list(e.values) for e in response.embeddings]
+                else:
+                    return list(response.embeddings[0].values)
+                    
             except Exception as e:
                 attempt += 1
-                if _is_retryable(e) and attempt < max_attempts:
-                    print(f"[VectorStore] Embedding retryable error: {e}. Rotating key...")
+                error_str = str(e)
+                # Check for 429 or other retryable errors
+                is_quota_error = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                
+                if (is_quota_error or _is_retryable(e)) and attempt < max_attempts:
+                    print(f"[VectorStore] Embedding error ({error_str[:50]}...). Rotating key and retrying (attempt {attempt})...")
                     self._update_api_key_on_rate_limit()
-                    time.sleep(1) # Small buffer
+                    time.sleep(2 * attempt) # Incremental backoff
                 else:
                     raise
         raise Exception("Max embed retries exceeded")
@@ -120,7 +131,7 @@ class VectorStore:
     def search(
         self, 
         query_text: str, 
-        limit: int = 10, 
+        limit: int = 10000, 
         query_filter: Optional[rest.Filter] = None,
         with_payload: bool = True,
         collection_name: Optional[str] = None
@@ -163,7 +174,7 @@ class VectorStore:
     def search_individual(
         self,
         query_list: List[str],
-        limit: int = 10,
+        limit: int = 10000,
         collection_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
@@ -175,14 +186,8 @@ class VectorStore:
 
         target_collection = collection_name if collection_name else self.collection_name
         
-        # 1. 批次嵌入所有查詢標籤
-        from google.genai import types
-        embed_resp = self.genai_client.models.embed_content(
-            model=self.embedding_model,
-            contents=query_list,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
-        )
-        query_vectors = [list(e.values) for e in embed_resp.embeddings]
+        # 1. 批次嵌入所有查詢標籤 (使用重試機制)
+        query_vectors = self._embed_with_retry(query_list, task_type="RETRIEVAL_QUERY")
         
         # 2. 執行多次檢索並進行 MaxSim 聚合
         aggregated_scores: Dict[Any, float] = {}
@@ -214,18 +219,13 @@ class VectorStore:
     def search_tags(
         self,
         query_text: str,
-        limit: int = 10,
+        limit: int = 10000,
         similarity_threshold: float = 0.6
     ) -> List[Dict[str, Any]]:
         """
         Search for actual tags semantically similar to the provided query text.
         """
-        embed_response = self.genai_client.models.embed_content(
-            model=self.embedding_model,
-            contents=query_text,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
-        )
-        query_vector = list(embed_response.embeddings[0].values)
+        query_vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
         
         response = self.client.query_points(
             collection_name="novel_tags",
@@ -243,6 +243,48 @@ class VectorStore:
                     "score": hit.score
                 })
         return results
+
+    def batch_map_tags(
+        self,
+        target_tags: List[str],
+        similarity_threshold: float = 0.6,
+        limit_per_tag: int = 10000
+    ) -> List[Dict[str, float]]:
+        """
+        [Exp 3 核心修復] 將用戶要求的標籤詞映射到系統實際標籤。
+        返回 List[Dict[系統標籤名, 相似度分數]]，列表順序與 target_tags 一致。
+        """
+        if not target_tags:
+            return []
+            
+        try:
+            # 1. 批次嵌入 (使用重試機制)
+            target_texts = [f"標籤： {t}" for t in target_tags]
+            query_vectors = self._embed_with_retry(target_texts, task_type="RETRIEVAL_QUERY")
+            
+            results_list = []
+            # 2. 為每個要求標籤尋找最接近的系統標籤
+            for vector in query_vectors:
+                mapping = {}
+                response = self.client.query_points(
+                    collection_name="novel_tags",
+                    query=vector,
+                    limit=limit_per_tag,
+                    score_threshold=similarity_threshold,
+                    with_payload=True
+                )
+                for hit in response.points:
+                    if hit.payload and "tag" in hit.payload:
+                        tag_name = hit.payload["tag"]
+                        score = float(hit.score)
+                        if tag_name not in mapping or score > mapping[tag_name]:
+                            mapping[tag_name] = score
+                results_list.append(mapping)
+                            
+            return results_list
+        except Exception as e:
+            print(f"[VectorStore] Batch tag mapping failed: {e}")
+            return []
 
     def add_items(self, items: List[Dict[str, Any]]):
         """

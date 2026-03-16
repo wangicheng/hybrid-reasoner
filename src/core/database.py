@@ -184,7 +184,7 @@ class Database:
             items.append(d)
         return items
 
-    def search_by_tags_fuzzy(self, tags: List[str], limit: int = 100) -> List[Dict[str, Any]]:
+    def search_by_tags_fuzzy(self, tags: List[str], limit: int = 10000) -> List[Dict[str, Any]]:
         """Search novels that contain any of the specified tag keywords."""
         if not tags:
             return []

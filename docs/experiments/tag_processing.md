@@ -1,89 +1,53 @@
 # 實驗與方法評估
 
-## 核心引擎架構：語意-屬性雙軌模型 (Semantic-Attribute Dual-Track Model)
+## 核心引擎架構：雙軌評分 + 後置篩選 (Dual-Track Scoring + Post-Filtering)
 
-本專案的推薦引擎採用**二元特徵評價架構**，將使用者的查詢意圖分解為兩條獨立且互補的評分音軌：
+本專案的推薦引擎採用**相關性評分與硬性約束分離**的架構：
 
-- **語意音軌 (Semantic Track)**：處理隱性語意，即「劇情氛圍」、「內容意圖」等無法用單一標籤定義的特徵。透過向量空間的餘弦相似度進行計算。
-- **屬性音軌 (Attribute Track)**：處理所有顯性結構化元數據，包括標籤 (Tags)、連載狀態、字數、作者等。透過屬性效用評估器 (Utility Mapper) 進行統一計分。
+1.  **內容相關性評分 (Content Scoring)**：採用雙軌模型計算書籍與需求的符合程度。
+    - **語意音軌 (Semantic Track)**：處理隱性語意，如「劇情氛圍」、「內容意圖」。透過內容向量 (text_vector) 計算。
+    - **屬性音軌 (Attribute Track)**：處理標籤 (Tags) 的語意匹配，將標籤視為一種顯性屬性的語意強度。
+2.  **後置篩選層 (Post-Filter Layer)**：處理硬性約束，如負向標籤、特定作者、字數範圍、完結狀態。不符合者直接移除，不參與排序。
+
+### 執行流程：兩階段處理
 
 ```mermaid
 graph TD
     UserQuery((使用者查詢)) --> Parser[LLM 規格解析]
+    Parser --> Scorer[第一階段：雙軌相關性評分]
     
-    subgraph Decomp [1. 意圖分解層]
+    subgraph Scorer ["相關性評分 (Scoring)"]
         direction LR
-        S_Goal[語意目標<br/>'氛圍', '劇情意圖']
-        A_Goal[屬性方針<br/>'所有結構化元數據']
+        T1[語意音軌<br/>內容相似度]
+        T2[屬性音軌<br/>標籤語意映射]
+        Fusion{分數融合}
+        T1 --> Fusion
+        T2 --> Fusion
     end
     
-    Parser --> S_Goal
-    Parser --> A_Goal
+    Scorer --> Filter[第二階段：後置篩選層]
     
-    subgraph Scorer [2. 雙軌評分層]
-        direction TB
-        Track1["<b>語意音軌 (Semantic Track)</b><br/>計算隱性概念相似度"]
-        
-        subgraph Track2 ["<b>屬性音軌 (Attribute Track)</b>"]
-            direction TB
-            A_Process[元數據提取器<br/>標籤, 字數, 狀態, 作者...]
-            U_Mapper{屬性效用評估器<br/>Utility Mapper}
-            A_Process --> U_Mapper
-        end
+    subgraph PostFilter ["硬過濾 (Hard Filter)"]
+        F1[負向標籤排除]
+        F2[狀態/作者/字數過濾]
+        F1 & F2 --> Combine[Boolean AND]
     end
     
-    S_Goal --> Track1
-    A_Goal --> U_Mapper
-    
-    subgraph Fusion [3. 全域融合層]
-        Final["總分 = (語意分 * w1) + (屬性分 * w2)"]
-    end
-    
-    Track1 --> Final
-    U_Mapper --> Final
-    
-    Final --> Result((排序推薦結果))
+    Filter --> PostFilter
+    PostFilter --> Result((最終排序結果))
 
-    style Track2 fill:#fff3e0,stroke:#ff9800,stroke-width:2px
-    style Track1 fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
-    style U_Mapper fill:#ffe0b2,stroke:#fb8c00
+    style Scorer fill:#e1f5fe,stroke:#01579b
+    style PostFilter fill:#ffebee,stroke:#b71c1c
 ```
 
-### 屬性效用評估器 (Utility Mapper) 內部混合機制
+#### 1. 相關性評分 (Attribute Track / Tags)
+在目前的架構中，屬性音軌專注於**標籤的語意質量**。不再處理字數或狀態的計分，這些已移往篩選層。
 
-屬性音軌中的效用評估器將不同類型的結構化元數據統一處理，其內部混合邏輯分為兩種策略：
+#### 2. 後置篩選規則 (Hard Filter Logic)
+以下維度在引擎完成初步評分後進行 Boolean 判斷：
+- **負向標籤**：透過語意映射將用戶排除詞 (e.g. "不要虐") 轉為系統標籤，命中即移除。
+- **顯性元數據**：作者、完結狀態、字數範圍必須 100% 符合。
 
-1.  **加權累加 (Additive Aggregation)**：處理標籤命中率、數值程度等「越多越好 / 越高越好」的維度。
-2.  **乘性抑制 (Multiplicative Regulation)**：處理狀態、字數、作者等硬性規範。違反時分數乘以 `PENALTY_MULTIPLIER (0.05)`，大幅壓低但不為零。
-
-```mermaid
-graph LR
-    subgraph Inputs [輸入維度]
-        T[標籤列表]
-        W[數值元數據]
-        S[狀態/屬性]
-    end
-
-    subgraph InternalProcess [混合策略]
-        direction TB
-        Accumulate["<b>加權累加</b><br/>處理相似度與程度"]
-        Regulate["<b>乘性抑制</b><br/>處理硬性規範"]
-    end
-
-    T -->|命中率計分| Accumulate
-    W -->|效用函數映射| Accumulate
-    
-    S -->|判斷符合性| Regulate
-    
-    Accumulate -->|屬性分 P| X((✕))
-    Regulate -->|懲罰因子 F| X
-    
-    X --> FinalA[最終屬性分]
-
-    style Accumulate fill:#fff9c4,stroke:#fbc02d
-    style Regulate fill:#ffcdd2,stroke:#d32f2f
-    style FinalA fill:#ffe0b2,stroke:#fb8c00,stroke-width:2px
-```
 
 ---
 
@@ -103,11 +67,11 @@ graph LR
 - **效用計算**：同方法 1。
 - **特點**：架構不變，僅優化「意圖分解層」的輸入品質，減少 LLM 幻覺或無效匹配。
 
-### 方法 3. LLM 直接生成 + Embedding 相似度比對
+### 方法 3. 標籤面向映射 + MaxSim 評分 (Individual Tag Mapping)
 
-- **說明**：允許 LLM 自由生成標籤，再透過 Embedding 計算 LLM 標籤與系統標籤之間的語意相似度，以此作為效用分。
-- **效用計算**：`U_tags` 改由向量相似度得分決定（連續值），而非二元命中。
-- **特點**：屬性效用評估器從「字面匹配」升級為「語意匹配」，即使 LLM 生成的標籤不完全吻合系統標籤，仍能找到最相近的對應。
+- **說明**：將使用者要求的各個標籤視為獨立的「意圖面向 (Facets)」。先將每個要求詞語意映射到系統標籤集，再對書籍標籤進行 MaxSim 計算。
+- **效用計算**：`U_tags = Average(對每個面向的最優匹配分數)`。
+- **特點**：精確度最高的方法。能識別如「系統流」映射到「系統」的語意關聯，且不會因為標籤多寡稀釋單一核心需求的權重。
 
 ### 方法 4. 標籤融入文本 Embedding (特徵融合)
 
@@ -124,13 +88,13 @@ graph LR
 
 ### 各實驗在雙軌架構下的對比
 
-| 實驗 | 語意音軌 | 屬性音軌 (標籤處理) | 屬性音軌 (硬性規範) |
+| 實驗 | 語意音軌 | 屬性音軌 (標籤處理) | 硬性約束執行方式 |
 | :--- | :--- | :--- | :--- |
-| **1** | 文字向量 | SQL 硬比對 | 乘性懲罰 (x0.05) |
-| **2** | 文字向量 | SQL 硬比對 (LLM 參考完整標籤) | 乘性懲罰 (x0.05) |
-| **3** | 文字向量 | Embedding 相似度比對 | 乘性懲罰 (x0.05) |
-| **4** | 文字+標籤混合向量 | *(標籤已遷入語意軌)* | 乘性懲罰 (x0.05) |
-| **5** | 文字向量 | 標籤專屬向量空間 | 乘性懲罰 (x0.05) |
+| **1** | 文字向量 | 字面模糊比對 (SQL-like) | **直接過濾 (Hard Exclusion)** |
+| **2** | 文字向量 | 字面模糊比對 (LLM 參考完整標籤) | **直接過濾 (Hard Exclusion)** |
+| **3** | 文字向量 | **面向映射 + MaxSim 語意匹配** | **直接過濾 (Hard Exclusion)** |
+| **4** | 文字+標籤混合向量 | *(標籤已遷入語意軌)* | **直接過濾 (Hard Exclusion)** |
+| **5** | 文字向量 | **標籤全域向量 (Joined Vector)** | **直接過濾 (Hard Exclusion)** |
 
 ---
 
@@ -159,4 +123,4 @@ graph LR
   - **0 分 (Irrelevant)**: 完全無關，或資訊缺失。
 - **評估指標 (Metrics)**:
   - 採用 **NDCG@10** 衡量各推薦引擎的排序品質。
-  - **強硬條件仲裁 (Strict Filter)**：即便引擎改用 Soft Penalty (0.05x) 保留違規書籍，在計算 NDCG 前仍會透過 `src/eval/metrics.py` 審查，若書籍違反使用者明確的硬性規則，其得分會被強制歸零。
+  - **負向條件仲裁**：由於引擎已實現「後置篩選層」，任何違反硬性規則（如包含負向標籤、字數不合）的書籍皆不會出現在檢索結果中，因此在評估階段不再需要額外的過濾邏輯。
