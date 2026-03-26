@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     
     # Dual-Track Fusion Weights (語意-屬性雙軌融合權重)
     # w1 = SEMANTIC_WEIGHT, w2 = ATTRIBUTE_WEIGHT
-    FUSION_MODE: str = "multiplicative" # Options: "multiplicative", "additive"
     SEMANTIC_WEIGHT: float = 0.5
     ATTRIBUTE_WEIGHT: float = 0.5
 

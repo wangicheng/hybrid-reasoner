@@ -148,15 +148,19 @@ if __name__ == "__main__":
         {"name": "exp2_a_5-5", "mode": "baseline_prompt", "w1": 0.5, "w2": 0.5},
         {"name": "exp2_a_7-3", "mode": "baseline_prompt", "w1": 0.7, "w2": 0.3},
         
-        {"name": "exp3_a_3-7", "mode": "multi_multiplicative_embedded_tags", "w1": 0.3, "w2": 0.7},
-        {"name": "exp3_a_5-5", "mode": "multi_multiplicative_embedded_tags", "w1": 0.5, "w2": 0.5},
-        {"name": "exp3_a_7-3", "mode": "multi_multiplicative_embedded_tags", "w1": 0.7, "w2": 0.3},
+        {"name": "exp3_a_3-7", "mode": "embedded_tags", "w1": 0.3, "w2": 0.7},
+        {"name": "exp3_a_5-5", "mode": "embedded_tags", "w1": 0.5, "w2": 0.5},
+        {"name": "exp3_a_7-3", "mode": "embedded_tags", "w1": 0.7, "w2": 0.3},
         
-        {"name": "exp4_a_5-5", "mode": "fused_multiplicative", "w1": 0.5, "w2": 0.5},
+        {"name": "exp4_a_5-5", "mode": "fused", "w1": 0.5, "w2": 0.5},
         
-        {"name": "exp5_a_3-7", "mode": "multi_multiplicative", "w1": 0.3, "w2": 0.7},
-        {"name": "exp5_a_5-5", "mode": "multi_multiplicative", "w1": 0.5, "w2": 0.5},
-        {"name": "exp5_a_7-3", "mode": "multi_multiplicative", "w1": 0.7, "w2": 0.3},
+        {"name": "exp5_a_3-7", "mode": "multi_vector", "w1": 0.3, "w2": 0.7},
+        {"name": "exp5_a_5-5", "mode": "multi_vector", "w1": 0.5, "w2": 0.5},
+        {"name": "exp5_a_7-3", "mode": "multi_vector", "w1": 0.7, "w2": 0.3},
+
+        {"name": "exp2+3_a_3-7", "mode": "embedded_tags_prompt", "w1": 0.3, "w2": 0.7},
+        {"name": "exp2+3_a_5-5", "mode": "embedded_tags_prompt", "w1": 0.5, "w2": 0.5},
+        {"name": "exp2+3_a_7-3", "mode": "embedded_tags_prompt", "w1": 0.7, "w2": 0.3},
     ]
     
     generator = RunGenerator(k_per_engine=10)

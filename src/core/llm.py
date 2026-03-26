@@ -110,8 +110,10 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
     return final_result
 
 
-@functools.lru_cache(maxsize=100)
-def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optional[List[str]] = None) -> QueryParseResult:
+from typing import Any, Dict, List, Optional, Tuple
+
+@functools.lru_cache(maxsize=1000)
+def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optional[Tuple[str, ...]] = None) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
     支援多模型 fallback：當主要模型遇到配額限制或錯誤時，自動嘗試下一個模型。

@@ -23,7 +23,7 @@ class HybridEngine:
         self, 
         db=None, 
         vs=None, 
-        retrieval_mode: str = "multi_multiplicative",
+        retrieval_mode: str = "multi_vector",
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None
     ):
@@ -31,14 +31,13 @@ class HybridEngine:
         self.retrieval_mode = retrieval_mode
         
         # Load Fusion weights and mode from settings, with optional overrides
-        self.fusion_mode = settings.FUSION_MODE
         self.semantic_weight = semantic_weight if semantic_weight is not None else settings.SEMANTIC_WEIGHT
         self.attribute_weight = attribute_weight if attribute_weight is not None else settings.ATTRIBUTE_WEIGHT
         
         # [USER-SET] Architecture Flags to avoid logic overlap
         self.is_feature_fusion = "fused" in retrieval_mode  # Exp 4
         self.is_exp3_mapping = "embedded_tags" in retrieval_mode  # Exp 3
-        self.is_exp5_multi = retrieval_mode == "multi_multiplicative"  # Exp 5
+        self.is_exp5_multi = retrieval_mode == "multi_vector"  # Exp 5
         self.is_baseline_hybrid = not (self.is_feature_fusion or self.is_exp3_mapping or self.is_exp5_multi) # Exp 1, 2
 
         if self.is_feature_fusion:
@@ -67,7 +66,7 @@ class HybridEngine:
         
         # Method 2 Cache: Pre-load tags if using baseline_prompt mode
         self.all_tags_cache = None
-        if self.retrieval_mode.startswith("baseline_prompt"):
+        if "prompt" in self.retrieval_mode:
             self._load_tags_cache()
 
     def _load_tags_cache(self):
@@ -77,11 +76,25 @@ class HybridEngine:
         tags_path = "data/all_tags.json"
         if os.path.exists(tags_path):
             try:
+                # Try UTF-8 first
                 with open(tags_path, "r", encoding="utf-8") as f:
-                    self.all_tags_cache = json.load(f)
-                print(f"[HybridEngine] Method 2: Pre-loaded {len(self.all_tags_cache)} tags for cache")
+                    data = json.load(f)
+            except UnicodeDecodeError:
+                # Fallback directly to UTF-16
+                try:
+                    with open(tags_path, "r", encoding="utf-16") as f:
+                        data = json.load(f)
+                except Exception as e:
+                    print(f"[HybridEngine] Warning: Failed to load {tags_path} with UTF-16: {e}")
+                    data = []
             except Exception as e:
                 print(f"[HybridEngine] Warning: Failed to load {tags_path}: {e}")
+                data = []
+
+            if data:
+                # Convert to tuple so it's hashable for lru_cache
+                self.all_tags_cache = tuple(data)
+                print(f"[HybridEngine] Method 2: Pre-loaded {len(self.all_tags_cache)} tags for cache")
         else:
              print(f"[HybridEngine] Warning: {tags_path} not found for Method 2")
 
@@ -338,12 +351,8 @@ class HybridEngine:
         # 全域融合 (Global Fusion)
         # ================================================================
         if has_tag_scoring:
-            if self.fusion_mode == "additive":
-                total_score = (semantic_score * self.semantic_weight) + (attribute_score * self.attribute_weight)
-                fusion_label = f"線性融合: ({semantic_score:.4f} * {self.semantic_weight}) + ({attribute_score:.4f} * {self.attribute_weight})"
-            else:
-                total_score = semantic_score * attribute_score
-                fusion_label = f"乘性融合: {semantic_score:.4f} × {attribute_score:.4f}"
+            total_score = (semantic_score * self.semantic_weight) + (attribute_score * self.attribute_weight)
+            fusion_label = f"線性融合: ({semantic_score:.4f} * {self.semantic_weight}) + ({attribute_score:.4f} * {self.attribute_weight})"
         else:
             total_score = semantic_score
             fusion_label = f"純語意分: {semantic_score:.4f}"
@@ -572,7 +581,7 @@ class HybridEngine:
         tag_query_text = " ".join(tag_terms_list)
         print(f"[Engine] Pure tags query for tag_semantic: '{tag_query_text}'")
 
-        # --- 負向標籤：提取並映射（供後置篩選使用）---
+        # --- 負向標籤處理 (Negative Tag Filter Analysis) ---
         negative_tag_terms = []
         negative_criteria_list = [c for c in parse_result.criteria if c.name == "semantic_similarity" and getattr(c, 'is_negative', False)]
         
@@ -581,16 +590,22 @@ class HybridEngine:
             qt = p.get("query_text", "").strip()
             if not qt: continue
             
-            try:
-                neg_mapped = self.vs.search_tags(f"標籤： {qt}", limit=1, similarity_threshold=0.7)
-                if neg_mapped:
-                    mapped_tags = [res["tag"] for res in neg_mapped]
-                    negative_tag_terms.extend(mapped_tags)
-                    print(f"[Engine] Negative mapped tags for '{qt}': {mapped_tags}")
-                else:
+            # [USER-SET] 語意映射僅限於 Exp 3 (Individual Mapping)
+            # 確保其餘實驗（含 Exp 4）不會混入映射邏輯，維持實驗對稱性
+            if self.is_exp3_mapping:
+                try:
+                    neg_mapped = self.vs.search_tags(f"標籤： {qt}", limit=1, similarity_threshold=0.7)
+                    if neg_mapped:
+                        mapped_tags = [res["tag"] for res in neg_mapped]
+                        negative_tag_terms.extend(mapped_tags)
+                        print(f"[Engine] Exp 3: Negative mapped tags for '{qt}': {mapped_tags}")
+                    else:
+                        negative_tag_terms.append(qt)
+                except Exception as e:
+                    print(f"[Engine] Warning: Negative tag mapping failed: {e}")
                     negative_tag_terms.append(qt)
-            except Exception as e:
-                print(f"[Engine] Warning: Negative tag mapping failed: {e}")
+            else:
+                # Exp 1, 2, 4, 5: 直接使用原始解析結果进行後置篩選
                 negative_tag_terms.append(qt)
 
                 

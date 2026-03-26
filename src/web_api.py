@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.core.engine import HybridEngine
 import uvicorn
 
-app = FastAPI()
 
 # Input Model
 class SearchRequest(BaseModel):
@@ -20,13 +19,15 @@ class SearchRequest(BaseModel):
 # Engine Instance (Lazy Load)
 engine = None
 
-@app.on_event("startup")
-async def startup_event():
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global engine
     print("Initializing Hybrid Engine... (This may take a few seconds)")
     try:
-        # 初始化引擎 (預設使用多向量 + 乘法模型)
-        engine = HybridEngine(retrieval_mode="multi_multiplicative")
+        # 初始化引擎 (預設使用多向量 + 線性融合)
+        engine = HybridEngine(retrieval_mode="multi_vector")
         print("Hybrid Engine initialized successfully!")
         print("Search mode: Multi-vector (text_semantic + tag_semantic with 0.7:0.3 weighting)")
     except RuntimeError as e:
@@ -41,6 +42,9 @@ async def startup_event():
     except Exception as e:
         print(f"FATAL: Failed to initialize Engine: {e}")
         raise
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 @app.post("/api/search")
 async def search(request: SearchRequest):
