@@ -1,7 +1,6 @@
-import os
 from typing import Dict, Any, List
 from google import genai
-from src.core.api_utils import retry_on_rate_limit, _is_retryable
+from src.core.api_utils import retry_on_rate_limit, _is_retryable, get_current_api_key
 
 # 可用模型清單 (與 llm.py 保持一致)
 FALLBACK_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
@@ -19,7 +18,6 @@ def generate_explanation(
     支援多模型 fallback：當主要模型遇到配額限制時，自動嘗試下一個模型。
     現在包含評分證據 (score_breakdown) 以產出基於證據的解釋。
     """
-    api_key = os.environ.get("GOOGLE_API_KEY")
     selected_model = model_id or FALLBACK_MODELS[0]
 
     # Query-level circuit breaker for Gemini models
@@ -42,7 +40,7 @@ def generate_explanation(
     if gemini_disabled:
         models_to_try = [m for m in models_to_try if not is_gemini_model(m)]
     
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=get_current_api_key())
 
     context_text = ""
     if context_chunks:

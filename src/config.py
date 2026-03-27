@@ -31,10 +31,15 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Parse multiple Google API keys from environment variable
-_google_api_key_raw = os.environ.get("GOOGLE_API_KEY", "").strip()
-if _google_api_key_raw:
-    # Split by comma and clean whitespace
-    settings.GOOGLE_API_KEYS = [key.strip() for key in _google_api_key_raw.split(",") if key.strip()]
-else:
-    settings.GOOGLE_API_KEYS = []
+def _parse_google_api_keys() -> List[str]:
+    """Parse Google API keys from either GOOGLE_API_KEYS or GOOGLE_API_KEY."""
+    raw_multi = os.environ.get("GOOGLE_API_KEYS", "").strip()
+    raw_single = os.environ.get("GOOGLE_API_KEY", "").strip()
+    raw_value = raw_multi or raw_single
+    if not raw_value:
+        return []
+
+    return [key.strip() for key in raw_value.split(",") if key.strip()]
+
+
+settings.GOOGLE_API_KEYS = _parse_google_api_keys()

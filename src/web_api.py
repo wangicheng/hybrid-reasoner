@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     print("Initializing Hybrid Engine... (This may take a few seconds)")
     try:
         # 初始化引擎 (預設使用實驗最佳配置)
-        engine = HybridEngine(retrieval_mode="embedded_tags_prompt")
+        engine = HybridEngine()
         print("Hybrid Engine initialized successfully!")
         print("Search mode: Embedded tags + prompt (semantic:attribute = 0.3:0.7)")
     except RuntimeError as e:

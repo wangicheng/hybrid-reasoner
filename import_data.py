@@ -74,7 +74,7 @@ def main():
     print("\n" + "=" * 70)
     if verify_count > 0:
         print("SUCCESS! Data import completed")
-        print(f"Ready to generate fused embeddings for {verify_count} books")
+        print(f"Ready to generate search vectors for {verify_count} books")
         return 0
     else:
         print("ERROR! No data was imported")

@@ -1,125 +1,77 @@
-# Hybrid Reasoner (Novels) - Ver 1.1
+# Hybrid Reasoner
 
-這是一個結合 **向量檢索 (Vector Search)** 與 **規則評分 (Rule-based Scoring)** 的混合推薦系統。專案以小說推薦為範例，利用 LLM (Large Language Model) 解析使用者的自然語言查詢，將其轉換為具體的結構化搜尋條件，並結合語意相似度進行精確排序。
+Novel search app with a CLI and a FastAPI web API.
 
-**Ver 1.1 更新重點：**
+## Requirements
 
-* 整合 **Google Gemini** 模型作為推理核心。
-* 新增 **Logic Push-down** 優化，提升檢索效率。
-* 新增 **Explainability**，讓系統能解釋推薦理由。
-* 全新 **Web UI** 介面與 Windows 一鍵啟動腳本。
+- Python 3.11+
+- Google Gemini API key in `.env`
+- `data/all_tags.json`
+- Qdrant collection `novel_tags`
 
-## ✨ 特色 (Features)
+## Setup
 
-* **混合檢索引擎**: 結合 Qdrant 向量資料庫與傳統欄位過濾/評分 (Logic Push-down supported)。
-* **自然語言查詢 (Gemini Powered)**: 使用 Google Gemini 模型解析模糊的查詢意圖 (例如: "找一本字數超過十萬字的奇幻小說")，並生成結構化搜尋條件。
-* **可解釋性 (Explainability)**: 系統不僅推薦書籍，還會告訴你*為什麼*這本書符合你的需求。
-* **自動化爬蟲**: 從 MirrorFiction 抓取小說資料作為測試數據。
-* **Modern Web UI**: 提供直觀的網頁搜尋介面。
-* **Windows 一鍵啟動**: 透過 `run_web.bat` 快速啟動服務。
+1. Create and activate a virtual environment.
 
-## 🛠️ 安裝 (Installation)
+   ```bash
+   python -m venv venv
+   .\venv\Scripts\activate
+   ```
 
-1. **複製專案**
+2. Install dependencies.
 
-    ```bash
-    git clone https://github.com/wangicheng/hybrid-reasoner.git
-    cd hybrid-reasoner
-    git checkout 1.1ver
-    ```
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-2. **建立虛擬環境 (建議)**
+3. Create `.env` from the example file.
 
-    ```bash
-    python -m venv venv
-    # Windows
-    .\venv\Scripts\activate
-    # macOS/Linux
-    source venv/bin/activate
-    ```
+   ```bash
+   Copy-Item .env.example .env
+   ```
 
-3. **安裝依賴套件**
+4. Set one of these variables in `.env`:
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+   ```ini
+   GOOGLE_API_KEY=your_gemini_api_key
+   # or
+   GOOGLE_API_KEYS=key1,key2,key3
+   ```
 
-## ⚙️ 設定 (Configuration)
+## Run
 
-1. 複製 `.env.example` 為 `.env`：
-
-    ```bash
-    # Windows (PowerShell)
-    Copy-Item .env.example .env
-    ```
-
-2. 編輯 `.env` 檔案，填入您的 **Google Gemini API Key**：
-
-    ```ini
-    GOOGLE_API_KEY=your_gemini_api_key_here
-    # 如有需要可調整 Qdrant 設定
-    # QDRANT_HOST=localhost
-    # QDRANT_PORT=6333
-    ```
-
-## 🚀 快速開始 (Quick Start)
-
-### Windows 使用者 (推薦)
-
-直接雙擊專案根目錄下的 **`run_web.bat`** 腳本，即可自動啟動伺服器並開啟瀏覽器。
-
----
-
-### 手動啟動步驟
-
-#### 1. 抓取資料與初始化 (首次執行)
-
-如果是第一次執行，需要先抓取資料並建立索引：
+### CLI
 
 ```bash
-# 抓取資料
-python -m src.crawler
-
-# 建立索引 (Seeding)
-python -m src.main --seed
+python -m src.main
 ```
 
-#### 2. 啟動 Web 服務
-
-啟動 FastAPI 後端伺服器：
+### Web API
 
 ```bash
 python -m src.web_api
-# 或使用 uvicorn
-python -m uvicorn src.web_api:app --reload
 ```
 
-伺服器啟動後，請瀏覽器打開 [http://localhost:8000](http://localhost:8000) 即可看到搜尋介面。
+The API serves the web UI at `http://localhost:8000`.
 
-#### 3. 命令列搜尋 (CLI Search)
+## Data Import
 
-也可以直接透過命令列測試搜尋與解釋功能：
+1. Crawl data.
 
-```bash
-python -m src.main --query "推薦幾本關於魔法與冒險的小說，字數要在20萬字以上"
-```
+   ```bash
+   python -m src.scripts.crawler_linovelib
+   ```
 
-## 📂 專案結構 (Project Structure)
+2. Ingest crawled data into SQLite and Qdrant.
 
-```text
-hybrid-reasoner/
-├── data/                 # 資料存放區 (爬蟲結果, Qdrant 儲存檔)
-├── src/
-│   ├── core/             # 核心模組
-│   │   ├── engine.py     # 混合檢索引擎 (Logic Push-down 實作)
-│   │   ├── llm.py        # LLM 介面 (Gemini Adapter)
-│   │   ├── vector_store.py # 向量資料庫介面
-│   │   └── explainer.py  # 解釋生成模組
-│   ├── logic/            # 評分邏輯
-│   ├── web/              # 前端靜態檔案 (HTML/JS/CSS)
-│   ├── crawler.py        # 爬蟲程式
-│   ├── main.py           # CLI 入口
-│   └── web_api.py        # Web Server 入口
-├── run_web.bat           # Windows 啟動腳本
-└── requirements.txt      # 依賴列表
-```
+   ```bash
+   python -m src.scripts.ingest_linovelib
+   ```
+
+The ingestion script reads `data/books_crawled.json`.
+
+## Notes
+
+- If `data/all_tags.json` is missing, startup fails.
+- If Qdrant does not contain `novel_tags`, startup fails.
+- The CLI is interactive; there is no `--seed` or `--query` mode.

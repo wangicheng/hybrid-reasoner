@@ -183,34 +183,3 @@ class Database:
             d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
             items.append(d)
         return items
-
-    def search_by_tags_fuzzy(self, tags: List[str], limit: int = 10000) -> List[Dict[str, Any]]:
-        """Search novels that contain any of the specified tag keywords."""
-        if not tags:
-            return []
-            
-        conn = self.get_connection()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # Build OR condition for multiple tags
-        conditions = []
-        params = []
-        for tag in tags:
-            conditions.append("tags LIKE ?")
-            params.append(f'%"{tag}"%')  # Search for the tag within the JSON array string
-            
-        where_clause = " OR ".join(conditions)
-        query = f"SELECT * FROM novels WHERE {where_clause} LIMIT ?"
-        params.append(limit)
-        
-        cursor.execute(query, tuple(params))
-        rows = cursor.fetchall()
-        conn.close()
-        
-        items = []
-        for row in rows:
-            d = dict(row)
-            d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
-            items.append(d)
-        return items
