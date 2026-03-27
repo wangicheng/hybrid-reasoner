@@ -15,7 +15,7 @@ class HybridEngine:
     简化的混合搜索引擎 (Simplified Hybrid Search Engine)
     
     核心策略：
-    - 主要依赖：多向量语义搜索 (text_semantic 0.7 + tag_semantic 0.3)
+    - 主要依赖：双轨融合（语义轨 + 标签轨）
     - 可选过滤：状态、作者、字数（Qdrant 硬过滤）
     - 负向语义：二次向量查询实现排除功能
     """
@@ -23,7 +23,7 @@ class HybridEngine:
         self, 
         db=None, 
         vs=None, 
-        retrieval_mode: str = "multi_vector",
+        retrieval_mode: str = "embedded_tags_prompt",
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None
     ):

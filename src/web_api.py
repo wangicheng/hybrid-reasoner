@@ -26,10 +26,10 @@ async def lifespan(app: FastAPI):
     global engine
     print("Initializing Hybrid Engine... (This may take a few seconds)")
     try:
-        # 初始化引擎 (預設使用多向量 + 線性融合)
-        engine = HybridEngine(retrieval_mode="multi_vector")
+        # 初始化引擎 (預設使用實驗最佳配置)
+        engine = HybridEngine(retrieval_mode="embedded_tags_prompt")
         print("Hybrid Engine initialized successfully!")
-        print("Search mode: Multi-vector (text_semantic + tag_semantic with 0.7:0.3 weighting)")
+        print("Search mode: Embedded tags + prompt (semantic:attribute = 0.3:0.7)")
     except RuntimeError as e:
         if "already accessed by another instance" in str(e):
             print(f"\n{'='*60}")
