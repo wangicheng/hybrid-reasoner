@@ -7,6 +7,7 @@ from src.core.database import Database
 from src.core.explainer import generate_explanation
 from src.core.llm import parse_query
 from src.core.vector_store import VectorStore
+from src.core.tag_context import build_tag_context_text, load_tag_descriptions
 
 
 class HybridEngine:
@@ -18,10 +19,15 @@ class HybridEngine:
         vs: Optional[VectorStore] = None,
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None,
+        use_tag_descriptions: bool = False,
+        embed_generated_keywords: bool = True,
+        tag_descriptions_path: Optional[str] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
         self.book_matcher = BookMatcher(self.db)
+        self.use_tag_descriptions = use_tag_descriptions
+        self.embed_generated_keywords = embed_generated_keywords
         self.semantic_weight = (
             semantic_weight if semantic_weight is not None else settings.SEMANTIC_WEIGHT
         )
@@ -31,11 +37,19 @@ class HybridEngine:
             else settings.ATTRIBUTE_WEIGHT
         )
         self.all_tags_cache: Optional[Tuple[str, ...]] = None
+        self.tag_descriptions_cache: Optional[Dict[str, str]] = None
+        self.tag_context_cache: Optional[str] = None
         self._load_tags_cache()
         if not self.all_tags_cache:
             raise RuntimeError(
                 "Tag metadata file 'data/all_tags.json' is missing or empty."
             )
+
+        # Keep the tag embedding collection aligned with the curated whitelist.
+        self.vs.sync_tag_collection(self.all_tags_cache)
+
+        if self.use_tag_descriptions:
+            self._load_tag_context_cache(tag_descriptions_path)
 
         if not self.vs.collection_exists("novel_tags"):
             raise RuntimeError("Qdrant collection 'novel_tags' is missing.")
@@ -60,6 +74,13 @@ class HybridEngine:
         raise RuntimeError(
             f"Tag metadata file '{tags_path}' is empty or has an unexpected format."
         )
+
+    def _load_tag_context_cache(self, tag_descriptions_path: Optional[str]) -> None:
+        descriptions = load_tag_descriptions(tag_descriptions_path)
+        self.tag_descriptions_cache = descriptions
+        self.tag_context_cache = build_tag_context_text(self.all_tags_cache or (), descriptions)
+        if not self.tag_context_cache.strip():
+            raise RuntimeError("Tag context cache could not be built from descriptions.")
 
     @staticmethod
     def _criteria_params(criteria: Any) -> Dict[str, Any]:
@@ -100,6 +121,15 @@ class HybridEngine:
             seen.add(normalized)
             deduped.append(normalized)
         return deduped
+
+    def _build_tag_terms_list(
+        self,
+        generated_keywords: List[str],
+    ) -> List[str]:
+        terms: List[str] = []
+        if self.embed_generated_keywords:
+            terms.extend(generated_keywords)
+        return self._dedupe_terms(terms)
 
     @staticmethod
     def _normalize_status(target_status: str) -> Optional[str]:
@@ -274,20 +304,19 @@ class HybridEngine:
                 f"[Engine] Using cached tag list with {len(self.all_tags_cache)} entries."
             )
 
+        related_books = self.book_matcher.extract_related_books(user_query)
+        related_book_context = self.book_matcher.build_related_book_context(related_books)
+
         parse_result = parse_query(
             user_query,
             model_id=model_id,
             tag_list=self.all_tags_cache,
+            tag_context=self.tag_context_cache if self.use_tag_descriptions else None,
+            reference_book_context=related_book_context,
         )
 
-        reference_tags = self.book_matcher.extract_reference_tags(
-            user_query,
-            search_terms=parse_result.search_terms,
-            reference_books=parse_result.reference_books,
-        )
-
-        tag_terms_list = self._dedupe_terms(
-            list(parse_result.generated_keywords) + reference_tags[:8]
+        tag_terms_list = self._build_tag_terms_list(
+            list(parse_result.generated_keywords),
         )
 
         tag_mapping_weights: List[Dict[str, float]] = []
@@ -432,6 +461,8 @@ class HybridEngine:
                 "results": [],
                 "message": "No matching novels were found after applying the filters.",
                 "engine": "HybridEngine",
+                "related_books": related_books,
+                "reference_tags": [],
             }
 
         final_results = scored_items[:limit]
@@ -474,7 +505,8 @@ class HybridEngine:
             "search_terms": parse_result.search_terms,
             "generated_keywords": parse_result.generated_keywords,
             "hypothetical_intro": parse_result.hypothetical_intro,
-            "reference_tags": reference_tags,
+            "related_books": related_books,
+            "reference_tags": [],
             "query_vector": query_vector,
             "results": final_results,
             "engine": "HybridEngine",

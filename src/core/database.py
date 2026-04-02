@@ -1,7 +1,59 @@
 import sqlite3
 import json
+from functools import lru_cache
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from src.config import settings
+
+
+@lru_cache(maxsize=1)
+def _load_allowed_tags() -> set[str]:
+    tags_path = Path(__file__).resolve().parents[2] / "data" / "all_tags.json"
+    try:
+        with tags_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except UnicodeDecodeError:
+        with tags_path.open("r", encoding="utf-16") as f:
+            data = json.load(f)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Tag metadata file '{tags_path}' not found.") from exc
+
+    if not isinstance(data, list):
+        raise RuntimeError(
+            f"Tag metadata file '{tags_path}' has an unexpected format."
+        )
+
+    return {str(tag).strip() for tag in data if str(tag).strip()}
+
+
+def _normalize_tag_list(raw_tags: Any) -> List[str]:
+    if isinstance(raw_tags, str):
+        try:
+            raw_tags = json.loads(raw_tags)
+        except Exception:
+            raw_tags = [raw_tags]
+
+    if isinstance(raw_tags, dict) and "data" in raw_tags:
+        raw_tags = raw_tags["data"]
+
+    if not isinstance(raw_tags, list):
+        return []
+
+    allowed = _load_allowed_tags()
+    normalized: List[str] = []
+    seen = set()
+    for tag in raw_tags:
+        if isinstance(tag, dict):
+            value = str(tag.get("name", "")).strip()
+        else:
+            value = str(tag).strip()
+
+        if not value or value not in allowed or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+
+    return normalized
 
 class Database:
     def __init__(self):
@@ -71,11 +123,7 @@ class Database:
         cursor = conn.cursor()
         
         i_id = str(item.get("id"))
-        tags = item.get("tags", [])
-        if tags and isinstance(tags, dict) and "data" in tags:
-            tags = [t.get("name") for t in tags["data"]]
-        elif tags and isinstance(tags, list) and isinstance(tags[0], dict):
-             tags = [t.get("name") for t in tags]
+        tags = _normalize_tag_list(item.get("tags", []))
              
         cursor.execute("""
             INSERT OR REPLACE INTO novels (
@@ -118,7 +166,7 @@ class Database:
         conn.close()
         if row:
             d = dict(row)
-            d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
+            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
             return d
         return None
 
@@ -132,7 +180,7 @@ class Database:
         items = []
         for row in rows:
             d = dict(row)
-            d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
+            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
             items.append(d)
         return items
 
@@ -162,7 +210,7 @@ class Database:
         items = []
         for row in rows:
             d = dict(row)
-            d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
+            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
             items.append(d)
         return items
 
@@ -180,6 +228,6 @@ class Database:
         items = []
         for row in rows:
             d = dict(row)
-            d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
+            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
             items.append(d)
         return items

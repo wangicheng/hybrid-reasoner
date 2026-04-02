@@ -1,226 +1,209 @@
-import json
 import csv
-import math
-from pathlib import Path
+import json
 from collections import defaultdict
-from typing import Dict, List, Any
+from pathlib import Path
+from typing import Any, Dict, List
 
-def apply_strict_filters(golden_rules: Dict[str, Any], book_item: Dict[str, Any]) -> bool:
-    """
-    Returns False if the book explicitly violates hard constraints defined in the golden rules.
-    這就是強硬條件仲裁：用程式無情抓出標註員（或者純向量引擎）無視字數或狀態的錯誤！
-    """
-    # Check numeric range
-    min_words = golden_rules.get("min_words")
-    max_words = golden_rules.get("max_words")
-    words_total = book_item.get("words_total", 0)
-    
-    if min_words is not None and words_total < min_words:
-        return False
-    if max_words is not None and words_total > max_words:
-        return False
-        
-    # Check status
-    req_status = golden_rules.get("required_status")
-    if req_status:
-        status = str(book_item.get("publish_status", "")).lower()
-        if req_status == "completed" and status not in ["completed", "已完結", "完結"]:
-            return False
-        if req_status == "ongoing" and status not in ["ongoing", "連載中", "連載"]:
-            return False
-            
-    # Check animated
-    must_be_animated = golden_rules.get("must_be_animated")
-    if must_be_animated is not None:
-        if bool(book_item.get("is_animated")) != bool(must_be_animated):
-            return False
-            
-    # Check required tags
-    req_tags = golden_rules.get("required_tags") or []
-    if req_tags:
-        book_tags = set(book_item.get("tags", []))
-        for rt in req_tags:
-            if rt not in book_tags:
-                return False
-                
-    # Check blocked tags
-    blocked_tags = golden_rules.get("blocked_tags") or []
-    if blocked_tags:
-        book_tags = set(book_item.get("tags", []))
-        for bt in blocked_tags:
-            if bt in book_tags:
-                return False
-                
-    return True
+from src.eval.tag_rules import apply_hard_filters, score_required_tags
 
-def calculate_ndcg(ranked_scores: List[float], k: int) -> float:
-    """計算給定 Top-K 分數陣列的 NDCG (Normalized Discounted Cumulative Gain)"""
-    dcg = 0.0
-    for i in range(min(k, len(ranked_scores))):
-        rel = ranked_scores[i]
-        dcg += (2**rel - 1) / math.log2(i + 2)
-        
-    ideal_scores = sorted(ranked_scores, reverse=True)
-    idcg = 0.0
-    for i in range(min(k, len(ideal_scores))):
-        rel = ideal_scores[i]
-        idcg += (2**rel - 1) / math.log2(i + 2)
-        
-    return dcg / idcg if idcg > 0 else 0.0
 
-def run_evaluation(experiment_name: str, use_strict_filter: bool = True, strict_only: bool = False):
+def calculate_set_quality(scores: List[float], good_threshold: float = 2.0) -> Dict[str, float]:
+    if not scores:
+        return {"avg": 0.0, "good_rate": 0.0, "strong_rate": 0.0, "best": 0.0}
+
+    total = len(scores)
+    avg_score = sum(scores) / total
+    good_rate = sum(1 for score in scores if score >= good_threshold) / total
+    strong_rate = sum(1 for score in scores if score >= 3.0) / total
+    best_score = max(scores)
+    return {
+        "avg": avg_score,
+        "good_rate": good_rate,
+        "strong_rate": strong_rate,
+        "best": best_score,
+    }
+
+
+def _build_fallback_book(row: Dict[str, str]) -> Dict[str, Any]:
+    words_in_10k = float(row.get("Words (萬)") or 0)
+    intro = row.get("Intro", "")
+
+    tags: List[str] = []
+    if "[標籤:" in intro:
+        start_idx = intro.find("[標籤:") + 4
+        end_idx = intro.find("]", start_idx)
+        if end_idx != -1:
+            tags_str = intro[start_idx:end_idx]
+            tags = [t.strip() for t in tags_str.split(",") if t.strip()]
+
+    return {
+        "words_total": words_in_10k * 10000,
+        "publish_status": row.get("Status", ""),
+        "tags": tags,
+        "is_animated": False,
+    }
+
+
+def _load_books_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
+    books_data: Dict[str, Dict[str, Any]] = {}
+    if not path.exists():
+        return books_data
+
+    with path.open("r", encoding="utf-8") as f:
+        try:
+            crawled_data = json.load(f)
+        except json.JSONDecodeError:
+            print("Warning: Failed to parse books_crawled.json")
+            return books_data
+
+    for book in crawled_data:
+        book_id = str(book.get("id", "")).strip()
+        if book_id:
+            books_data[book_id] = book
+    return books_data
+
+
+def _resolve_candidate_score(
+    query: str,
+    book_id: str,
+    base_score: float,
+    books_data: Dict[str, Dict[str, Any]],
+    golden_rules_map: Dict[str, Dict[str, Any]],
+    use_strict_filter: bool,
+    strict_only: bool,
+) -> float:
+    if not use_strict_filter and not strict_only:
+        return base_score
+
+    golden_rules = golden_rules_map.get(query, {})
+    if not golden_rules:
+        return 0.0 if strict_only else base_score
+
+    metadata = books_data.get(book_id, {})
+    if not apply_hard_filters(golden_rules, metadata):
+        return 0.0
+
+    if strict_only:
+        required_tags = golden_rules.get("required_tags") or []
+        if not required_tags:
+            return 3.0
+        strict_score, _, _, _ = score_required_tags(golden_rules, metadata)
+        return strict_score
+
+    required_tags = golden_rules.get("required_tags") or []
+    if not required_tags:
+        return base_score
+
+    strict_score, _, _, _ = score_required_tags(golden_rules, metadata)
+    return strict_score
+
+
+def run_evaluation(
+    experiment_name: str,
+    use_strict_filter: bool = True,
+    strict_only: bool = False,
+) -> None:
+    strict_mode = use_strict_filter or strict_only
     base_dir = Path("data/experiments/pools")
     annotated_csv = base_dir / f"{experiment_name}_annotated.csv"
     truth_json = base_dir / f"{experiment_name}_truth.json"
-    
-    # 0. Load Golden Rules mapping from query -> rules
+
     with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
         queries_config = json.load(f)
     golden_rules_map = {item["query"]: item.get("golden_rules", {}) for item in queries_config}
-    
-    # 0.5 Load all crawled books to build full metadata
-    books_data = {}   # { book_id: dict info }
-    books_crawled_path = Path("data/books_crawled.json")
-    if books_crawled_path.exists():
-        with open(books_crawled_path, "r", encoding="utf-8") as f:
-            try:
-                crawled_data = json.load(f)
-                for b in crawled_data:
-                    books_data[str(b.get("id", ""))] = b
-            except json.JSONDecodeError:
-                print("Warning: Failed to parse books_crawled.json")
 
-    # 1. Load Ground Truth tracking data (who found what!)
+    books_data = _load_books_metadata(Path("data/books_crawled.json"))
+
     with open(truth_json, "r", encoding="utf-8") as f:
         truth_data = json.load(f)
-        
-    # 2. Load the human (or mock) annotations
-    annotations = {}  # { query: { book_id: score } }
-    books_data = {}   # { book_id: dict info }
-    
-    with open(annotated_csv, "r", encoding="utf-8-sig") as f:
+
+    annotations: Dict[str, Dict[str, float]] = {}
+    with annotated_csv.open("r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            q = row["Query"]
-            bid = row["Book ID"]
+            query = row["Query"]
+            book_id = row["Book ID"]
             try:
                 score = float(row["Score (0-3)"])
             except ValueError:
                 score = 0.0
-                
-            if q not in annotations:
-                annotations[q] = {}
-            annotations[q][bid] = score
-            
-            # Reconstruct dummy dict for strict filter if not already in crawled data
-            if str(bid) not in books_data:
-                words_in_10k = float(row.get("Words (萬)") or 0)
-                intro = row.get("Intro", "")
-                
-                # Parse tags from "[標籤: 架空, 穿越]"
-                tags = []
-                if "[標籤:" in intro:
-                    start_idx = intro.find("[標籤:") + 4
-                    end_idx = intro.find("]", start_idx)
-                    if end_idx != -1:
-                        tags_str = intro[start_idx:end_idx]
-                        tags = [t.strip() for t in tags_str.split(",") if t.strip()]
-                        
-                books_data[bid] = {
-                    "words_total": words_in_10k * 10000,
-                    "publish_status": row.get("Status", ""),
-                    "tags": tags,
-                    "is_animated": False  # Default fallback
-                }
 
-    # 3. Apply Strict Filter (The Arbitrator)
-    if use_strict_filter or strict_only:
-        if strict_only:
-            print("\n🛡️ [Strict Only] 正在依據強硬條件重置所有評分 (符合=3.0, 不符合=0.0)...")
-        else:
-            print("\n🔍 [Strict Filter] 正在進行強制仲裁審查 (尋找字數/狀態/標籤/動畫的違規項目)...")
-            
-        for q, books_in_query in annotations.items():
-            golden_rules = golden_rules_map.get(q)
-            if not golden_rules:
-                continue
-                
-            for bid, score in books_in_query.items():
-                passed = apply_strict_filters(golden_rules, books_data[bid])
-                if strict_only:
-                    annotations[q][bid] = 3.0 if passed else 0.0
-                elif score > 0 and not passed:
-                    annotations[q][bid] = 0.0
+            annotations.setdefault(query, {})[book_id] = score
 
-    # 4. Calculate NDCG per Engine per Query
-    engine_ndcg = defaultdict(list)
-    
+            if str(book_id) not in books_data:
+                books_data[str(book_id)] = _build_fallback_book(row)
+
+    engine_query_quality = defaultdict(list)
+
     for truth_entry in truth_data:
         query = truth_entry["query"]
         candidates = truth_entry["candidates"]
-        
-        # Engine -> list of (rank, score)
-        engine_results = defaultdict(list)
-        
-        for cand in candidates:
-            bid = str(cand["book_id"])
-            
-            if strict_only:
-                # 在 Strict Only 模式下，直接依據規則判定，不管 CSV 是否有這本書
-                golden_rules = golden_rules_map.get(query, {})
-                metadata = books_data.get(bid)
-                if metadata:
-                    score = 3.0 if apply_strict_filters(golden_rules, metadata) else 0.0
-                else:
-                    score = 0.0 # 無法取得資料，視為不符
-            else:
-                # 抓取標註分數
-                score = annotations.get(query, {}).get(bid, 0.0)
-            
-            # 填入這本書在各個推薦引擎中的名次與分數
-            for engine_name, rank in cand["original_ranks"].items():
-                engine_results[engine_name].append((rank, score))
-                
-        for engine_name, results in engine_results.items():
-            # sort by original engine rank ascending
-            results.sort(key=lambda x: x[0])
-            ranked_scores = [s for r, s in results]
-            
-            # Pad with 0s if engine returned fewer than 10 results but k=10
-            ranked_scores += [0.0] * max(0, 10 - len(ranked_scores))
-            
-            ndcg_10 = calculate_ndcg(ranked_scores, k=10)
-            engine_ndcg[engine_name].append(ndcg_10)
 
-    # 5. Output Final Report
-    print("\n" + "="*40)
-    print("📊 實驗評估報告 (Experiment Evaluation)")
-    print("="*40)
-    print(f"🔹 實驗名稱: {experiment_name}")
-    if strict_only:
-        print(f"🔹 評分模式: 強硬條件評分 (Strict Only)")
-    else:
-        print(f"🔹 啟用強硬條件仲裁 (Strict Filter): {use_strict_filter}")
-    print("-"*40)
-    
+        engine_results = defaultdict(list)
+
+        for cand in candidates:
+            book_id = str(cand["book_id"])
+            base_score = annotations.get(query, {}).get(book_id, 0.0)
+            score = _resolve_candidate_score(
+                query=query,
+                book_id=book_id,
+                base_score=base_score,
+                books_data=books_data,
+                golden_rules_map=golden_rules_map,
+                use_strict_filter=strict_mode,
+                strict_only=strict_only,
+            )
+
+            for engine_name, _rank in cand["original_ranks"].items():
+                engine_results[engine_name].append(score)
+
+        for engine_name, scores in engine_results.items():
+            quality = calculate_set_quality(scores)
+            engine_query_quality[engine_name].append(quality)
+
+    print("\n" + "=" * 40)
+    print("Experiment Evaluation")
+    print("=" * 40)
+    print(f"Experiment: {experiment_name}")
+    print(f"Score mode: {'strict-only' if strict_only else ('strict' if strict_mode else 'llm-only')}")
+    print("-" * 40)
+
     summary = []
-    for engine_name, scores in engine_ndcg.items():
-        avg_ndcg = sum(scores) / len(scores) if scores else 0
-        summary.append((engine_name, avg_ndcg))
-    
-    # Sort by NDCG score descending
+    for engine_name, query_scores in engine_query_quality.items():
+        if query_scores:
+            avg_score = sum(item["avg"] for item in query_scores) / len(query_scores)
+            good_rate = sum(item["good_rate"] for item in query_scores) / len(query_scores)
+            strong_rate = sum(item["strong_rate"] for item in query_scores) / len(query_scores)
+            best_score = sum(item["best"] for item in query_scores) / len(query_scores)
+        else:
+            avg_score = 0.0
+            good_rate = 0.0
+            strong_rate = 0.0
+            best_score = 0.0
+        summary.append((engine_name, avg_score, good_rate, strong_rate, best_score))
+
     summary.sort(key=lambda x: x[1], reverse=True)
-    
-    for engine_name, avg_ndcg in summary:
-        print(f"  🏆 {engine_name:20s} | NDCG@10: {avg_ndcg:.4f}")
-    print("="*40 + "\n")
+    for engine_name, avg_score, good_rate, strong_rate, best_score in summary:
+        print(
+            f"  {engine_name:20s} | Avg@10: {avg_score:.4f}"
+            f" | Good@10: {good_rate:.1%}"
+            f" | Strong@10: {strong_rate:.1%}"
+            f" | Best@10: {best_score:.4f}"
+        )
+    print("=" * 40 + "\n")
+
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Run Evaluation Metrics")
     parser.add_argument("--experiment", type=str, default="pilot_test", help="Experiment name")
     parser.add_argument("--no-strict", action="store_true", help="Disable strict filtering")
-    parser.add_argument("--strict-only", action="store_true", help="Score based ONLY on strict filters (Pass=3, Fail=0)")
+    parser.add_argument("--strict-only", action="store_true", help="Use strict-only scoring")
     args = parser.parse_args()
-    
-    run_evaluation(args.experiment, use_strict_filter=not args.no_strict, strict_only=args.strict_only)
+
+    run_evaluation(
+        args.experiment,
+        use_strict_filter=not args.no_strict,
+        strict_only=args.strict_only,
+    )

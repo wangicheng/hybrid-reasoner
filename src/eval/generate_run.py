@@ -1,183 +1,252 @@
-import os
-import json
 import asyncio
-from typing import List, Dict, Any
+import json
+import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# ==========================================
-# ⚙️ 實驗設定區
-# ==========================================
-from src.core.engine import HybridEngine
 from src.core.database import Database
+from src.core.engine import HybridEngine
 from src.core.vector_store import VectorStore
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 class RunGenerator:
     """
-    多實驗執行器
-    負責對輸入的多個 Query 跑遍所有指定的實驗模式。
+    Generate experiment runs for the tag-description-context ablation.
+
+    The generator can switch between:
+    - using tag descriptions in the LLM prompt
+    - embedding or skipping LLM-generated keywords
+
+    This script keeps the run file format compatible with merge_and_pool.py:
+    a JSON array of per-query result objects.
     """
-    def __init__(self, k_per_engine: int = 10):
+
+    def __init__(
+        self,
+        k_per_engine: int = 10,
+        use_tag_descriptions: bool = True,
+        embed_generated_keywords: bool = True,
+        model_id: Optional[str] = None,
+    ) -> None:
         self.k = k_per_engine
+        self.use_tag_descriptions = use_tag_descriptions
+        self.embed_generated_keywords = embed_generated_keywords
+        self.model_id = model_id
         self.db = Database()
-        
-    def generate_run(
-        self, 
-        queries_config: List[Dict], 
-        engine_name: str, 
-        retrieval_mode: str, 
-        output_dir: Path,
-        semantic_weight: float = 0.5,
-        attribute_weight: float = 0.5
-    ):
-        print(f"\n🚀 [Batch] Starting Experiment: {engine_name} (Mode: {retrieval_mode}, W1: {semantic_weight}, W2: {attribute_weight})")
-        
-        # [USER-SET] Re-sync with Engine: Only Exp 4 (fused) uses the pre-fused collection.
-        # Exp 1, 2, 3, 5 all use Multi-Vector Score Fusion on the 'novels' collection.
-        if "fused" in retrieval_mode:
-            collection = "novels_fused"
-        else:
-            collection = "novels"
-            
-        print(f"   Using collection: {collection}")
-        vs = VectorStore(collection_name=collection)
-        engine = HybridEngine(
-            db=self.db, 
-            vs=vs, 
-            retrieval_mode=retrieval_mode,
-            semantic_weight=semantic_weight,
-            attribute_weight=attribute_weight
+
+    async def _search_once(
+        self,
+        engine: HybridEngine,
+        query: str,
+    ) -> Dict[str, Any]:
+        return await engine.search(
+            query,
+            limit=self.k,
+            model_id=self.model_id,
+            explain=False,
         )
-        
+
+    def generate_run(
+        self,
+        queries_config: List[Dict[str, Any]],
+        engine_name: str,
+        output_dir: Path,
+        semantic_weight: float = 0.3,
+        attribute_weight: float = 0.7,
+        use_tag_descriptions: Optional[bool] = None,
+        embed_generated_keywords: Optional[bool] = None,
+    ) -> None:
+        resolved_use_tag_descriptions = (
+            self.use_tag_descriptions
+            if use_tag_descriptions is None
+            else use_tag_descriptions
+        )
+        resolved_embed_generated_keywords = (
+            self.embed_generated_keywords
+            if embed_generated_keywords is None
+            else embed_generated_keywords
+        )
+
+        print(
+            f"\n[Batch] Starting Experiment: {engine_name} "
+            f"(W1: {semantic_weight}, W2: {attribute_weight}, "
+            f"tag_descriptions={resolved_use_tag_descriptions}, "
+            f"embed_generated_keywords={resolved_embed_generated_keywords})"
+        )
+
+        vs = VectorStore(collection_name="novels")
+        engine = HybridEngine(
+            db=self.db,
+            vs=vs,
+            semantic_weight=semantic_weight,
+            attribute_weight=attribute_weight,
+            use_tag_descriptions=resolved_use_tag_descriptions,
+            embed_generated_keywords=resolved_embed_generated_keywords,
+        )
+
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{engine_name}.json"
-        
-        run_data = []
+
+        run_data: List[Dict[str, Any]] = []
         processed_query_ids = set()
-        
+
         if output_path.exists():
             try:
-                with open(output_path, 'r', encoding='utf-8') as f:
+                with open(output_path, "r", encoding="utf-8") as f:
                     existing_data = json.load(f)
-                    for item in existing_data:
-                        # 如果有 'error' 欄位，代表上次失敗了，我們不把它加入跳過名單讓它重跑
-                        if "error" not in item:
-                            run_data.append(item)
-                            processed_query_ids.add(item.get("query_id"))
-                print(f"   ► Loaded {len(processed_query_ids)} completed queries from existing file. Resuming...")
-            except Exception as e:
-                print(f"   ⚠️ Could not load existing file: {e}")
+                for item in existing_data:
+                    if "error" not in item:
+                        run_data.append(item)
+                        processed_query_ids.add(item.get("query_id"))
+                print(
+                    f"   Loaded {len(processed_query_ids)} completed queries from "
+                    f"existing file. Resuming..."
+                )
+            except Exception as exc:
+                print(f"   ?? Could not load existing file: {exc}")
 
         try:
             for q_conf in queries_config:
                 q_id = q_conf["id"]
                 query = q_conf["query"]
-                
+
                 if q_id in processed_query_ids:
                     print(f"   - Skipping query: {q_id} (already completed)")
                     continue
-                    
+
                 print(f"   - Processing query: {query[:30]}...")
-                
+
                 try:
-                    # 使用引擎抽取 Top-K (關閉 AI 解釋以節省 API 成本)
-                    response = engine.search(query, limit=self.k, explain=False)
-                    if asyncio.iscoroutine(response):
-                        response = asyncio.run(response)
-                        
+                    response = asyncio.run(self._search_once(engine, query))
                     results = response.get("results", [])
                     extracted_results = []
-                    
+
                     for rank, res in enumerate(results):
                         item = res.get("item", {})
-                        b_id = str(item.get("id"))
-                        if not b_id: continue
-                            
-                        author_name = item.get('author') or item.get('user', {}).get('name', '')
-                            
-                        extracted_results.append({
-                            "book_id": b_id,
-                            "title": item.get("name", ""),
-                            "author": author_name,
-                            "intro": item.get("intro", ""),
-                            "words_total": item.get("words_total", 0),
-                            "publish_status": item.get("publish_status", ""),
-                            "tags": item.get("tags", []),
-                            "rank": rank + 1
-                        })
-                        
-                    run_data.append({
-                        "query_id": q_id,
-                        "query": query,
-                        "results": extracted_results
-                    })
+                        b_id = str(item.get("id", "")).strip()
+                        if not b_id:
+                            continue
+
+                        author_name = item.get("author") or item.get("user", {}).get("name", "")
+                        extracted_results.append(
+                            {
+                                "book_id": b_id,
+                                "title": item.get("name", ""),
+                                "author": author_name,
+                                "intro": item.get("intro", ""),
+                                "words_total": item.get("words_total", 0),
+                                "publish_status": item.get("publish_status", ""),
+                                "tags": item.get("tags", []),
+                                "rank": rank + 1,
+                            }
+                        )
+
+                    run_data.append(
+                        {
+                            "query_id": q_id,
+                            "query": query,
+                            "results": extracted_results,
+                        }
+                    )
                 except Exception as query_err:
-                    print(f"     ⚠️ Error processing query {q_id}: {query_err}")
-                    # 添加空的結果，確保評估時對應得到 query_id
-                    run_data.append({
-                        "query_id": q_id,
-                        "query": query,
-                        "results": [],
-                        "error": str(query_err)
-                    })
-                
-            with open(output_path, 'w', encoding='utf-8') as f:
+                    print(f"     ?? Error processing query {q_id}: {query_err}")
+                    run_data.append(
+                        {
+                            "query_id": q_id,
+                            "query": query,
+                            "results": [],
+                            "error": str(query_err),
+                        }
+                    )
+
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(run_data, f, ensure_ascii=False, indent=2)
-                
-            print(f"✅ [{engine_name}] Run complete! Saved to {output_path}")
+
+            print(f"[{engine_name}] Run complete! Saved to {output_path}")
         finally:
-            # 關閉連線以防 Qdrant lock
             vs.client.close()
 
+
 if __name__ == "__main__":
-    # 讀取問題集
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     queries_path = Path("data/experiments/queries.json")
     if not queries_path.exists():
-        print(f"❌ Error: {queries_path} not found!")
-        exit(1)
-        
+        print(f"Error: {queries_path} not found!")
+        raise SystemExit(1)
+
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
-        
-    # 定義所有要跑的實驗 (對應 docs/experiments/tag_processing.md)
-    EXPERIMENTS = [
-        {"name": "exp1_a_3-7", "mode": "baseline", "w1": 0.3, "w2": 0.7},
-        {"name": "exp1_a_5-5", "mode": "baseline", "w1": 0.5, "w2": 0.5},
-        {"name": "exp1_a_7-3", "mode": "baseline", "w1": 0.7, "w2": 0.3},
-        
-        {"name": "exp2_a_3-7", "mode": "baseline_prompt", "w1": 0.3, "w2": 0.7},
-        {"name": "exp2_a_5-5", "mode": "baseline_prompt", "w1": 0.5, "w2": 0.5},
-        {"name": "exp2_a_7-3", "mode": "baseline_prompt", "w1": 0.7, "w2": 0.3},
-        
-        {"name": "exp3_a_3-7", "mode": "embedded_tags", "w1": 0.3, "w2": 0.7},
-        {"name": "exp3_a_5-5", "mode": "embedded_tags", "w1": 0.5, "w2": 0.5},
-        {"name": "exp3_a_7-3", "mode": "embedded_tags", "w1": 0.7, "w2": 0.3},
-        
-        {"name": "exp4_a_5-5", "mode": "fused", "w1": 0.5, "w2": 0.5},
-        
-        {"name": "exp5_a_3-7", "mode": "multi_vector", "w1": 0.3, "w2": 0.7},
-        {"name": "exp5_a_5-5", "mode": "multi_vector", "w1": 0.5, "w2": 0.5},
-        {"name": "exp5_a_7-3", "mode": "multi_vector", "w1": 0.7, "w2": 0.3},
 
-        {"name": "exp2+3_a_3-7", "mode": "embedded_tags_prompt", "w1": 0.3, "w2": 0.7},
-        {"name": "exp2+3_a_5-5", "mode": "embedded_tags_prompt", "w1": 0.5, "w2": 0.5},
-        {"name": "exp2+3_a_7-3", "mode": "embedded_tags_prompt", "w1": 0.7, "w2": 0.3},
+    EXPERIMENTS = [
+        {
+            "name": "exp_tagctx_3-7",
+            "w1": 0.3,
+            "w2": 0.7,
+            "use_tag_descriptions": True,
+            "embed_generated_keywords": True,
+        },
+        {
+            "name": "exp_tagctx_5-5",
+            "w1": 0.5,
+            "w2": 0.5,
+            "use_tag_descriptions": True,
+            "embed_generated_keywords": True,
+        },
+        {
+            "name": "exp_tagctx_7-3",
+            "w1": 0.7,
+            "w2": 0.3,
+            "use_tag_descriptions": True,
+            "embed_generated_keywords": True,
+        },
+        {
+            "name": "exp_tagctx_noembed_3-7",
+            "w1": 0.3,
+            "w2": 0.7,
+            "use_tag_descriptions": True,
+            "embed_generated_keywords": False,
+        },
+        {
+            "name": "exp_tagctx_noembed_5-5",
+            "w1": 0.5,
+            "w2": 0.5,
+            "use_tag_descriptions": True,
+            "embed_generated_keywords": False,
+        },
+        {
+            "name": "exp_tagctx_noembed_7-3",
+            "w1": 0.7,
+            "w2": 0.3,
+            "use_tag_descriptions": True,
+            "embed_generated_keywords": False,
+        },
     ]
-    
+
     generator = RunGenerator(k_per_engine=10)
     output_folder = Path("data/experiments/runs")
-    
+
     for exp in EXPERIMENTS:
         try:
             generator.generate_run(
                 queries_config=sample_queries,
                 engine_name=exp["name"],
-                retrieval_mode=exp["mode"],
                 output_dir=output_folder,
-                semantic_weight=exp.get("w1", 0.5),
-                attribute_weight=exp.get("w2", 0.5)
+                semantic_weight=exp["w1"],
+                attribute_weight=exp["w2"],
+                use_tag_descriptions=exp["use_tag_descriptions"],
+                embed_generated_keywords=exp["embed_generated_keywords"],
             )
-        except Exception as e:
-            print(f"❌ Failed experiment {exp['name']}: {e}")
+        except Exception as exc:
+            print(f"Failed experiment {exp['name']}: {exc}")
 
-    print("\n🎉 All scheduled experiments finished!")
-
+    print("\nTag-description-context experiments finished!")

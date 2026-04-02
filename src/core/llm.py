@@ -6,7 +6,6 @@ from google import genai
 from google.genai import types
 from src.models.schemas import QueryParseResult
 from src.core.api_utils import retry_on_rate_limit, _is_retryable
-from src.core.keyword_extractor import KeywordExtractor
 
 # 可用模型清單 (依優先順序排列，當前模型失敗時自動切換)
 FALLBACK_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
@@ -113,7 +112,13 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
 from typing import Any, Dict, List, Optional, Tuple
 
 @functools.lru_cache(maxsize=1000)
-def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optional[Tuple[str, ...]] = None) -> QueryParseResult:
+def parse_query(
+    user_query: str,
+    model_id: Optional[str] = None,
+    tag_list: Optional[Tuple[str, ...]] = None,
+    tag_context: Optional[str] = None,
+    reference_book_context: Optional[str] = None,
+) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
     支援多模型 fallback：當主要模型遇到配額限制或錯誤時，自動嘗試下一個模型。
@@ -289,8 +294,30 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
     """
     
     if tag_list:
-        tag_hint = f"\n\n### AVAILABLE TAGS (Method 2)\nUse the following tags for reference when generating keywords:\n{', '.join(tag_list)}"
+        tag_hint = (
+            f"\n\n### AVAILABLE TAGS (Method 2)\n"
+            f"Use the following tags for reference when generating keywords:\n"
+            f"{', '.join(tag_list)}"
+        )
         full_system_instruction += tag_hint
+
+    if tag_context:
+        tag_context_hint = (
+            "\n\n### TAG DESCRIPTIONS (Experimental Context)\n"
+            "Use the following tag descriptions as semantic grounding when interpreting "
+            "and expanding tag-related queries. Do not invent new tags outside the allowed list.\n"
+            f"{tag_context}"
+        )
+        full_system_instruction += tag_context_hint
+
+    if reference_book_context:
+        reference_book_hint = (
+            "\n\n### RELATED BOOKS (SOFT CONTEXT)\n"
+            "Use the following books only as soft context to interpret the user's intent. "
+            "Do not treat them as hard retrieval constraints or ranking signals.\n"
+            f"{reference_book_context}"
+        )
+        full_system_instruction += reference_book_hint
 
     last_exception = None
 

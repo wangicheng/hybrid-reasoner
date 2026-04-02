@@ -223,15 +223,73 @@ def load_existing_annotations(csv_path: str) -> Dict[str, Dict[str, str]]:
     return annotated
 
 
+def _make_task_key(row: Dict[str, Any]) -> str:
+    q_id = str(row.get("Query ID", "")).strip()
+    b_id = str(row.get("Book ID", "")).strip()
+    return f"{q_id}_{b_id}" if q_id and b_id else ""
+
+
+def _is_row_scored(row: Dict[str, Any]) -> bool:
+    score = str(row.get("Score (0-3)", "")).strip()
+    comment = str(row.get("Comment", "")).strip()
+    return bool(score or comment)
+
+
 def save_annotated_csv(tasks: List[Dict[str, Any]], csv_path: str):
-    """將標註結果存入 CSV"""
-    if not tasks:
+    """將標註結果合併存入 CSV，避免洗掉既有的非 blind 列。"""
+    if not tasks and not os.path.exists(csv_path):
         return
 
+    merged_rows: List[Dict[str, Any]] = []
+    fieldnames: List[str] = []
+    row_index: Dict[str, int] = {}
+
+    if os.path.exists(csv_path):
+        with open(csv_path, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            fieldnames = list(reader.fieldnames or [])
+            for row in reader:
+                merged_rows.append(dict(row))
+                key = _make_task_key(row)
+                if key:
+                    row_index[key] = len(merged_rows) - 1
+
+    for task in tasks:
+        if not _is_row_scored(task):
+            continue
+
+        key = _make_task_key(task)
+        cleaned_task = {k: v for k, v in task.items() if v != ""}
+
+        if key and key in row_index:
+            target_row = merged_rows[row_index[key]]
+            for key_name, value in cleaned_task.items():
+                if value != "":
+                    target_row[key_name] = value
+        else:
+            merged_rows.append(cleaned_task)
+            if key:
+                row_index[key] = len(merged_rows) - 1
+
+        for column_name in cleaned_task.keys():
+            if column_name not in fieldnames:
+                fieldnames.append(column_name)
+
+    if not merged_rows:
+        return
+
+    if not fieldnames:
+        fieldnames = list(merged_rows[0].keys())
+    else:
+        for row in merged_rows:
+            for column_name in row.keys():
+                if column_name not in fieldnames:
+                    fieldnames.append(column_name)
+
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=tasks[0].keys())
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(tasks)
+        writer.writerows(merged_rows)
 
 
 def run_judge(experiment_name: str = "pilot_test", model_id: Optional[str] = None, batch_size: int = 10):

@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 
+from src.eval.tag_rules import normalize_tags, tag_matches
+
 # Fix Windows console encoding issues
 if sys.stdout.encoding != 'utf-8':
     import io
@@ -42,18 +44,17 @@ def check_rules(golden_rules, book):
     # Check required tags (supporting both required_tags)
     req_tags = golden_rules.get("required_tags") or []
     if req_tags:
-        book_tags = set(book.get("tags", []))
+        book_tags = normalize_tags(book.get("tags", []))
         for rt in req_tags:
-            # Check for partial match or exact match
-            if not any(rt in bt or bt in rt for bt in book_tags):
+            if not any(tag_matches(rt, bt) for bt in book_tags):
                 violations.append(f"Missing required tag: {rt}")
                 
     # Check blocked tags
     blocked_tags = golden_rules.get("blocked_tags") or []
     if blocked_tags:
-        book_tags = set(book.get("tags", []))
+        book_tags = normalize_tags(book.get("tags", []))
         for bt in blocked_tags:
-            if any(bt in b_tag or b_tag in bt for b_tag in book_tags):
+            if any(tag_matches(bt, b_tag) for b_tag in book_tags):
                 violations.append(f"Contains blocked tag: {bt}")
                 
     return violations

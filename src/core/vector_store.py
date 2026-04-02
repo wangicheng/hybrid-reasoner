@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from google import genai
@@ -34,12 +36,15 @@ class VectorStore:
         print(f"[VectorStore] API key rotated. Current index: {rotator.current_index}")
 
     def _ensure_collection(self) -> None:
+        self._ensure_named_collection(self.collection_name)
+
+    def _ensure_named_collection(self, collection_name: str) -> None:
         collections = self.client.get_collections().collections
-        if any(collection.name == self.collection_name for collection in collections):
+        if any(collection.name == collection_name for collection in collections):
             return
 
         self.client.create_collection(
-            collection_name=self.collection_name,
+            collection_name=collection_name,
             vectors_config=rest.VectorParams(
                 size=3072,
                 distance=rest.Distance.COSINE,
@@ -54,6 +59,101 @@ class VectorStore:
             return False
 
         return any(collection.name == collection_name for collection in collections)
+
+    @staticmethod
+    def _normalize_tags(raw_tags: Any) -> List[str]:
+        if isinstance(raw_tags, str):
+            try:
+                raw_tags = json.loads(raw_tags)
+            except Exception:
+                return []
+        if isinstance(raw_tags, (list, tuple)):
+            normalized: List[str] = []
+            seen = set()
+            for tag in raw_tags:
+                value = str(tag).strip()
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                normalized.append(value)
+            return normalized
+        return []
+
+    def _scroll_collection_tags(self, collection_name: str) -> List[str]:
+        if not self.collection_exists(collection_name):
+            return []
+
+        tags: List[str] = []
+        offset = None
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=collection_name,
+                offset=offset,
+                limit=256,
+                with_payload=True,
+                with_vectors=False,
+            )
+            if not points:
+                break
+
+            for point in points:
+                payload = point.payload or {}
+                tag = payload.get("tag")
+                if tag:
+                    tags.append(str(tag).strip())
+
+            if offset is None:
+                break
+
+        return tags
+
+    def sync_tag_collection(
+        self,
+        tags: Any,
+        collection_name: str = "novel_tags",
+    ) -> None:
+        normalized_tags = self._normalize_tags(tags)
+        if not normalized_tags:
+            raise ValueError("Tag collection sync requires at least one tag.")
+
+        current_tags = self._scroll_collection_tags(collection_name)
+        if (
+            current_tags
+            and len(current_tags) == len(normalized_tags)
+            and set(current_tags) == set(normalized_tags)
+        ):
+            return
+
+        if self.collection_exists(collection_name):
+            print(
+                f"[VectorStore] Rebuilding '{collection_name}' with "
+                f"{len(normalized_tags)} allowed tags."
+            )
+            self.client.delete_collection(collection_name=collection_name)
+        else:
+            print(
+                f"[VectorStore] Creating '{collection_name}' with "
+                f"{len(normalized_tags)} allowed tags."
+            )
+
+        self._ensure_named_collection(collection_name)
+
+        tag_vectors = self._embed_with_retry(
+            [f"tag: {tag}" for tag in normalized_tags],
+            task_type="RETRIEVAL_QUERY",
+        )
+        points = []
+        for tag, vector in zip(normalized_tags, tag_vectors):
+            points.append(
+                rest.PointStruct(
+                    id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{collection_name}:{tag}")),
+                    vector=vector,
+                    payload={"tag": tag},
+                )
+            )
+
+        self.client.upsert(collection_name=collection_name, points=points)
+        print(f"[VectorStore] '{collection_name}' synced with {len(points)} tags.")
 
     def _embed_with_retry(
         self,
