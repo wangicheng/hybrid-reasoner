@@ -1,11 +1,15 @@
 import asyncio
 import json
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.core.database import Database
 from src.core.engine import HybridEngine
+from src.core.api_utils import _is_retryable
+from src.core.llm import parse_query
 from src.core.vector_store import VectorStore
 
 
@@ -52,6 +56,40 @@ class RunGenerator:
             explain=False,
         )
 
+    @staticmethod
+    def _retry_delay_seconds(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
+        """Calculate a bounded exponential backoff delay for retryable query failures."""
+        return min(base_delay * (2 ** max(0, attempt - 1)), max_delay)
+
+    def _search_with_retry(
+        self,
+        engine: HybridEngine,
+        query: str,
+        q_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Run a single query until it succeeds.
+
+        Retryable socket / connectivity failures are retried forever with
+        exponential backoff. Non-retryable exceptions still bubble up to the
+        caller so they can be recorded as a real query failure.
+        """
+        attempt = 0
+        while True:
+            try:
+                return asyncio.run(self._search_once(engine, query))
+            except Exception as exc:
+                if not _is_retryable(exc):
+                    raise
+
+                attempt += 1
+                delay = self._retry_delay_seconds(attempt)
+                print(
+                    f"     [Retry] Query {q_id} hit a retryable error: {exc}. "
+                    f"Retrying in {delay:.1f}s (attempt {attempt})..."
+                )
+                time.sleep(delay)
+
     def generate_run(
         self,
         queries_config: List[Dict[str, Any]],
@@ -61,6 +99,7 @@ class RunGenerator:
         attribute_weight: float = 0.7,
         use_tag_descriptions: Optional[bool] = None,
         embed_generated_keywords: Optional[bool] = None,
+        run_suffix: str = "",
     ) -> None:
         resolved_use_tag_descriptions = (
             self.use_tag_descriptions
@@ -77,7 +116,8 @@ class RunGenerator:
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
             f"tag_descriptions={resolved_use_tag_descriptions}, "
-            f"embed_generated_keywords={resolved_embed_generated_keywords})"
+            f"embed_generated_keywords={resolved_embed_generated_keywords}, "
+            f"run_suffix={run_suffix or 'none'})"
         )
 
         vs = VectorStore(collection_name="novels")
@@ -91,7 +131,7 @@ class RunGenerator:
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{engine_name}.json"
+        output_path = output_dir / f"{engine_name}{run_suffix}.json"
 
         run_data: List[Dict[str, Any]] = []
         processed_query_ids = set()
@@ -123,8 +163,9 @@ class RunGenerator:
                 print(f"   - Processing query: {query[:30]}...")
 
                 try:
-                    response = asyncio.run(self._search_once(engine, query))
+                    response = self._search_with_retry(engine, query, q_id)
                     results = response.get("results", [])
+                    parsed_criteria = response.get("parsed_criteria", [])
                     extracted_results = []
 
                     for rank, res in enumerate(results):
@@ -151,6 +192,7 @@ class RunGenerator:
                         {
                             "query_id": q_id,
                             "query": query,
+                            "parsed_criteria": parsed_criteria,
                             "results": extracted_results,
                         }
                     )
@@ -160,6 +202,7 @@ class RunGenerator:
                         {
                             "query_id": q_id,
                             "query": query,
+                            "parsed_criteria": [],
                             "results": [],
                             "error": str(query_err),
                         }
@@ -179,6 +222,23 @@ if __name__ == "__main__":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate experiment runs")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Number of independent trials to run per experiment",
+    )
+    parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        default="data/experiments/runs",
+        help="Directory for generated run files",
+    )
+    args = parser.parse_args()
+
     queries_path = Path("data/experiments/queries.json")
     if not queries_path.exists():
         print(f"Error: {queries_path} not found!")
@@ -189,64 +249,57 @@ if __name__ == "__main__":
 
     EXPERIMENTS = [
         {
-            "name": "exp_tagctx_3-7",
-            "w1": 0.3,
-            "w2": 0.7,
+            "name": "exp_td_on_embed_on",
             "use_tag_descriptions": True,
             "embed_generated_keywords": True,
         },
         {
-            "name": "exp_tagctx_5-5",
-            "w1": 0.5,
-            "w2": 0.5,
-            "use_tag_descriptions": True,
-            "embed_generated_keywords": True,
-        },
-        {
-            "name": "exp_tagctx_7-3",
-            "w1": 0.7,
-            "w2": 0.3,
-            "use_tag_descriptions": True,
-            "embed_generated_keywords": True,
-        },
-        {
-            "name": "exp_tagctx_noembed_3-7",
-            "w1": 0.3,
-            "w2": 0.7,
+            "name": "exp_td_on_embed_off",
             "use_tag_descriptions": True,
             "embed_generated_keywords": False,
         },
         {
-            "name": "exp_tagctx_noembed_5-5",
-            "w1": 0.5,
-            "w2": 0.5,
-            "use_tag_descriptions": True,
-            "embed_generated_keywords": False,
+            "name": "exp_td_off_embed_on",
+            "use_tag_descriptions": False,
+            "embed_generated_keywords": True,
         },
         {
-            "name": "exp_tagctx_noembed_7-3",
-            "w1": 0.7,
-            "w2": 0.3,
-            "use_tag_descriptions": True,
+            "name": "exp_td_off_embed_off",
+            "use_tag_descriptions": False,
             "embed_generated_keywords": False,
         },
     ]
 
     generator = RunGenerator(k_per_engine=10)
-    output_folder = Path("data/experiments/runs")
 
-    for exp in EXPERIMENTS:
-        try:
-            generator.generate_run(
-                queries_config=sample_queries,
-                engine_name=exp["name"],
-                output_dir=output_folder,
-                semantic_weight=exp["w1"],
-                attribute_weight=exp["w2"],
-                use_tag_descriptions=exp["use_tag_descriptions"],
-                embed_generated_keywords=exp["embed_generated_keywords"],
-            )
-        except Exception as exc:
-            print(f"Failed experiment {exp['name']}: {exc}")
+    repeats = max(1, args.repeats)
+    output_root = Path(args.experiment_dir)
+    batch_name = datetime.now().strftime("batch_%Y%m%d_%H%M%S")
+    output_folder = output_root / batch_name
+    print(f"Batch output directory: {output_folder}")
+
+    for repeat_index in range(1, repeats + 1):
+        run_suffix = f"_run{repeat_index:02d}" if repeats > 1 else ""
+        print(f"\n=== Trial {repeat_index}/{repeats} ===")
+        for exp in EXPERIMENTS:
+            try:
+                generator.generate_run(
+                    queries_config=sample_queries,
+                    engine_name=exp["name"],
+                    output_dir=output_folder,
+                    semantic_weight=0.0,
+                    attribute_weight=1.0,
+                    use_tag_descriptions=exp["use_tag_descriptions"],
+                    embed_generated_keywords=exp["embed_generated_keywords"],
+                    run_suffix=run_suffix,
+                )
+            except Exception as exc:
+                print(f"Failed experiment {exp['name']} ({run_suffix or 'single'}): {exc}")
+
+    if repeats > 1:
+        print(
+            "\nTo merge this batch, run:\n"
+            f"python -m src.eval.merge_and_pool --experiment-dir {output_folder} --experiment pilot_test"
+        )
 
     print("\nTag-description-context experiments finished!")

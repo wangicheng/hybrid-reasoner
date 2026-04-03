@@ -65,7 +65,7 @@ def apply_hard_filters(golden_rules: Dict[str, Any], book_item: Dict[str, Any]) 
     if blocked_tags:
         book_tags = normalize_tags(book_item.get("tags", []))
         for bt in blocked_tags:
-            if bt in book_tags:
+            if any(tag_matches(bt, book_tag) for book_tag in book_tags):
                 return False
 
     return True

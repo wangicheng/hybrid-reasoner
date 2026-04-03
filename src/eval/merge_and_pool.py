@@ -1,9 +1,15 @@
-import os
 import csv
 import json
 import random
+import argparse
+import sys
 from pathlib import Path
 from typing import List, Dict, Any
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 class PoolMerger:
     """
@@ -11,9 +17,9 @@ class PoolMerger:
     負責讀取 multiple runs (由不同引擎產出的 JSON)，合併同 Query 下的書籍，
     打亂順序並輸出為雙盲測試表單 (.csv) 與對照解答本 (.json)。
     """
-    def __init__(self, runs_dir: str = "data/experiments/runs"):
-        self.runs_dir = Path(runs_dir)
-        
+    def __init__(self, experiment_dir: str = "data/experiments/runs"):
+        self.runs_dir = Path(experiment_dir)
+
     def load_runs(self) -> Dict[str, List[Dict]]:
         """
         Reads all JSON files in the runs directory and returns a dictionary
@@ -23,8 +29,8 @@ class PoolMerger:
         if not self.runs_dir.exists():
             print(f"Directory {self.runs_dir} does not exist.")
             return all_runs
-            
-        for file_path in self.runs_dir.glob("*.json"):
+
+        for file_path in sorted(self.runs_dir.glob("*.json")):
             engine_name = file_path.stem
             with open(file_path, 'r', encoding='utf-8') as f:
                 run_data = json.load(f)
@@ -36,10 +42,10 @@ class PoolMerger:
         if not all_runs:
             print("No run files found to merge. Please execute generate_run.py first.")
             return
-            
-        print(f"Found {len(all_runs)} engine runs: {list(all_runs.keys())}")
-        
-        output_dir = Path("data/experiments/pools")
+
+        print(f"Found {len(all_runs)} engine runs in {self.runs_dir}: {list(all_runs.keys())}")
+
+        output_dir = self.runs_dir / "pools"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         blind_csv_path = output_dir / f"{experiment_name}_blind.csv"
@@ -136,14 +142,29 @@ class PoolMerger:
         with open(truth_json_path, 'w', encoding='utf-8') as f_json:
             json.dump(truth_data, f_json, ensure_ascii=False, indent=2)
             
-        print(f"\n✅ Merge and Export Complete!")
+        print(f"\nMerge and Export Complete!")
         print(f"Blind Test CSV for annotator: {blind_csv_path}")
         print(f"Ground Truth tracking file:   {truth_json_path}")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Merge experiment runs into a blind pool")
+    parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        default="data/experiments/runs/batch_YYYYMMDD_HHMMSS",
+        help="Batch directory containing run JSON files",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="pilot_test",
+        help="Experiment name for output files",
+    )
+    args = parser.parse_args()
+
     with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
         
-    merger = PoolMerger(runs_dir="data/experiments/runs")
-    merger.merge_and_export("pilot_test", sample_queries)
+    merger = PoolMerger(experiment_dir=args.experiment_dir)
+    merger.merge_and_export(args.experiment, sample_queries)

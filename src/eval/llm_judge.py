@@ -292,12 +292,21 @@ def save_annotated_csv(tasks: List[Dict[str, Any]], csv_path: str):
         writer.writerows(merged_rows)
 
 
-def run_judge(experiment_name: str = "pilot_test", model_id: Optional[str] = None, batch_size: int = 10):
+def _resolve_pools_dir(base_dir: Path) -> Path:
+    return base_dir / "pools"
+
+
+def run_judge(
+    experiment_name: str = "pilot_test",
+    model_id: Optional[str] = None,
+    batch_size: int = 10,
+    experiment_dir: str = "data/experiments/pools",
+):
     """
     主流程：讀取盲測資料，使用 LLM 進行評分，儲存結果。
     支援中斷續傳：已評過的題目會自動跳過。
     """
-    base_dir = Path("data/experiments/pools")
+    base_dir = _resolve_pools_dir(Path(experiment_dir))
     blind_csv = base_dir / f"{experiment_name}_blind.csv"
     annotated_csv = base_dir / f"{experiment_name}_annotated.csv"
 
@@ -410,10 +419,12 @@ if __name__ == "__main__":
                         help=f"指定 LLM 模型 (預設: {JUDGE_MODELS[0]})")
     parser.add_argument("--batch-size", type=int, default=10,
                         help="每幾筆儲存一次進度 (預設: 10)")
+    parser.add_argument("--experiment-dir", type=str, default="data/experiments/runs/batch_YYYYMMDD_HHMMSS")
     args = parser.parse_args()
 
     run_judge(
         experiment_name=args.experiment,
         model_id=args.model,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        experiment_dir=args.experiment_dir,
     )

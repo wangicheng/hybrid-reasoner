@@ -1,5 +1,7 @@
 import csv
 import json
+import re
+import statistics
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
@@ -42,6 +44,22 @@ def _build_fallback_book(row: Dict[str, str]) -> Dict[str, Any]:
         "tags": tags,
         "is_animated": False,
     }
+
+
+def _load_pool_metadata(csv_path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load hard-constraint metadata from the generated blind CSV."""
+    pool_data: Dict[str, Dict[str, Any]] = {}
+    if not csv_path.exists():
+        return pool_data
+
+    with csv_path.open("r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            book_id = str(row.get("Book ID", "")).strip()
+            if not book_id:
+                continue
+            pool_data[book_id] = _build_fallback_book(row)
+    return pool_data
 
 
 def _load_books_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
@@ -98,40 +116,73 @@ def _resolve_candidate_score(
     return strict_score
 
 
+def _run_family(engine_name: str) -> str:
+    match = re.match(r"^(.*)_run\d+$", engine_name)
+    if match:
+        return match.group(1)
+    return engine_name
+
+
+def _mean(values: List[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _stdev(values: List[float]) -> float:
+    return statistics.stdev(values) if len(values) > 1 else 0.0
+
+
+def _resolve_pools_dir(base_dir: Path) -> Path:
+    return base_dir / "pools"
+
+
 def run_evaluation(
     experiment_name: str,
     use_strict_filter: bool = True,
     strict_only: bool = False,
+    experiment_dir: str = "data/experiments/pools",
 ) -> None:
     strict_mode = use_strict_filter or strict_only
-    base_dir = Path("data/experiments/pools")
-    annotated_csv = base_dir / f"{experiment_name}_annotated.csv"
-    truth_json = base_dir / f"{experiment_name}_truth.json"
+    base_dir = Path(experiment_dir)
+    pools_dir = _resolve_pools_dir(base_dir)
+    blind_csv = pools_dir / f"{experiment_name}_blind.csv"
+    annotated_csv = pools_dir / f"{experiment_name}_annotated.csv"
+    truth_json = pools_dir / f"{experiment_name}_truth.json"
+
+    if not truth_json.exists():
+        raise FileNotFoundError(f"Missing truth file: {truth_json}")
+    if not blind_csv.exists():
+        raise FileNotFoundError(f"Missing blind file: {blind_csv}")
+    if not strict_only and not annotated_csv.exists():
+        raise FileNotFoundError(f"Missing annotated file: {annotated_csv}")
 
     with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
         queries_config = json.load(f)
     golden_rules_map = {item["query"]: item.get("golden_rules", {}) for item in queries_config}
 
     books_data = _load_books_metadata(Path("data/books_crawled.json"))
+    books_data.update(_load_pool_metadata(blind_csv))
 
     with open(truth_json, "r", encoding="utf-8") as f:
         truth_data = json.load(f)
 
     annotations: Dict[str, Dict[str, float]] = {}
-    with annotated_csv.open("r", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            query = row["Query"]
-            book_id = row["Book ID"]
-            try:
-                score = float(row["Score (0-3)"])
-            except ValueError:
-                score = 0.0
+    if not strict_only:
+        with annotated_csv.open("r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                query = row["Query"]
+                book_id = row["Book ID"]
+                try:
+                    score = float(row["Score (0-3)"])
+                except ValueError:
+                    score = 0.0
 
-            annotations.setdefault(query, {})[book_id] = score
+                annotations.setdefault(query, {})[book_id] = score
 
-            if str(book_id) not in books_data:
-                books_data[str(book_id)] = _build_fallback_book(row)
+                if str(book_id) not in books_data:
+                    books_data[str(book_id)] = _build_fallback_book(row)
+    elif annotated_csv.exists():
+        print(f"Strict-only mode: skipping annotated CSV at {annotated_csv}")
 
     engine_query_quality = defaultdict(list)
 
@@ -190,6 +241,36 @@ def run_evaluation(
             f" | Strong@10: {strong_rate:.1%}"
             f" | Best@10: {best_score:.4f}"
         )
+
+    family_summary = defaultdict(list)
+    for engine_name, avg_score, good_rate, strong_rate, best_score in summary:
+        family_summary[_run_family(engine_name)].append(
+            {
+                "engine_name": engine_name,
+                "avg_score": avg_score,
+                "good_rate": good_rate,
+                "strong_rate": strong_rate,
+                "best_score": best_score,
+            }
+        )
+
+    repeated_families = {family: runs for family, runs in family_summary.items() if len(runs) > 1}
+    if repeated_families:
+        print("\n" + "-" * 40)
+        print("Grouped Summary")
+        print("-" * 40)
+        for family, runs in sorted(repeated_families.items(), key=lambda item: _mean([r["avg_score"] for r in item[1]]), reverse=True):
+            avg_scores = [item["avg_score"] for item in runs]
+            good_rates = [item["good_rate"] for item in runs]
+            strong_rates = [item["strong_rate"] for item in runs]
+            best_scores = [item["best_score"] for item in runs]
+            print(
+                f"  {family:20s} | Avg@10: {_mean(avg_scores):.4f} ± {_stdev(avg_scores):.4f}"
+                f" | Good@10: {_mean(good_rates):.1%} ± {_stdev(good_rates):.1%}"
+                f" | Strong@10: {_mean(strong_rates):.1%} ± {_stdev(strong_rates):.1%}"
+                f" | Best@10: {_mean(best_scores):.4f} ± {_stdev(best_scores):.4f}"
+                f" | Runs: {len(runs)}"
+            )
     print("=" * 40 + "\n")
 
 
@@ -200,10 +281,13 @@ if __name__ == "__main__":
     parser.add_argument("--experiment", type=str, default="pilot_test", help="Experiment name")
     parser.add_argument("--no-strict", action="store_true", help="Disable strict filtering")
     parser.add_argument("--strict-only", action="store_true", help="Use strict-only scoring")
+    parser.add_argument("--experiment-dir", type=str, default="data/experiments/runs/batch_YYYYMMDD_HHMMSS",
+                        help="Batch directory containing a pools/ folder")
     args = parser.parse_args()
 
     run_evaluation(
         args.experiment,
         use_strict_filter=not args.no_strict,
         strict_only=args.strict_only,
+        experiment_dir=args.experiment_dir,
     )

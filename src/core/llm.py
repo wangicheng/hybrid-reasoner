@@ -145,7 +145,7 @@ def parse_query(
             "generated_keywords": {
                 "type": "array", 
                 "items": {"type": "string"},
-                "description": "5-10 specific domain keywords for semantic expansion."
+                "description": "5-10 specific domain keywords for retrieval expansion. If the query mentions genres/tags/tropes, prefer exact allowed tags first, then supporting synonyms."
             },
             "hypothetical_intro": {
                 "type": "string",
@@ -207,11 +207,6 @@ def parse_query(
         },
         "required": ["original_query", "criteria", "search_terms", "generated_keywords", "hypothetical_intro", "reference_books"]
     }
-
-    system_instruction = """
-    You are a web novel recommendation assistant. Your goal is to break down the user's query into scoring criteria.
-    Output a JSON object satisfying the schema.
-    """
     
     full_system_instruction = """
     You are a web novel recommendation assistant. Your goal is to parse user queries into semantic search + optional filters.
@@ -219,6 +214,13 @@ def parse_query(
     ### CORE PRINCIPLE
     - **Primary Method**: Semantic Vector Search (rely on embedding similarity)
     - **Optional Filters**: Only use when user explicitly specifies hard constraints
+
+    ### TAG-FIRST RULE
+    - When the user mentions genres, tags, tropes, themes, or vibe words, map them to the closest tags from `AVAILABLE TAGS` first.
+    - Prefer exact tag names over paraphrases whenever a matching tag exists.
+    - Put those exact tags into `generated_keywords` so the engine can recall them directly.
+    - Keep `search_terms` short and tag-heavy for direct retrieval.
+    - Do not turn an explicit tag request into only broad semantic prose.
     
     ### Available Filter Functions (Database-level filtering, NOT scoring)
     Use these ONLY when user explicitly mentions these constraints:
@@ -242,17 +244,18 @@ def parse_query(
     For ALL other requirements (genre, tags, plot, character traits, style), rely on semantic similarity:
     - **DO NOT use** `keyword_match` - it's deprecated
     - **DO NOT use** `numeric_ranking` - it's deprecated
-    - Use `semantic_similarity` for positive semantic requirements (genre, tags, themes, tropes, etc.)
+    - Use `semantic_similarity` for positive semantic requirements (genre, tags, themes, tropes, etc.), but still surface exact tag names in `generated_keywords` and `search_terms`
     - Use `semantic_similarity` with `is_negative: true` for exclusions
     
     ### IMPORTANT: Tag & Genre Search
-    When user mentions specific tags or genres (e.g., "異世界", "後宮", "奇幻", "搞笑"), you MUST:
+    When user mentions specific tags or genres (e.g., "異世界", "後宮", "奇幻"), you MUST:
     1. Add a `semantic_similarity` criteria with `query_text` containing the tag/genre keywords
-    2. Also include these terms in `search_terms` for direct vector matching
-    3. Example: "找異世界後宮小說" → 
+    2. Also include the closest exact tags in `search_terms` for direct vector matching
+    3. Put the same exact tags into `generated_keywords` so tag recall can happen downstream
+    4. Example: "找異世界後宮小說" → 
        - search_terms: "異世界 後宮 小說"
-       - criteria: semantic_similarity(query_text="異世界轉生 後宮 冒險")
-       - generated_keywords: ["穿越", "轉生", "魔法", "勇者", "冒險者", "女主角"]
+       - criteria: semantic_similarity(query_text="異世界轉生 後宮")
+       - generated_keywords: ["異世界", "後宮", "轉生"]
     
     ### IMPORTANT: `is_negative` Rules
     - Use `is_negative: true` ONLY for explicit EXCLUSIONS
@@ -271,6 +274,8 @@ def parse_query(
     ### TASK 2: Query Expansion (generated_keywords)
     Generate 5-10 specific domain keywords in Traditional Chinese that capture the semantic intent.
     - Focus on genre-specific terms, tropes, themes
+    - If the query contains explicit tags or genres, include the closest exact tags from `AVAILABLE TAGS` first
+    - Treat exact tags as preferred retrieval terms, not just descriptive words
     - Example for "科幻": ["太空", "未來", "科技", "星際", "機器人", "時間旅行"]
     
     ### TASK 3: Hypothetical Document Embeddings (hypothetical_intro)
@@ -296,7 +301,7 @@ def parse_query(
     if tag_list:
         tag_hint = (
             f"\n\n### AVAILABLE TAGS (Method 2)\n"
-            f"Use the following tags for reference when generating keywords:\n"
+            f"Use the following tags as the allowed retrieval vocabulary when generating keywords. Prefer exact tag matches whenever possible:\n"
             f"{', '.join(tag_list)}"
         )
         full_system_instruction += tag_hint
@@ -305,7 +310,7 @@ def parse_query(
         tag_context_hint = (
             "\n\n### TAG DESCRIPTIONS (Experimental Context)\n"
             "Use the following tag descriptions as semantic grounding when interpreting "
-            "and expanding tag-related queries. Do not invent new tags outside the allowed list.\n"
+            "and expanding tag-related queries. Do not invent new tags outside the allowed list, and prefer exact tags from the allowed list whenever they fit.\n"
             f"{tag_context}"
         )
         full_system_instruction += tag_context_hint

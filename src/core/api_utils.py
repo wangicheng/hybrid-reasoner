@@ -53,6 +53,10 @@ def _is_retryable(exc: Exception) -> bool:
     if "503" in error_str or "UNAVAILABLE" in error_str:
         return True
     # Add network-level errors
+    # WinError 10013 is common on Windows when a socket/connect attempt is
+    # rejected by local security or transient network policy.
+    if "[WinError 10013]" in error_str:
+        return True
     if "[WinError 10053]" in error_str:
         return True
     if "[Errno 11001]" in error_str: # getaddrinfo failed

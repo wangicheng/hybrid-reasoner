@@ -132,15 +132,16 @@ class HybridEngine:
         return self._dedupe_terms(terms)
 
     @staticmethod
-    def _normalize_status(target_status: str) -> Optional[str]:
-        lowered = target_status.lower()
+    def _normalize_status(status_value: str) -> Optional[str]:
+        raw_value = str(status_value or "").strip()
+        lowered = raw_value.lower()
         completed_keywords = ["complet", "finish", "ended", "done", "完結", "已完結"]
         ongoing_keywords = ["ongoing", "serializ", "running", "active", "連載", "連載中"]
 
-        if any(keyword in lowered or keyword in target_status for keyword in completed_keywords):
-            return "完結"
-        if any(keyword in lowered or keyword in target_status for keyword in ongoing_keywords):
-            return "連載中"
+        if any(keyword in lowered or keyword in raw_value for keyword in completed_keywords):
+            return "completed"
+        if any(keyword in lowered or keyword in raw_value for keyword in ongoing_keywords):
+            return "ongoing"
         return None
 
 
@@ -268,7 +269,8 @@ class HybridEngine:
                     break
 
             if not excluded and status_filter:
-                if item.get("publish_status", "") != status_filter:
+                item_status = self._normalize_status(item.get("publish_status", ""))
+                if item_status != status_filter:
                     excluded = True
 
             if not excluded and author_filter:
