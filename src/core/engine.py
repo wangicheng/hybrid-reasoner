@@ -300,6 +300,7 @@ class HybridEngine:
         limit: int = 5,
         model_id: Optional[str] = None,
         explain: bool = True,
+        cache_namespace: Optional[str] = None,
     ) -> Dict[str, Any]:
         if self.all_tags_cache:
             print(
@@ -312,6 +313,7 @@ class HybridEngine:
         parse_result = parse_query(
             user_query,
             model_id=model_id,
+            cache_namespace=cache_namespace,
             tag_list=self.all_tags_cache,
             tag_context=self.tag_context_cache if self.use_tag_descriptions else None,
             reference_book_context=related_book_context,

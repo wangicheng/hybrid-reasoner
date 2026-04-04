@@ -3,7 +3,7 @@ API Utilities: Rate Limiting & Retry Logic for Google GenAI calls.
 
 Provides:
 - RateLimiter: enforces a minimum interval between API calls (shared across all callers).
-- retry_on_rate_limit: decorator that retries on 429/503 errors with exponential backoff.
+- retry_on_rate_limit: decorator that retries on 429/503 errors with a fixed retry interval.
 """
 
 import os
@@ -78,12 +78,12 @@ def _extract_retry_delay(exc: Exception) -> float | None:
 def retry_on_rate_limit(max_retries: int = 5, base_delay: float = 5.0, max_delay: float = 120.0):
     """
     Decorator that retries a function on retryable GenAI errors.
-    Uses exponential backoff, respecting server-suggested delays when available.
+    Uses a fixed retry interval between attempts.
 
     Args:
         max_retries: Maximum number of retry attempts.
-        base_delay: Initial delay in seconds for exponential backoff.
-        max_delay: Maximum delay cap in seconds.
+        base_delay: Delay in seconds between retry attempts.
+        max_delay: Unused legacy parameter retained for compatibility.
     """
     def decorator(func):
         @functools.wraps(func)
@@ -105,12 +105,9 @@ def retry_on_rate_limit(max_retries: int = 5, base_delay: float = 5.0, max_delay
                         print(f"[api_utils] All {max_retries} retries exhausted for {func.__name__}. Giving up.")
                         raise
 
-                    # Calculate delay: prefer server-suggested, otherwise exponential backoff
-                    server_delay = _extract_retry_delay(e)
-                    if server_delay is not None:
-                        delay = min(server_delay + 1.0, max_delay)  # Add 1s buffer
-                    else:
-                        delay = min(base_delay * (2 ** attempt), max_delay)
+                    # Use a fixed retry interval to keep retries predictable.
+                    _ = max_delay
+                    delay = base_delay
 
                     print(f"[api_utils] {func.__name__} attempt {attempt + 1}/{max_retries} failed "
                           f"(retryable). Retrying in {delay:.1f}s...")

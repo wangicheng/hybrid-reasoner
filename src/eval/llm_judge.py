@@ -21,7 +21,7 @@ from typing import List, Dict, Any, Optional
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from src.core.api_utils import retry_on_rate_limit, _is_retryable, get_current_api_key
+from src.core.api_utils import _is_retryable, get_api_key_rotator, get_current_api_key, get_rate_limiter
 
 # Load environment variables from .env file
 load_dotenv()
@@ -106,6 +106,23 @@ class LLMJudge:
             "required": ["reasoning", "score"]
         }
 
+    @staticmethod
+    def _retry_delay_seconds(
+        attempt: int,
+        base_delay: float = 5.0,
+        max_delay: float = 120.0,
+    ) -> float:
+        """Use a fixed retry interval so judge retries stay predictable."""
+        _ = attempt, max_delay
+        return base_delay
+
+    def _rotate_api_key(self) -> None:
+        """Rotate to the next configured API key and rebuild the GenAI client."""
+        rotator = get_api_key_rotator()
+        new_key = rotator.on_rate_limit_error()
+        self.client = genai.Client(api_key=new_key)
+        print(f"  [judge] API key rotated. Current index: {rotator.current_index}")
+
     def judge_single(self, query: str, title: str, tags: str, intro: str) -> Dict[str, Any]:
         """
         對單一 Query-Book pair 進行評分。
@@ -137,53 +154,69 @@ class LLMJudge:
     def _call_llm(self, model_id: str, user_prompt: str) -> Dict[str, Any]:
         """呼叫 LLM 進行評分 (含 retry 機制)"""
 
-        @retry_on_rate_limit(max_retries=3, base_delay=5.0)
-        def _do_generate():
-            is_gemma = "gemma" in model_id.lower()
+        attempt = 0
 
-            if is_gemma:
+        while True:
+            try:
+                get_rate_limiter().wait()
+                is_gemma = "gemma" in model_id.lower()
+
+                if is_gemma:
                 # Gemma 不支援 structured output
-                config_args = {}
-                final_contents = (
+                    config_args = {}
+                    final_contents = (
                     f"{SYSTEM_PROMPT}\n\n"
                     f"{user_prompt}\n\n"
                     "IMPORTANT: Output ONLY valid JSON with keys 'reasoning' (string) and 'score' (integer 0-3) in that order. No markdown."
                 )
-            else:
-                config_args = {
+                else:
+                    config_args = {
                     "response_mime_type": "application/json",
                     "response_schema": self.response_schema,
                     "system_instruction": SYSTEM_PROMPT,
                 }
-                final_contents = user_prompt
+                    final_contents = user_prompt
 
-            response = self.client.models.generate_content(
+                response = self.client.models.generate_content(
                 model=model_id,
                 contents=final_contents,
                 config=types.GenerateContentConfig(**config_args)
             )
 
-            if not response.text:
-                raise ValueError("Empty response from LLM")
+                if not response.text:
+                    raise ValueError("Empty response from LLM")
 
-            raw_text = response.text.strip()
+                raw_text = response.text.strip()
             # Strip markdown code fence if present
-            raw_text = re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
-            raw_text = re.sub(r"\n?```\s*$", "", raw_text)
-            raw_text = raw_text.strip()
+                raw_text = re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
+                raw_text = re.sub(r"\n?```\s*$", "", raw_text)
+                raw_text = raw_text.strip()
 
-            parsed = json.loads(raw_text)
+                parsed = json.loads(raw_text)
 
             # Validate score range
-            score = int(parsed.get("score", 0))
-            score = max(0, min(3, score))  # Clamp to 0-3
+                score = int(parsed.get("score", 0))
+                score = max(0, min(3, score))  # Clamp to 0-3
 
-            return {
-                "score": score,
-                "reasoning": parsed.get("reasoning", "")
-            }
+                return {
+                    "score": score,
+                    "reasoning": parsed.get("reasoning", "")
+                }
+            except Exception as exc:
+                if not _is_retryable(exc):
+                    raise
 
-        return _do_generate()
+                attempt += 1
+                error_str = str(exc)
+                is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                if is_rate_limit:
+                    self._rotate_api_key()
+                delay = self._retry_delay_seconds(attempt)
+                print(
+                    f"  [judge] Model {model_id} hit a retryable error: {exc}. "
+                    f"Retrying in {delay:.1f}s (attempt {attempt})..."
+                )
+                time.sleep(delay)
 
 
 # ============================================================
@@ -293,6 +326,12 @@ def save_annotated_csv(tasks: List[Dict[str, Any]], csv_path: str):
 
 
 def _resolve_pools_dir(base_dir: Path) -> Path:
+    if base_dir.name == "pools":
+        return base_dir
+
+    if list(base_dir.glob("*_blind.csv")) or list(base_dir.glob("*_truth.json")):
+        return base_dir
+
     return base_dir / "pools"
 
 
@@ -419,7 +458,12 @@ if __name__ == "__main__":
                         help=f"指定 LLM 模型 (預設: {JUDGE_MODELS[0]})")
     parser.add_argument("--batch-size", type=int, default=10,
                         help="每幾筆儲存一次進度 (預設: 10)")
-    parser.add_argument("--experiment-dir", type=str, default="data/experiments/runs/batch_YYYYMMDD_HHMMSS")
+    parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        default="data/experiments/pools",
+        help="Directory containing pool files, or a batch directory containing a pools/ folder",
+    )
     args = parser.parse_args()
 
     run_judge(

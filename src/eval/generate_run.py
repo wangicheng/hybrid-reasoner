@@ -48,36 +48,40 @@ class RunGenerator:
         self,
         engine: HybridEngine,
         query: str,
+        cache_namespace: Optional[str] = None,
     ) -> Dict[str, Any]:
         return await engine.search(
             query,
             limit=self.k,
             model_id=self.model_id,
             explain=False,
+            cache_namespace=cache_namespace,
         )
 
     @staticmethod
     def _retry_delay_seconds(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
-        """Calculate a bounded exponential backoff delay for retryable query failures."""
-        return min(base_delay * (2 ** max(0, attempt - 1)), max_delay)
+        """Use a fixed retry interval for retryable query failures."""
+        _ = attempt, max_delay
+        return base_delay
 
     def _search_with_retry(
         self,
         engine: HybridEngine,
         query: str,
         q_id: str,
+        cache_namespace: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run a single query until it succeeds.
 
         Retryable socket / connectivity failures are retried forever with
-        exponential backoff. Non-retryable exceptions still bubble up to the
+        a fixed interval. Non-retryable exceptions still bubble up to the
         caller so they can be recorded as a real query failure.
         """
         attempt = 0
         while True:
             try:
-                return asyncio.run(self._search_once(engine, query))
+                return asyncio.run(self._search_once(engine, query, cache_namespace=cache_namespace))
             except Exception as exc:
                 if not _is_retryable(exc):
                     raise
@@ -163,7 +167,12 @@ class RunGenerator:
                 print(f"   - Processing query: {query[:30]}...")
 
                 try:
-                    response = self._search_with_retry(engine, query, q_id)
+                    response = self._search_with_retry(
+                        engine,
+                        query,
+                        q_id,
+                        cache_namespace=run_suffix or engine_name,
+                    )
                     results = response.get("results", [])
                     parsed_criteria = response.get("parsed_criteria", [])
                     extracted_results = []
@@ -287,8 +296,8 @@ if __name__ == "__main__":
                     queries_config=sample_queries,
                     engine_name=exp["name"],
                     output_dir=output_folder,
-                    semantic_weight=0.0,
-                    attribute_weight=1.0,
+                    semantic_weight=0.4,
+                    attribute_weight=0.6,
                     use_tag_descriptions=exp["use_tag_descriptions"],
                     embed_generated_keywords=exp["embed_generated_keywords"],
                     run_suffix=run_suffix,

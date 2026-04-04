@@ -115,9 +115,11 @@ from typing import Any, Dict, List, Optional, Tuple
 def parse_query(
     user_query: str,
     model_id: Optional[str] = None,
+    cache_namespace: Optional[str] = None,
     tag_list: Optional[Tuple[str, ...]] = None,
     tag_context: Optional[str] = None,
     reference_book_context: Optional[str] = None,
+    sampling_temperature: float = 0.2,
 ) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
@@ -347,7 +349,10 @@ def parse_query(
                     final_prompt = f"User Query: {user_query}"
                     
                     if is_gemma:
-                        config_args = {}
+                        config_args = {
+                            "temperature": sampling_temperature,
+                            "top_p": 0.95,
+                        }
                         final_contents = (
                             f"{full_system_instruction}\n\n"
                             f"Task: Parse this query:\n{final_prompt}\n\n"
@@ -358,6 +363,8 @@ def parse_query(
                             "response_mime_type": "application/json",
                             "response_schema": manual_schema,
                             "system_instruction": full_system_instruction,
+                            "temperature": sampling_temperature,
+                            "top_p": 0.95,
                         }
                         final_contents = final_prompt
 
