@@ -6,6 +6,7 @@ from src.core.book_matcher import BookMatcher
 from src.core.database import Database
 from src.core.explainer import generate_explanation
 from src.core.llm import parse_query
+from src.core.query_synonym_normalizer import normalize_query_after_book_lookup
 from src.core.vector_store import VectorStore
 from src.core.tag_context import build_tag_context_text, load_tag_descriptions
 
@@ -310,8 +311,12 @@ class HybridEngine:
         related_books = self.book_matcher.extract_related_books(user_query)
         related_book_context = self.book_matcher.build_related_book_context(related_books)
 
+        normalized_query, query_replacements = normalize_query_after_book_lookup(user_query)
+        if query_replacements:
+            print(f"[SynonymNormalize] Added {len(query_replacements)} canonical hints: {query_replacements}")
+
         parse_result = parse_query(
-            user_query,
+            normalized_query,
             model_id=model_id,
             cache_namespace=cache_namespace,
             tag_list=self.all_tags_cache,
