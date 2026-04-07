@@ -258,24 +258,9 @@ if __name__ == "__main__":
 
     EXPERIMENTS = [
         {
-            "name": "exp_td_on_embed_on",
-            "use_tag_descriptions": True,
-            "embed_generated_keywords": True,
-        },
-        {
-            "name": "exp_td_on_embed_off",
-            "use_tag_descriptions": True,
-            "embed_generated_keywords": False,
-        },
-        {
             "name": "exp_td_off_embed_on",
             "use_tag_descriptions": False,
             "embed_generated_keywords": True,
-        },
-        {
-            "name": "exp_td_off_embed_off",
-            "use_tag_descriptions": False,
-            "embed_generated_keywords": False,
         },
     ]
 

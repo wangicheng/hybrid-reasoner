@@ -135,90 +135,11 @@ def _resolve_pools_dir(base_dir: Path) -> Path:
     return base_dir / "pools"
 
 
-def run_evaluation(
-    experiment_name: str,
-    use_strict_filter: bool = True,
-    strict_only: bool = False,
-    experiment_dir: str = "data/experiments/pools",
+def _print_mode_summary(
+    mode_name: str,
+    engine_query_quality: Dict[str, List[Dict[str, float]]],
+    show_detail: bool = True,
 ) -> None:
-    strict_mode = use_strict_filter or strict_only
-    base_dir = Path(experiment_dir)
-    pools_dir = _resolve_pools_dir(base_dir)
-    blind_csv = pools_dir / f"{experiment_name}_blind.csv"
-    annotated_csv = pools_dir / f"{experiment_name}_annotated.csv"
-    truth_json = pools_dir / f"{experiment_name}_truth.json"
-
-    if not truth_json.exists():
-        raise FileNotFoundError(f"Missing truth file: {truth_json}")
-    if not blind_csv.exists():
-        raise FileNotFoundError(f"Missing blind file: {blind_csv}")
-    if not strict_only and not annotated_csv.exists():
-        raise FileNotFoundError(f"Missing annotated file: {annotated_csv}")
-
-    with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
-        queries_config = json.load(f)
-    golden_rules_map = {item["query"]: item.get("golden_rules", {}) for item in queries_config}
-
-    books_data = _load_books_metadata(Path("data/books_crawled.json"))
-    books_data.update(_load_pool_metadata(blind_csv))
-
-    with open(truth_json, "r", encoding="utf-8") as f:
-        truth_data = json.load(f)
-
-    annotations: Dict[str, Dict[str, float]] = {}
-    if not strict_only:
-        with annotated_csv.open("r", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                query = row["Query"]
-                book_id = row["Book ID"]
-                try:
-                    score = float(row["Score (0-3)"])
-                except ValueError:
-                    score = 0.0
-
-                annotations.setdefault(query, {})[book_id] = score
-
-                if str(book_id) not in books_data:
-                    books_data[str(book_id)] = _build_fallback_book(row)
-    elif annotated_csv.exists():
-        print(f"Strict-only mode: skipping annotated CSV at {annotated_csv}")
-
-    engine_query_quality = defaultdict(list)
-
-    for truth_entry in truth_data:
-        query = truth_entry["query"]
-        candidates = truth_entry["candidates"]
-
-        engine_results = defaultdict(list)
-
-        for cand in candidates:
-            book_id = str(cand["book_id"])
-            base_score = annotations.get(query, {}).get(book_id, 0.0)
-            score = _resolve_candidate_score(
-                query=query,
-                book_id=book_id,
-                base_score=base_score,
-                books_data=books_data,
-                golden_rules_map=golden_rules_map,
-                use_strict_filter=strict_mode,
-                strict_only=strict_only,
-            )
-
-            for engine_name, _rank in cand["original_ranks"].items():
-                engine_results[engine_name].append(score)
-
-        for engine_name, scores in engine_results.items():
-            quality = calculate_set_quality(scores)
-            engine_query_quality[engine_name].append(quality)
-
-    print("\n" + "=" * 40)
-    print("Experiment Evaluation")
-    print("=" * 40)
-    print(f"Experiment: {experiment_name}")
-    print(f"Score mode: {'strict-only' if strict_only else ('strict' if strict_mode else 'llm-only')}")
-    print("-" * 40)
-
     summary = []
     for engine_name, query_scores in engine_query_quality.items():
         if query_scores:
@@ -234,13 +155,18 @@ def run_evaluation(
         summary.append((engine_name, avg_score, good_rate, strong_rate, best_score))
 
     summary.sort(key=lambda x: x[1], reverse=True)
-    for engine_name, avg_score, good_rate, strong_rate, best_score in summary:
-        print(
-            f"  {engine_name:20s} | Avg@10: {avg_score:.4f}"
-            f" | Good@10: {good_rate:.1%}"
-            f" | Strong@10: {strong_rate:.1%}"
-            f" | Best@10: {best_score:.4f}"
-        )
+
+    if show_detail:
+        print("\n" + "-" * 40)
+        print(f"{mode_name} Summary")
+        print("-" * 40)
+        for engine_name, avg_score, good_rate, strong_rate, best_score in summary:
+            print(
+                f"  {engine_name:20s} | Avg@10: {avg_score:.4f}"
+                f" | Good@10: {good_rate:.1%}"
+                f" | Strong@10: {strong_rate:.1%}"
+                f" | Best@10: {best_score:.4f}"
+            )
 
     family_summary = defaultdict(list)
     for engine_name, avg_score, good_rate, strong_rate, best_score in summary:
@@ -256,21 +182,124 @@ def run_evaluation(
 
     repeated_families = {family: runs for family, runs in family_summary.items() if len(runs) > 1}
     if repeated_families:
-        print("\n" + "-" * 40)
-        print("Grouped Summary")
-        print("-" * 40)
-        for family, runs in sorted(repeated_families.items(), key=lambda item: _mean([r["avg_score"] for r in item[1]]), reverse=True):
+        if show_detail:
+            print("\n" + "-" * 40)
+            print(f"{mode_name} Grouped Summary")
+            print("-" * 40)
+        else:
+            print(mode_name)
+
+        for family, runs in sorted(
+            repeated_families.items(),
+            key=lambda item: _mean([r["avg_score"] for r in item[1]]),
+            reverse=True,
+        ):
             avg_scores = [item["avg_score"] for item in runs]
             good_rates = [item["good_rate"] for item in runs]
             strong_rates = [item["strong_rate"] for item in runs]
             best_scores = [item["best_score"] for item in runs]
-            print(
-                f"  {family:20s} | Avg@10: {_mean(avg_scores):.4f} ± {_stdev(avg_scores):.4f}"
-                f" | Good@10: {_mean(good_rates):.1%} ± {_stdev(good_rates):.1%}"
-                f" | Strong@10: {_mean(strong_rates):.1%} ± {_stdev(strong_rates):.1%}"
-                f" | Best@10: {_mean(best_scores):.4f} ± {_stdev(best_scores):.4f}"
-                f" | Runs: {len(runs)}"
-            )
+            if show_detail:
+                print(
+                    f"  {family:20s} | Avg@10: {_mean(avg_scores):.4f} +/- {_stdev(avg_scores):.4f}"
+                    f" | Good@10: {_mean(good_rates):.1%} +/- {_stdev(good_rates):.1%}"
+                    f" | Strong@10: {_mean(strong_rates):.1%} +/- {_stdev(strong_rates):.1%}"
+                    f" | Best@10: {_mean(best_scores):.4f} +/- {_stdev(best_scores):.4f}"
+                    f" | Runs: {len(runs)}"
+                )
+            else:
+                print(
+                    f"  {family:20s} | Avg {_mean(avg_scores):.4f}+/-{_stdev(avg_scores):.4f}"
+                    f" | Good {_mean(good_rates):.1%}+/-{_stdev(good_rates):.1%}"
+                    f" | Strong {_mean(strong_rates):.1%}+/-{_stdev(strong_rates):.1%}"
+                )
+    elif not show_detail:
+        print(f"{mode_name}\n  (No grouped runs)")
+
+
+def run_evaluation(
+    experiment_name: str,
+    experiment_dir: str = "data/experiments/pools",
+    group_only: bool = False,
+) -> None:
+    base_dir = Path(experiment_dir)
+    pools_dir = _resolve_pools_dir(base_dir)
+    blind_csv = pools_dir / f"{experiment_name}_blind.csv"
+    annotated_csv = pools_dir / f"{experiment_name}_annotated.csv"
+    truth_json = pools_dir / f"{experiment_name}_truth.json"
+
+    if not truth_json.exists():
+        raise FileNotFoundError(f"Missing truth file: {truth_json}")
+    if not blind_csv.exists():
+        raise FileNotFoundError(f"Missing blind file: {blind_csv}")
+    if not annotated_csv.exists():
+        raise FileNotFoundError(f"Missing annotated file: {annotated_csv}")
+
+    with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
+        queries_config = json.load(f)
+    golden_rules_map = {item["query"]: item.get("golden_rules", {}) for item in queries_config}
+
+    books_data = _load_books_metadata(Path("data/books_crawled.json"))
+    books_data.update(_load_pool_metadata(blind_csv))
+
+    with open(truth_json, "r", encoding="utf-8") as f:
+        truth_data = json.load(f)
+
+    annotations: Dict[str, Dict[str, float]] = {}
+    with annotated_csv.open("r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            query = row["Query"]
+            book_id = row["Book ID"]
+            try:
+                score = float(row["Score (0-3)"])
+            except ValueError:
+                score = 0.0
+
+            annotations.setdefault(query, {})[book_id] = score
+
+            if str(book_id) not in books_data:
+                books_data[str(book_id)] = _build_fallback_book(row)
+
+    print("\n" + "=" * 40)
+    print("Experiment Evaluation")
+    print("=" * 40)
+    print(f"Experiment: {experiment_name}")
+
+    modes = [
+        ("no-strict", False, False),
+        ("strict-only", True, True),
+    ]
+    for mode_name, use_strict_filter, strict_only in modes:
+        engine_query_quality = defaultdict(list)
+
+        for truth_entry in truth_data:
+            query = truth_entry["query"]
+            candidates = truth_entry["candidates"]
+
+            engine_results = defaultdict(list)
+
+            for cand in candidates:
+                book_id = str(cand["book_id"])
+                base_score = annotations.get(query, {}).get(book_id, 0.0)
+                score = _resolve_candidate_score(
+                    query=query,
+                    book_id=book_id,
+                    base_score=base_score,
+                    books_data=books_data,
+                    golden_rules_map=golden_rules_map,
+                    use_strict_filter=use_strict_filter,
+                    strict_only=strict_only,
+                )
+
+                for engine_name, _rank in cand["original_ranks"].items():
+                    engine_results[engine_name].append(score)
+
+            for engine_name, scores in engine_results.items():
+                quality = calculate_set_quality(scores)
+                engine_query_quality[engine_name].append(quality)
+
+        _print_mode_summary(mode_name, engine_query_quality, show_detail=not group_only)
+
     print("=" * 40 + "\n")
 
 
@@ -279,15 +308,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run Evaluation Metrics")
     parser.add_argument("--experiment", type=str, default="pilot_test", help="Experiment name")
-    parser.add_argument("--no-strict", action="store_true", help="Disable strict filtering")
-    parser.add_argument("--strict-only", action="store_true", help="Use strict-only scoring")
-    parser.add_argument("--experiment-dir", type=str, default="data/experiments/runs/batch_YYYYMMDD_HHMMSS",
-                        help="Batch directory containing a pools/ folder")
+    parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        default="data/experiments/runs/batch_YYYYMMDD_HHMMSS",
+        help="Batch directory containing a pools/ folder",
+    )
+    parser.add_argument(
+        "--group-only",
+        action="store_true",
+        help="Only show grouped summary output",
+    )
     args = parser.parse_args()
 
-    run_evaluation(
-        args.experiment,
-        use_strict_filter=not args.no_strict,
-        strict_only=args.strict_only,
-        experiment_dir=args.experiment_dir,
-    )
+    run_evaluation(args.experiment, experiment_dir=args.experiment_dir, group_only=args.group_only)

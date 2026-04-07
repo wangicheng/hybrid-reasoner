@@ -1,7 +1,7 @@
 import os
 import json
 import functools
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from google import genai
 from google.genai import types
 from src.models.schemas import QueryParseResult
@@ -107,9 +107,6 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
     
     final_result["criteria"] = valid_criteria
     return final_result
-
-
-from typing import Any, Dict, List, Optional, Tuple
 
 @functools.lru_cache(maxsize=1000)
 def parse_query(
