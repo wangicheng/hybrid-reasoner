@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 from src.core.database import Database
 from src.core.engine import HybridEngine
 from src.core.api_utils import _is_retryable
-from src.core.llm import parse_query
 from src.core.vector_store import VectorStore
 
 
@@ -115,7 +114,6 @@ class RunGenerator:
             if embed_generated_keywords is None
             else embed_generated_keywords
         )
-
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
@@ -175,6 +173,7 @@ class RunGenerator:
                     )
                     results = response.get("results", [])
                     parsed_criteria = response.get("parsed_criteria", [])
+                    parse_metadata = response.get("parse_metadata", {})
                     extracted_results = []
 
                     for rank, res in enumerate(results):
@@ -201,6 +200,7 @@ class RunGenerator:
                         {
                             "query_id": q_id,
                             "query": query,
+                            "parse_metadata": parse_metadata,
                             "parsed_criteria": parsed_criteria,
                             "results": extracted_results,
                         }
@@ -256,15 +256,18 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
-    EXPERIMENTS = [
-        {
-            "name": "exp_td_off_embed_on",
-            "use_tag_descriptions": False,
-            "embed_generated_keywords": True,
-        },
-    ]
+    base_experiment = {
+        "use_tag_descriptions": False,
+        "embed_generated_keywords": True,
+    }
 
     generator = RunGenerator(k_per_engine=10)
+    experiments = [
+        {
+            **base_experiment,
+            "name": "parallel_ctx",
+        }
+    ]
 
     repeats = max(1, args.repeats)
     output_root = Path(args.experiment_dir)
@@ -275,7 +278,7 @@ if __name__ == "__main__":
     for repeat_index in range(1, repeats + 1):
         run_suffix = f"_run{repeat_index:02d}" if repeats > 1 else ""
         print(f"\n=== Trial {repeat_index}/{repeats} ===")
-        for exp in EXPERIMENTS:
+        for exp in experiments:
             try:
                 generator.generate_run(
                     queries_config=sample_queries,

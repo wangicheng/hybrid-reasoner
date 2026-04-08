@@ -122,6 +122,31 @@ class HybridEngine:
             deduped.append(normalized)
         return deduped
 
+    @staticmethod
+    def _extract_recall_tags(
+        tag_mapping_weights: List[Dict[str, float]],
+        min_score: float = 0.7,
+        max_tags_per_term: int = 3,
+    ) -> List[str]:
+        recall_tags: List[str] = []
+        seen = set()
+
+        for mapping in tag_mapping_weights:
+            ranked = sorted(mapping.items(), key=lambda item: item[1], reverse=True)
+            accepted = 0
+            for tag_name, score in ranked:
+                if score < min_score:
+                    continue
+                if tag_name in seen:
+                    continue
+                seen.add(tag_name)
+                recall_tags.append(tag_name)
+                accepted += 1
+                if accepted >= max_tags_per_term:
+                    break
+
+        return recall_tags
+
     def _build_tag_terms_list(
         self,
         generated_keywords: List[str],
@@ -338,9 +363,11 @@ class HybridEngine:
             and not getattr(criteria, "is_negative", False)
         ]
         semantic_texts = []
+        normalized_base_terms = "".join(str(base_terms).split()).lower()
         for criteria in positive_semantic:
             query_text = self._criteria_params(criteria).get("query_text", "").strip()
-            if query_text:
+            normalized_query_text = "".join(query_text.split()).lower()
+            if query_text and normalized_query_text != normalized_base_terms:
                 semantic_texts.append(query_text)
         if semantic_texts:
             semantic_expansion = " ".join(semantic_texts)
@@ -367,24 +394,19 @@ class HybridEngine:
             payload_map[book_id] = payload
             vector_score_map[book_id] = float(hit["score"])
 
-        if tag_terms_list:
-            print(f"[Engine] Triggering mapped-tag recall for {len(tag_terms_list)} terms.")
-            tag_queries = [f"tag: {term}" for term in tag_terms_list]
-            tag_results = self.vs.search_individual(
-                tag_queries,
-                limit=retrieval_limit,
-                collection_name="novel_tags",
-            )
-            for hit in tag_results:
-                payload = hit.get("payload") or {}
-                book_id = payload.get("id", hit.get("id"))
-                if book_id is None:
-                    continue
-                book_id = str(book_id)
-                if book_id not in candidates_map:
-                    candidates_map[book_id] = payload
-                    payload_map[book_id] = payload
-                    vector_score_map[book_id] = 0.0
+        if tag_terms_list and tag_mapping_weights:
+            recall_tags = self._extract_recall_tags(tag_mapping_weights)
+            if recall_tags:
+                print(f"[Engine] Triggering mapped-tag recall for {len(recall_tags)} resolved tags.")
+                tag_recall_items = self.db.search_by_tags_any(recall_tags, limit=retrieval_limit)
+                for item in tag_recall_items:
+                    book_id = str(item.get("id", "")).strip()
+                    if not book_id:
+                        continue
+                    if book_id not in candidates_map:
+                        candidates_map[book_id] = item
+                        payload_map[book_id] = item
+                        vector_score_map[book_id] = 0.0
 
         candidates: List[Dict[str, Any]] = []
         for book_id, item in candidates_map.items():
@@ -395,6 +417,15 @@ class HybridEngine:
                     candidates_map[book_id] = item
             if "id" not in item or not item["id"]:
                 item["id"] = book_id
+            has_minimum_metadata = bool(
+                str(item.get("name", "")).strip()
+                or str(item.get("intro", "")).strip()
+                or item.get("words_total")
+                or item.get("tags")
+                or str(item.get("classification", "")).strip()
+            )
+            if not has_minimum_metadata:
+                continue
             candidates.append(item)
 
         print(f"[Engine] Candidate pool size: {len(candidates)}")
@@ -467,6 +498,7 @@ class HybridEngine:
                 "engine": "HybridEngine",
                 "related_books": related_books,
                 "reference_tags": [],
+                "parse_metadata": parse_result.parse_metadata,
             }
 
         final_results = scored_items[:limit]
@@ -511,6 +543,7 @@ class HybridEngine:
             "hypothetical_intro": parse_result.hypothetical_intro,
             "related_books": related_books,
             "reference_tags": [],
+            "parse_metadata": parse_result.parse_metadata,
             "query_vector": query_vector,
             "results": final_results,
             "engine": "HybridEngine",

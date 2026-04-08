@@ -231,3 +231,31 @@ class Database:
             d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
             items.append(d)
         return items
+
+    def search_by_tags_any(self, tags: List[str], limit: int = 10000) -> List[Dict[str, Any]]:
+        normalized_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+        if not normalized_tags:
+            return []
+
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        clauses = []
+        params: List[Any] = []
+        for tag in normalized_tags:
+            clauses.append("tags LIKE ?")
+            params.append(f'%"{tag}"%')
+
+        sql = f"SELECT * FROM novels WHERE {' OR '.join(clauses)} LIMIT ?"
+        params.append(limit)
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        items = []
+        for row in rows:
+            d = dict(row)
+            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
+            items.append(d)
+        return items

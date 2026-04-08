@@ -46,7 +46,6 @@ class BookMatcher:
         self,
         user_query: str,
         search_terms: str = "",
-        reference_books: Optional[List[str]] = None,
     ) -> List[str]:
         """Backward-compatible wrapper.
 
