@@ -6,6 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
 
+from src.eval.paths import resolve_annotation_input_path, resolve_pools_dir
 from src.eval.tag_rules import apply_hard_filters, score_required_tags
 
 
@@ -131,10 +132,6 @@ def _stdev(values: List[float]) -> float:
     return statistics.stdev(values) if len(values) > 1 else 0.0
 
 
-def _resolve_pools_dir(base_dir: Path) -> Path:
-    return base_dir / "pools"
-
-
 def _print_mode_summary(
     mode_name: str,
     engine_query_quality: Dict[str, List[Dict[str, float]]],
@@ -180,8 +177,11 @@ def _print_mode_summary(
             }
         )
 
-    repeated_families = {family: runs for family, runs in family_summary.items() if len(runs) > 1}
-    if repeated_families:
+    grouped_families = dict(family_summary)
+    repeated_families = {family: runs for family, runs in grouped_families.items() if len(runs) > 1}
+    families_to_print = grouped_families if not show_detail else repeated_families
+
+    if families_to_print:
         if show_detail:
             print("\n" + "-" * 40)
             print(f"{mode_name} Grouped Summary")
@@ -190,7 +190,7 @@ def _print_mode_summary(
             print(mode_name)
 
         for family, runs in sorted(
-            repeated_families.items(),
+            families_to_print.items(),
             key=lambda item: _mean([r["avg_score"] for r in item[1]]),
             reverse=True,
         ):
@@ -211,6 +211,7 @@ def _print_mode_summary(
                     f"  {family:20s} | Avg {_mean(avg_scores):.4f}+/-{_stdev(avg_scores):.4f}"
                     f" | Good {_mean(good_rates):.1%}+/-{_stdev(good_rates):.1%}"
                     f" | Strong {_mean(strong_rates):.1%}+/-{_stdev(strong_rates):.1%}"
+                    f" | Runs {len(runs)}"
                 )
     elif not show_detail:
         print(f"{mode_name}\n  (No grouped runs)")
@@ -219,12 +220,17 @@ def _print_mode_summary(
 def run_evaluation(
     experiment_name: str,
     experiment_dir: str = "data/experiments/pools",
+    annotations_dir: str = "data/experiments/annotations",
     group_only: bool = False,
 ) -> None:
     base_dir = Path(experiment_dir)
-    pools_dir = _resolve_pools_dir(base_dir)
+    pools_dir = resolve_pools_dir(base_dir)
     blind_csv = pools_dir / f"{experiment_name}_blind.csv"
-    annotated_csv = pools_dir / f"{experiment_name}_annotated.csv"
+    annotated_csv = resolve_annotation_input_path(
+        experiment_name=experiment_name,
+        pools_dir=pools_dir,
+        annotations_dir=annotations_dir,
+    )
     truth_json = pools_dir / f"{experiment_name}_truth.json"
 
     if not truth_json.exists():
@@ -315,10 +321,21 @@ if __name__ == "__main__":
         help="Batch directory containing a pools/ folder",
     )
     parser.add_argument(
+        "--annotations-dir",
+        type=str,
+        default="data/experiments/annotations",
+        help="Shared directory for reusable LLM judge annotations",
+    )
+    parser.add_argument(
         "--group-only",
         action="store_true",
         help="Only show grouped summary output",
     )
     args = parser.parse_args()
 
-    run_evaluation(args.experiment, experiment_dir=args.experiment_dir, group_only=args.group_only)
+    run_evaluation(
+        args.experiment,
+        experiment_dir=args.experiment_dir,
+        annotations_dir=args.annotations_dir,
+        group_only=args.group_only,
+    )

@@ -20,11 +20,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 class RunGenerator:
     """
-    Generate experiment runs for the tag-description-context ablation.
-
-    The generator can switch between:
-    - using tag descriptions in the LLM prompt
-    - embedding or skipping LLM-generated keywords
+    Generate experiment runs for the fixed production retrieval path.
 
     This script keeps the run file format compatible with merge_and_pool.py:
     a JSON array of per-query result objects.
@@ -33,13 +29,9 @@ class RunGenerator:
     def __init__(
         self,
         k_per_engine: int = 10,
-        use_tag_descriptions: bool = True,
-        embed_generated_keywords: bool = True,
         model_id: Optional[str] = None,
     ) -> None:
         self.k = k_per_engine
-        self.use_tag_descriptions = use_tag_descriptions
-        self.embed_generated_keywords = embed_generated_keywords
         self.model_id = model_id
         self.db = Database()
 
@@ -100,25 +92,12 @@ class RunGenerator:
         output_dir: Path,
         semantic_weight: float = 0.3,
         attribute_weight: float = 0.7,
-        use_tag_descriptions: Optional[bool] = None,
-        embed_generated_keywords: Optional[bool] = None,
         run_suffix: str = "",
     ) -> None:
-        resolved_use_tag_descriptions = (
-            self.use_tag_descriptions
-            if use_tag_descriptions is None
-            else use_tag_descriptions
-        )
-        resolved_embed_generated_keywords = (
-            self.embed_generated_keywords
-            if embed_generated_keywords is None
-            else embed_generated_keywords
-        )
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
-            f"tag_descriptions={resolved_use_tag_descriptions}, "
-            f"embed_generated_keywords={resolved_embed_generated_keywords}, "
+            "fixed retrieval path, "
             f"run_suffix={run_suffix or 'none'})"
         )
 
@@ -128,8 +107,6 @@ class RunGenerator:
             vs=vs,
             semantic_weight=semantic_weight,
             attribute_weight=attribute_weight,
-            use_tag_descriptions=resolved_use_tag_descriptions,
-            embed_generated_keywords=resolved_embed_generated_keywords,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -256,16 +233,10 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
-    base_experiment = {
-        "use_tag_descriptions": False,
-        "embed_generated_keywords": True,
-    }
-
     generator = RunGenerator(k_per_engine=10)
     experiments = [
         {
-            **base_experiment,
-            "name": "parallel_ctx",
+            "name": "best",
         }
     ]
 
@@ -286,8 +257,6 @@ if __name__ == "__main__":
                     output_dir=output_folder,
                     semantic_weight=0.4,
                     attribute_weight=0.6,
-                    use_tag_descriptions=exp["use_tag_descriptions"],
-                    embed_generated_keywords=exp["embed_generated_keywords"],
                     run_suffix=run_suffix,
                 )
             except Exception as exc:
@@ -299,4 +268,4 @@ if __name__ == "__main__":
             f"python -m src.eval.merge_and_pool --experiment-dir {output_folder} --experiment pilot_test"
         )
 
-    print("\nTag-description-context experiments finished!")
+    print("\nFixed-path experiments finished!")

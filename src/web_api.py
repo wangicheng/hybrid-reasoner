@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
         # 初始化引擎 (預設使用實驗最佳配置)
         engine = HybridEngine()
         print("Hybrid Engine initialized successfully!")
-        print("Search mode: Embedded tags + prompt (semantic:attribute = 0.3:0.7)")
+        print("Search mode: fixed retrieval path")
     except RuntimeError as e:
         if "already accessed by another instance" in str(e):
             print(f"\n{'='*60}")

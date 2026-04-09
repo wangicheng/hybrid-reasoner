@@ -22,6 +22,11 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from src.core.api_utils import _is_retryable, get_api_key_rotator, get_current_api_key, get_rate_limiter
+from src.eval.paths import (
+    resolve_annotation_input_path,
+    resolve_annotation_output_path,
+    resolve_pools_dir,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -240,11 +245,9 @@ def load_existing_annotations(csv_path: str) -> Dict[str, Dict[str, str]]:
         with open(csv_path, "r", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                q_id = row.get("Query ID", "").strip()
-                b_id = row.get("Book ID", "").strip()
-                if not q_id or not b_id:
+                key = _make_task_key(row)
+                if not key:
                     continue
-                key = f"{q_id}_{b_id}"
                 score = row.get("Score (0-3)", "")
                 comment = row.get("Comment", "")
                 if score != "":
@@ -257,8 +260,11 @@ def load_existing_annotations(csv_path: str) -> Dict[str, Dict[str, str]]:
 
 
 def _make_task_key(row: Dict[str, Any]) -> str:
+    query = str(row.get("Query", "")).strip()
     q_id = str(row.get("Query ID", "")).strip()
     b_id = str(row.get("Book ID", "")).strip()
+    if query and b_id:
+        return f"{query}__{b_id}"
     return f"{q_id}_{b_id}" if q_id and b_id else ""
 
 
@@ -325,29 +331,28 @@ def save_annotated_csv(tasks: List[Dict[str, Any]], csv_path: str):
         writer.writerows(merged_rows)
 
 
-def _resolve_pools_dir(base_dir: Path) -> Path:
-    if base_dir.name == "pools":
-        return base_dir
-
-    if list(base_dir.glob("*_blind.csv")) or list(base_dir.glob("*_truth.json")):
-        return base_dir
-
-    return base_dir / "pools"
-
-
 def run_judge(
     experiment_name: str = "pilot_test",
     model_id: Optional[str] = None,
     batch_size: int = 10,
     experiment_dir: str = "data/experiments/pools",
+    annotations_dir: str = "data/experiments/annotations",
 ):
     """
     主流程：讀取盲測資料，使用 LLM 進行評分，儲存結果。
     支援中斷續傳：已評過的題目會自動跳過。
     """
-    base_dir = _resolve_pools_dir(Path(experiment_dir))
+    base_dir = resolve_pools_dir(Path(experiment_dir))
     blind_csv = base_dir / f"{experiment_name}_blind.csv"
-    annotated_csv = base_dir / f"{experiment_name}_annotated.csv"
+    annotated_input_csv = resolve_annotation_input_path(
+        experiment_name=experiment_name,
+        pools_dir=base_dir,
+        annotations_dir=annotations_dir,
+    )
+    annotated_output_csv = resolve_annotation_output_path(
+        experiment_name=experiment_name,
+        annotations_dir=annotations_dir,
+    )
 
     if not blind_csv.exists():
         print(f"❌ 找不到盲測檔案: {blind_csv}")
@@ -359,13 +364,13 @@ def run_judge(
     print(f"   共 {len(tasks)} 筆待評資料")
 
     # 2. 讀取已標註的結果 (支援續傳)
-    existing = load_existing_annotations(str(annotated_csv))
+    existing = load_existing_annotations(str(annotated_input_csv))
     already_done_total = len(existing)
     
     # 找出當前 tasks 中有多少是已經評分過的
     tasks_already_done = 0
     for task in tasks:
-        key = f"{task.get('Query ID', '').strip()}_{task.get('Book ID', '').strip()}"
+        key = _make_task_key(task)
         if key in existing:
             tasks_already_done += 1
             
@@ -374,6 +379,12 @@ def run_judge(
         print(f"   ⏩ 目前待評清單中有 {tasks_already_done} 筆已評分，將自動跳過")
 
     # 3. 初始化 LLM Judge
+    if already_done_total > 0:
+        print(f"   ?? 載入既有標註: {annotated_input_csv}")
+
+    annotated_output_csv.parent.mkdir(parents=True, exist_ok=True)
+    print(f"   ?? 共享標註輸出: {annotated_output_csv}")
+
     judge = LLMJudge(model_id=model_id)
     print(f"🤖 使用模型: {judge.model_id}")
     print(f"{'='*60}")
@@ -384,9 +395,7 @@ def run_judge(
     skipped_unknown = 0
 
     for i, task in enumerate(tasks):
-        q_id = task.get("Query ID", "").strip()
-        b_id = task.get("Book ID", "").strip()
-        key = f"{q_id}_{b_id}"
+        key = _make_task_key(task)
 
         # 跳過已評分的
         if key in existing:
@@ -430,11 +439,11 @@ def run_judge(
 
         # 定期儲存 (每 batch_size 筆存一次)
         if scored_count % batch_size == 0:
-            save_annotated_csv(tasks, str(annotated_csv))
+            save_annotated_csv(tasks, str(annotated_output_csv))
             print(f"\n   💾 已儲存進度 ({scored_count}/{total})")
 
     # 5. 最終儲存
-    save_annotated_csv(tasks, str(annotated_csv))
+    save_annotated_csv(tasks, str(annotated_output_csv))
 
     # 6. 報告
     print(f"\n{'='*60}")
@@ -442,7 +451,7 @@ def run_judge(
     print(f"   📊 總計: {total} 筆")
     print(f"   ✅ 已評分: {scored_count} 筆")
     print(f"   ⏭️  Unknown 自動 0 分: {skipped_unknown} 筆")
-    print(f"   💾 結果已儲存至: {annotated_csv}")
+    print(f"   💾 結果已儲存至: {annotated_output_csv}")
     print(f"\n   下一步: 執行 python -m src.eval.metrics --experiment {experiment_name} 計算 NDCG")
 
 
@@ -464,6 +473,12 @@ if __name__ == "__main__":
         default="data/experiments/pools",
         help="Directory containing pool files, or a batch directory containing a pools/ folder",
     )
+    parser.add_argument(
+        "--annotations-dir",
+        type=str,
+        default="data/experiments/annotations",
+        help="Shared directory for reusable LLM judge annotations",
+    )
     args = parser.parse_args()
 
     run_judge(
@@ -471,4 +486,5 @@ if __name__ == "__main__":
         model_id=args.model,
         batch_size=args.batch_size,
         experiment_dir=args.experiment_dir,
+        annotations_dir=args.annotations_dir,
     )

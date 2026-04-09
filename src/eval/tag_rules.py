@@ -35,7 +35,7 @@ def tag_matches(required_tag: str, candidate_tag: str) -> bool:
     candidate = str(candidate_tag).strip()
     if not required or not candidate:
         return False
-    return required == candidate or required in candidate or candidate in required
+    return required == candidate
 
 
 def apply_hard_filters(golden_rules: Dict[str, Any], book_item: Dict[str, Any]) -> bool:
@@ -106,8 +106,7 @@ def score_required_tags(
     if match_count == 0:
         return 0.0, 0, required_count, []
 
-    candidate_count = len(book_tags)
-    denominator = min(required_count, candidate_count)
+    denominator = required_count
     if denominator <= 0:
         return 0.0, match_count, required_count, matched_pairs
 

@@ -1,6 +1,5 @@
 import csv
 import json
-import random
 import argparse
 import sys
 from pathlib import Path
@@ -97,7 +96,6 @@ class PoolMerger:
                             
                 # 轉為 list 並打亂候選池，消除確認偏誤 (Confirmation Bias)
                 pool = list(candidates.values())
-                random.shuffle(pool)
                 
                 truth_entry = {
                     "query_id": q_id,

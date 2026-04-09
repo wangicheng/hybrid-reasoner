@@ -603,7 +603,6 @@ def _merge_query_parse_results(
 
 def _build_parallel_context(
     tag_list: Optional[Tuple[str, ...]] = None,
-    tag_context: Optional[str] = None,
     reference_book_context: Optional[str] = None,
 ) -> str:
     sections = [
@@ -618,13 +617,6 @@ def _build_parallel_context(
             "AVAILABLE TAGS:\n"
             "Prefer exact tag names from the list when the user mentions genres, tropes, vibes, or themes.\n"
             f"{', '.join(tag_list)}"
-        )
-
-    if tag_context:
-        sections.append(
-            "TAG DESCRIPTIONS:\n"
-            "Use these descriptions as soft semantic grounding, but do not invent tags outside the allowed list.\n"
-            f"{tag_context}"
         )
 
     if reference_book_context:
@@ -746,13 +738,11 @@ def _parse_query_parallel_ctx(
     user_query: str,
     model_id: Optional[str] = None,
     tag_list: Optional[Tuple[str, ...]] = None,
-    tag_context: Optional[str] = None,
     reference_book_context: Optional[str] = None,
     sampling_temperature: float = 0.2,
 ) -> QueryParseResult:
     shared_context = _build_parallel_context(
         tag_list=tag_list,
-        tag_context=tag_context,
         reference_book_context=reference_book_context,
     )
 
@@ -901,7 +891,6 @@ def parse_query(
     model_id: Optional[str] = None,
     cache_namespace: Optional[str] = None,
     tag_list: Optional[Tuple[str, ...]] = None,
-    tag_context: Optional[str] = None,
     reference_book_context: Optional[str] = None,
     sampling_temperature: float = 0.2,
 ) -> QueryParseResult:
@@ -910,7 +899,6 @@ def parse_query(
         user_query,
         model_id=model_id,
         tag_list=tag_list,
-        tag_context=tag_context,
         reference_book_context=reference_book_context,
         sampling_temperature=sampling_temperature,
     )

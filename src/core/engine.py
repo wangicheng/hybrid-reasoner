@@ -7,11 +7,10 @@ from src.core.database import Database
 from src.core.explainer import generate_explanation
 from src.core.llm import parse_query
 from src.core.vector_store import VectorStore
-from src.core.tag_context import build_tag_context_text, load_tag_descriptions
 
 
 class HybridEngine:
-    """Production search engine using the selected tag-processing strategy."""
+    """Production search engine using the fixed production tag-processing path."""
 
     def __init__(
         self,
@@ -19,15 +18,10 @@ class HybridEngine:
         vs: Optional[VectorStore] = None,
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None,
-        use_tag_descriptions: bool = False,
-        embed_generated_keywords: bool = True,
-        tag_descriptions_path: Optional[str] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
         self.book_matcher = BookMatcher(self.db)
-        self.use_tag_descriptions = use_tag_descriptions
-        self.embed_generated_keywords = embed_generated_keywords
         self.semantic_weight = (
             semantic_weight if semantic_weight is not None else settings.SEMANTIC_WEIGHT
         )
@@ -37,8 +31,6 @@ class HybridEngine:
             else settings.ATTRIBUTE_WEIGHT
         )
         self.all_tags_cache: Optional[Tuple[str, ...]] = None
-        self.tag_descriptions_cache: Optional[Dict[str, str]] = None
-        self.tag_context_cache: Optional[str] = None
         self._load_tags_cache()
         if not self.all_tags_cache:
             raise RuntimeError(
@@ -47,9 +39,6 @@ class HybridEngine:
 
         # Keep the tag embedding collection aligned with the curated whitelist.
         self.vs.sync_tag_collection(self.all_tags_cache)
-
-        if self.use_tag_descriptions:
-            self._load_tag_context_cache(tag_descriptions_path)
 
         if not self.vs.collection_exists("novel_tags"):
             raise RuntimeError("Qdrant collection 'novel_tags' is missing.")
@@ -74,13 +63,6 @@ class HybridEngine:
         raise RuntimeError(
             f"Tag metadata file '{tags_path}' is empty or has an unexpected format."
         )
-
-    def _load_tag_context_cache(self, tag_descriptions_path: Optional[str]) -> None:
-        descriptions = load_tag_descriptions(tag_descriptions_path)
-        self.tag_descriptions_cache = descriptions
-        self.tag_context_cache = build_tag_context_text(self.all_tags_cache or (), descriptions)
-        if not self.tag_context_cache.strip():
-            raise RuntimeError("Tag context cache could not be built from descriptions.")
 
     @staticmethod
     def _criteria_params(criteria: Any) -> Dict[str, Any]:
@@ -151,10 +133,7 @@ class HybridEngine:
         self,
         generated_keywords: List[str],
     ) -> List[str]:
-        terms: List[str] = []
-        if self.embed_generated_keywords:
-            terms.extend(generated_keywords)
-        return self._dedupe_terms(terms)
+        return self._dedupe_terms(generated_keywords)
 
     @staticmethod
     def _normalize_status(status_value: str) -> Optional[str]:
@@ -340,7 +319,6 @@ class HybridEngine:
             model_id=model_id,
             cache_namespace=cache_namespace,
             tag_list=self.all_tags_cache,
-            tag_context=self.tag_context_cache if self.use_tag_descriptions else None,
             reference_book_context=related_book_context,
         )
 
