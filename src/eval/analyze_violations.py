@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -17,6 +18,11 @@ if hasattr(sys.stderr, "reconfigure"):
 def resolve_run_dir(experiment_dir: Path) -> Path:
     """Return the directory that actually contains raw run JSON files."""
     return experiment_dir
+
+
+def get_experiment_group_name(run_name: str) -> str:
+    """Group repeated runs like exp_name_run01 under the same experiment key."""
+    return re.sub(r"_run\d+$", "", run_name)
 
 
 def check_rules(golden_rules, book):
@@ -96,14 +102,17 @@ def main(experiment_dir: str = "data/experiments/runs"):
             f"No run JSON files found under {run_root}"
         )
 
-    summary = defaultdict(lambda: defaultdict(int))
-    total_samples = defaultdict(int)
-    violation_details = defaultdict(list)
+    summary = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
+    total_samples = defaultdict(lambda: defaultdict(int))
+    violation_details = defaultdict(lambda: defaultdict(list))
+    group_runs = defaultdict(list)
 
     print(f"Found {len(run_files)} run files in {run_dir}")
 
     for run_file in run_files:
-        exp_name = run_file.stem
+        run_name = run_file.stem
+        exp_name = get_experiment_group_name(run_name)
+        group_runs[exp_name].append(run_name)
         with open(run_file, "r", encoding="utf-8") as f:
             try:
                 run_data = json.load(f)
@@ -122,10 +131,11 @@ def main(experiment_dir: str = "data/experiments/runs"):
                 continue
 
             golden_rules = q_conf.get("golden_rules", {})
+            query_label = q_conf.get("query", query_run.get("query", ""))
             results = query_run.get("results", [])[:10]
 
             for rank, res in enumerate(results):
-                total_samples[exp_name] += 1
+                total_samples[exp_name][q_id] += 1
                 b_id = str(res.get("book_id"))
 
                 # Use DB metadata if available, otherwise fallback to run result data
@@ -134,12 +144,14 @@ def main(experiment_dir: str = "data/experiments/runs"):
                 violations = check_rules(golden_rules, book_meta)
                 if violations:
                     for v in violations:
-                        summary[exp_name][v] += 1
+                        summary[exp_name][q_id][v] += 1
 
-                    if len(violation_details[exp_name]) < 20:
-                        violation_details[exp_name].append(
+                    if len(violation_details[exp_name][q_id]) < 20:
+                        violation_details[exp_name][q_id].append(
                             {
+                                "run": run_name,
                                 "query_id": q_id,
+                                "query": query_label,
                                 "rank": rank + 1,
                                 "book": res.get("title", b_id),
                                 "violations": violations,
@@ -154,27 +166,29 @@ def main(experiment_dir: str = "data/experiments/runs"):
     sorted_exps = sorted(summary.keys())
 
     for exp in sorted_exps:
-        v_counts = summary[exp]
-        total_v = sum(v_counts.values())
-        samples = total_samples[exp]
+        query_ids = sorted(summary[exp].keys())
+        total_v = sum(sum(v_counts.values()) for v_counts in summary[exp].values())
+        samples = sum(total_samples[exp].values())
 
         print(f"\nExperiment: {exp}")
+        print(f"Runs merged: {', '.join(group_runs[exp])}")
         print(f"Top-10 samples: {samples} | Total violations: {total_v}")
 
         if total_v == 0:
             print("  No violations found.")
         else:
-            sorted_v = sorted(v_counts.items(), key=lambda x: x[1], reverse=True)
-            for v_msg, count in sorted_v:
-                percentage = (count / samples) * 100 if samples else 0.0
-                print(f"  - [{count:3d} ({percentage:5.1f}%)] {v_msg}")
+            ranked_violations = []
+            for q_id in query_ids:
+                query_samples = total_samples[exp][q_id]
+                for v_msg, count in summary[exp][q_id].items():
+                    percentage = (count / query_samples) * 100 if query_samples else 0.0
+                    ranked_violations.append((count, percentage, q_id, v_msg))
 
-            print("  Examples:")
-            for detail in violation_details[exp][:3]:
-                vs = ", ".join(detail["violations"])
+            ranked_violations.sort(key=lambda item: (-item[0], item[2], item[3]))
+
+            for count, percentage, q_id, v_msg in ranked_violations:
                 print(
-                    f"    * Query {detail['query_id']} Rank {detail['rank']}: "
-                    f"{detail['book']} -> {vs}"
+                    f"  - [{count:3d} ({percentage:5.1f}%)] Query {q_id}: {v_msg}"
                 )
 
     print("\n" + "=" * 60)
