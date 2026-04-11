@@ -135,6 +135,38 @@ class HybridEngine:
     ) -> List[str]:
         return self._dedupe_terms(generated_keywords)
 
+    def _resolve_negative_tag_terms(self, criteria_list: List[Any]) -> List[str]:
+        """Negative semantic criteria are only used to resolve blocked tag terms."""
+        negative_tag_terms: List[str] = []
+        negative_criteria = [
+            criteria
+            for criteria in criteria_list
+            if criteria.name == "semantic_similarity"
+            and getattr(criteria, "is_negative", False)
+        ]
+
+        for criteria in negative_criteria:
+            query_text = self._criteria_params(criteria).get("query_text", "").strip()
+            if not query_text:
+                continue
+
+            try:
+                mapped = self.vs.search_tags(
+                    f"tag: {query_text}",
+                    limit=1,
+                    similarity_threshold=0.7,
+                )
+            except Exception as exc:
+                print(f"[Engine] Warning: negative tag mapping failed: {exc}")
+                mapped = []
+
+            if mapped:
+                negative_tag_terms.extend(result["tag"] for result in mapped)
+            else:
+                negative_tag_terms.append(query_text)
+
+        return negative_tag_terms
+
     @staticmethod
     def _normalize_status(status_value: str) -> Optional[str]:
         raw_value = str(status_value or "").strip()
@@ -408,32 +440,7 @@ class HybridEngine:
 
         print(f"[Engine] Candidate pool size: {len(candidates)}")
 
-        negative_tag_terms: List[str] = []
-        negative_criteria = [
-            criteria
-            for criteria in parse_result.criteria
-            if criteria.name == "semantic_similarity"
-            and getattr(criteria, "is_negative", False)
-        ]
-        for criteria in negative_criteria:
-            query_text = self._criteria_params(criteria).get("query_text", "").strip()
-            if not query_text:
-                continue
-
-            try:
-                mapped = self.vs.search_tags(
-                    f"tag: {query_text}",
-                    limit=1,
-                    similarity_threshold=0.7,
-                )
-            except Exception as exc:
-                print(f"[Engine] Warning: negative tag mapping failed: {exc}")
-                mapped = []
-
-            if mapped:
-                negative_tag_terms.extend(result["tag"] for result in mapped)
-            else:
-                negative_tag_terms.append(query_text)
+        negative_tag_terms = self._resolve_negative_tag_terms(parse_result.criteria)
         scored_items = []
         for item in candidates:
             book_id = str(item.get("id"))
