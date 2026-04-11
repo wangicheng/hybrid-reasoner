@@ -8,13 +8,14 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core.engine import HybridEngine
+from src.core.model_catalog import DEFAULT_MODEL_ID, normalize_model_id
 import uvicorn
 
 
 # Input Model
 class SearchRequest(BaseModel):
     query: str
-    model_id: str = "gemma-3-27b-it"
+    model_id: str = DEFAULT_MODEL_ID
 
 # Engine Instance (Lazy Load)
 engine = None
@@ -56,7 +57,7 @@ async def search(request: SearchRequest):
         results = await engine.search(
             request.query,
             limit=10,
-            model_id=request.model_id
+            model_id=normalize_model_id(request.model_id)
         )
         return results
     except Exception as e:

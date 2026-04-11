@@ -11,7 +11,9 @@ function escapeHtml(value) {
 
 async function performSearch() {
   const query = document.getElementById("query-input").value;
-  const modelId = document.getElementById("model-select").value;
+  const selectedModelId = document.getElementById("model-select").value;
+  const customModelId = document.getElementById("custom-model-input").value.trim();
+  const modelId = customModelId || selectedModelId;
   const resultsContainer = document.getElementById("results-container");
   const interpretationBox = document.getElementById("search-interpretation");
   const loading = document.getElementById("loading");

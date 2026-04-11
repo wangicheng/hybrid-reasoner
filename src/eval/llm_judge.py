@@ -93,7 +93,7 @@ class LLMJudge:
 
         self.client = genai.Client(api_key=api_key)
         self.model_id = model_id or JUDGE_MODELS[0]
-        self.models_to_try = [self.model_id] + [m for m in JUDGE_MODELS if m != self.model_id]
+        self.models_to_try = [self.model_id]
 
         # JSON Schema for structured output
         self.response_schema = {

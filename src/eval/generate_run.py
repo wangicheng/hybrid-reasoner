@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from src.core.database import Database
 from src.core.engine import HybridEngine
 from src.core.api_utils import _is_retryable
+from src.core.model_catalog import normalize_model_id
 from src.core.vector_store import VectorStore
 
 
@@ -98,6 +99,7 @@ class RunGenerator:
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
             "fixed retrieval path, "
+            f"model={normalize_model_id(self.model_id)}, "
             f"run_suffix={run_suffix or 'none'})"
         )
 
@@ -233,10 +235,14 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
-    generator = RunGenerator(k_per_engine=10)
     experiments = [
+        # {
+        #     "name": "gemma3",
+        #     "model_id": "gemma-3-27b-it",
+        # },
         {
-            "name": "best",
+            "name": "gemma4",
+            "model_id": "gemma-4-31b-it",
         }
     ]
 
@@ -250,6 +256,8 @@ if __name__ == "__main__":
         run_suffix = f"_run{repeat_index:02d}" if repeats > 1 else ""
         print(f"\n=== Trial {repeat_index}/{repeats} ===")
         for exp in experiments:
+            model_id = normalize_model_id(exp.get("model_id"))
+            generator = RunGenerator(k_per_engine=10, model_id=model_id)
             try:
                 generator.generate_run(
                     queries_config=sample_queries,
@@ -260,7 +268,10 @@ if __name__ == "__main__":
                     run_suffix=run_suffix,
                 )
             except Exception as exc:
-                print(f"Failed experiment {exp['name']} ({run_suffix or 'single'}): {exc}")
+                print(
+                    f"Failed experiment {exp['name']} on model {model_id} "
+                    f"({run_suffix or 'single'}): {exc}"
+                )
 
     if repeats > 1:
         print(

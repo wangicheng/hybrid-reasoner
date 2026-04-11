@@ -1,10 +1,9 @@
 from typing import Dict, Any, List
 from google import genai
 from src.core.api_utils import retry_on_rate_limit, _is_retryable, get_current_api_key
+from src.core.model_catalog import normalize_model_id
 
 # 可用模型清單 (與 llm.py 保持一致)
-FALLBACK_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
-
 def generate_explanation(
     query: str, 
     book_item: Dict[str, Any], 
@@ -18,7 +17,7 @@ def generate_explanation(
     支援多模型 fallback：當主要模型遇到配額限制時，自動嘗試下一個模型。
     現在包含評分證據 (score_breakdown) 以產出基於證據的解釋。
     """
-    selected_model = model_id or FALLBACK_MODELS[0]
+    selected_model = normalize_model_id(model_id)
 
     # Query-level circuit breaker for Gemini models
     state = runtime_state if runtime_state is not None else {}
@@ -30,15 +29,8 @@ def generate_explanation(
         return "gemini" in (model_name or "").lower()
 
     # 建立模型嘗試順序
-    if selected_model and selected_model in FALLBACK_MODELS:
-        models_to_try = [selected_model] + [m for m in FALLBACK_MODELS if m != selected_model]
-    elif selected_model:
-        models_to_try = [selected_model] + FALLBACK_MODELS
-    else:
-        models_to_try = FALLBACK_MODELS
+    models_to_try = [selected_model]
 
-    if gemini_disabled:
-        models_to_try = [m for m in models_to_try if not is_gemini_model(m)]
     
     client = genai.Client(api_key=get_current_api_key())
 
@@ -128,7 +120,7 @@ def generate_explanation(
     # --- 模型 Fallback 迴圈 (含 Gemma 積極重試) ---
     last_exception = None
     for model_id in models_to_try:
-        if is_gemini_model(model_id) and (gemini_disabled or gemini_fail_count >= gemini_fail_threshold):
+        if False:  # Fixed-model mode: never skip the selected model due to circuit-breaker state.
             print(f"[explainer] 跳過 Gemini 模型 {model_id}（本次查詢已熔斷）")
             continue
 

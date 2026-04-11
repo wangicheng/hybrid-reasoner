@@ -53,6 +53,18 @@ python -m src.web_api
 ```
 
 The API serves the web UI at `http://localhost:8000`.
+You can pick a preset model from the dropdown or type a custom model id in the extra input field to try newer releases.
+
+## Model Experiments
+
+Run the same evaluation batch against multiple LLMs:
+
+```bash
+python -m src.eval.generate_run
+```
+
+Edit the `experiments` list in `src/eval/generate_run.py` to assign a `model_id` per experiment.
+Use different experiment names when you want separate output files for different models.
 
 ## Data Import
 
