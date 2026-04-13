@@ -12,8 +12,8 @@ MODEL_OPTIONS: List[Tuple[str, str]] = [
     ("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
 ]
 
-FALLBACK_MODELS = [model_id for model_id, _label in MODEL_OPTIONS]
-JUDGE_MODELS = list(FALLBACK_MODELS)
+MODEL_PRIORITY_ORDER = [model_id for model_id, _label in MODEL_OPTIONS]
+JUDGE_MODELS = list(MODEL_PRIORITY_ORDER)
 
 
 def normalize_model_id(model_id: str | None) -> str:
@@ -21,17 +21,17 @@ def normalize_model_id(model_id: str | None) -> str:
     return value or DEFAULT_MODEL_ID
 
 
-def build_model_candidates(
+def build_model_priority(
     selected_model: str | None,
-    fallback_models: Iterable[str] | None = None,
+    candidate_models: Iterable[str] | None = None,
 ) -> List[str]:
-    fallback = list(fallback_models or FALLBACK_MODELS)
+    model_order = list(candidate_models or MODEL_PRIORITY_ORDER)
     normalized = normalize_model_id(selected_model)
 
-    if normalized in fallback:
-        return [normalized] + [model for model in fallback if model != normalized]
+    if normalized in model_order:
+        return [normalized] + [model for model in model_order if model != normalized]
 
-    return [normalized] + fallback
+    return [normalized] + model_order
 
 
 def sanitize_model_tag(model_id: str | None) -> str:

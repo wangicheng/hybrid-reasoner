@@ -2,7 +2,7 @@
 API Utilities: Rate Limiting & Retry Logic for Google GenAI calls.
 
 Provides:
-- RateLimiter: enforces a minimum interval between API calls (shared across all callers).
+- RateLimiter: enforces a minimum interval between API calls per key/bucket.
 - retry_on_rate_limit: decorator that retries on 429/503 errors with a fixed retry interval.
 """
 
@@ -22,20 +22,25 @@ class RateLimiter:
     def __init__(self, min_interval: float = 4.0):
         self.min_interval = min_interval
         self._lock = threading.Lock()
-        self._last_call_time = 0.0
+        self._last_call_time_by_bucket = {}
 
-    def wait(self):
-        """Block until enough time has passed since the last call."""
+    def wait(self, bucket: str | None = None):
+        """Block until enough time has passed since the last call for this bucket."""
+        bucket_key = bucket or "__global__"
         with self._lock:
             now = time.monotonic()
-            elapsed = now - self._last_call_time
+            last_call_time = self._last_call_time_by_bucket.get(bucket_key)
+            if last_call_time is not None:
+                elapsed = now - last_call_time
+            else:
+                elapsed = self.min_interval
             if elapsed < self.min_interval:
                 sleep_time = self.min_interval - elapsed
                 time.sleep(sleep_time)
-            self._last_call_time = time.monotonic()
+            self._last_call_time_by_bucket[bucket_key] = time.monotonic()
 
 
-# Global shared rate limiter instance (all GenAI calls share this)
+# Global shared rate limiter instance (callers use per-key buckets when available)
 _global_rate_limiter = RateLimiter(min_interval=4.0)
 
 
@@ -48,7 +53,7 @@ def _is_retryable(exc: Exception) -> bool:
     """Check if an exception is a retryable API error (429 or 503)."""
     error_str = str(exc)
     # Match known retryable status codes
-    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+    if is_rate_limit_error(exc):
         return True
     if "503" in error_str or "UNAVAILABLE" in error_str:
         return True
@@ -73,6 +78,12 @@ def _extract_retry_delay(exc: Exception) -> float | None:
     if match:
         return float(match.group(1))
     return None
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """Check if an exception indicates quota exhaustion or provider throttling."""
+    error_str = str(exc)
+    return "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
 
 
 def retry_on_rate_limit(max_retries: int = 5, base_delay: float = 5.0, max_delay: float = 120.0):

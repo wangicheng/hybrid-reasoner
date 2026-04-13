@@ -45,8 +45,6 @@ def score_keyword_match(item: Dict[str, Any], params: Dict[str, Any]) -> Tuple[f
             for k in keywords_to_check:
                 if k in v_str:
                     return 1.0, format_success(k)
-        # --- Fallback Logic for list fields ---
-        # (No fallback needed here, fallback is below for non-list primary fields)
         return 0.0, f"未找到關鍵字 '{keyword}'"
         
     text = str(val).lower()

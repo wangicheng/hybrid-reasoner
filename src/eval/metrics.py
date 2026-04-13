@@ -27,7 +27,7 @@ def calculate_set_quality(scores: List[float], good_threshold: float = 2.0) -> D
     }
 
 
-def _build_fallback_book(row: Dict[str, str]) -> Dict[str, Any]:
+def _build_row_book_metadata(row: Dict[str, str]) -> Dict[str, Any]:
     words_in_10k = float(row.get("Words (萬)") or 0)
     intro = row.get("Intro", "")
 
@@ -59,7 +59,7 @@ def _load_pool_metadata(csv_path: Path) -> Dict[str, Dict[str, Any]]:
             book_id = str(row.get("Book ID", "")).strip()
             if not book_id:
                 continue
-            pool_data[book_id] = _build_fallback_book(row)
+            pool_data[book_id] = _build_row_book_metadata(row)
     return pool_data
 
 
@@ -264,7 +264,7 @@ def run_evaluation(
             annotations.setdefault(query, {})[book_id] = score
 
             if str(book_id) not in books_data:
-                books_data[str(book_id)] = _build_fallback_book(row)
+                books_data[str(book_id)] = _build_row_book_metadata(row)
 
     print("\n" + "=" * 40)
     print("Experiment Evaluation")

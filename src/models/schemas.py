@@ -1,6 +1,14 @@
 from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
 
+class TagIntent(BaseModel):
+    """
+    Dedicated positive/negative tag extraction result.
+    """
+    search_terms: str = Field(default="", description="Primary retrieval phrase for the tag-intent task.")
+    positive_terms: List[str] = Field(default_factory=list, description="Positive tag-like concepts extracted from the query.")
+    negative_terms: List[str] = Field(default_factory=list, description="Negative tag-like concepts explicitly rejected by the user.")
+
 class ScoringParameters(BaseModel):
     field: Optional[str] = Field(None, description="Field to specific match on (e.g. tags, classification)")
     keyword: Optional[str] = Field(None, description="Keyword to search for")
@@ -30,6 +38,7 @@ class QueryParseResult(BaseModel):
     criteria: List[ScoringCriteria]
     search_terms: str = Field(default="", description="Keywords/phrases to use for initial candidate retrieval")
     generated_keywords: List[str] = Field(default_factory=list, description="LLM-generated domain-specific keywords for dynamic query expansion")
+    tag_intent: TagIntent = Field(default_factory=TagIntent, description="Dedicated positive/negative tag extraction result.")
     # HyDE 核心：讓 LLM 寫一段「夢想中的書籍簡介」
     hypothetical_intro: str = Field(default="", description="A generated hypothetical novel introduction based on the query.")
     parse_metadata: Dict[str, Any] = Field(default_factory=dict, description="Parser runtime metadata for experiments and debugging.")

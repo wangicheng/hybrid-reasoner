@@ -354,9 +354,10 @@ class HybridEngine:
             reference_book_context=related_book_context,
         )
 
-        tag_terms_list = self._build_tag_terms_list(
-            list(parse_result.generated_keywords),
+        positive_tag_terms = list(parse_result.tag_intent.positive_terms) or list(
+            parse_result.generated_keywords
         )
+        tag_terms_list = self._build_tag_terms_list(positive_tag_terms)
 
         tag_mapping_weights: List[Dict[str, float]] = []
         if tag_terms_list:
@@ -440,7 +441,9 @@ class HybridEngine:
 
         print(f"[Engine] Candidate pool size: {len(candidates)}")
 
-        negative_tag_terms = self._resolve_negative_tag_terms(parse_result.criteria)
+        negative_tag_terms = self._dedupe_terms(
+            list(parse_result.tag_intent.negative_terms)
+        ) or self._resolve_negative_tag_terms(parse_result.criteria)
         scored_items = []
         for item in candidates:
             book_id = str(item.get("id"))
@@ -477,6 +480,9 @@ class HybridEngine:
                 "parsed_criteria": [
                     self._criteria_to_dict(criteria) for criteria in parse_result.criteria
                 ],
+                "search_terms": parse_result.search_terms,
+                "generated_keywords": parse_result.generated_keywords,
+                "tag_intent": parse_result.tag_intent.model_dump(),
                 "query_vector": query_vector,
                 "results": [],
                 "message": "No matching novels were found after applying the filters.",
@@ -525,6 +531,7 @@ class HybridEngine:
             ],
             "search_terms": parse_result.search_terms,
             "generated_keywords": parse_result.generated_keywords,
+            "tag_intent": parse_result.tag_intent.model_dump(),
             "hypothetical_intro": parse_result.hypothetical_intro,
             "related_books": related_books,
             "reference_tags": [],

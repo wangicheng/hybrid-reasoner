@@ -23,7 +23,8 @@ class VectorStore:
         self.collection_name = collection_name
         from src.core.api_utils import get_current_api_key
 
-        self.genai_client = genai.Client(api_key=get_current_api_key())
+        self._current_api_key = get_current_api_key()
+        self.genai_client = genai.Client(api_key=self._current_api_key)
         self.embedding_model = "gemini-embedding-001"
         self._ensure_collection()
 
@@ -32,6 +33,7 @@ class VectorStore:
 
         rotator = get_api_key_rotator()
         new_key = rotator.on_rate_limit_error()
+        self._current_api_key = new_key
         self.genai_client = genai.Client(api_key=new_key)
         print(f"[VectorStore] API key rotated. Current index: {rotator.current_index}")
 
@@ -160,16 +162,22 @@ class VectorStore:
         text: Any,
         task_type: str = "RETRIEVAL_QUERY",
     ) -> Any:
-        from src.core.api_utils import _is_retryable, get_rate_limiter
+        from src.core.api_utils import (
+            _is_retryable,
+            get_api_key_rotator,
+            get_rate_limiter,
+            is_rate_limit_error,
+        )
         import time
 
         attempt = 0
         max_attempts = 5
         is_list = isinstance(text, list)
+        max_api_key_attempts = len(get_api_key_rotator().api_keys)
 
         while attempt < max_attempts:
             try:
-                get_rate_limiter().wait()
+                get_rate_limiter().wait(self._current_api_key)
                 response = self.genai_client.models.embed_content(
                     model=self.embedding_model,
                     contents=text,
@@ -181,16 +189,21 @@ class VectorStore:
             except Exception as exc:
                 attempt += 1
                 error_text = str(exc)
-                is_quota_error = (
-                    "429" in error_text or "RESOURCE_EXHAUSTED" in error_text
-                )
-                if (is_quota_error or _is_retryable(exc)) and attempt < max_attempts:
+                is_quota_error = is_rate_limit_error(exc)
+                if is_quota_error and attempt < max_attempts and max_api_key_attempts > 1:
                     print(
                         f"[VectorStore] Embedding failed ({error_text[:80]}). "
                         f"Retrying with rotated key, attempt {attempt}."
                     )
                     self._update_api_key_on_rate_limit()
-                    time.sleep(2 * attempt)
+                    continue
+                if (is_quota_error or _is_retryable(exc)) and attempt < max_attempts:
+                    backoff_seconds = 2 * attempt
+                    print(
+                        f"[VectorStore] Embedding failed ({error_text[:80]}). "
+                        f"Retrying in {backoff_seconds}s, attempt {attempt}."
+                    )
+                    time.sleep(backoff_seconds)
                     continue
                 raise
 
