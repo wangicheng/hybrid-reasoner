@@ -22,9 +22,6 @@ if hasattr(sys.stderr, "reconfigure"):
 class RunGenerator:
     """
     Generate experiment runs for the fixed production retrieval path.
-
-    This script keeps the run file format compatible with merge_and_pool.py:
-    a JSON array of per-query result objects.
     """
 
     def __init__(
@@ -272,11 +269,5 @@ if __name__ == "__main__":
                     f"Failed experiment {exp['name']} on model {model_id} "
                     f"({run_suffix or 'single'}): {exc}"
                 )
-
-    if repeats > 1:
-        print(
-            "\nTo merge this batch, run:\n"
-            f"python -m src.eval.merge_and_pool --experiment-dir {output_folder} --experiment pilot_test"
-        )
 
     print("\nFixed-path experiments finished!")

@@ -1,58 +1,66 @@
-"""
-LLM-as-a-Judge: 自動化實驗結果評分
-
-使用 LLM 自動對檢索結果進行 0-3 分的關聯度評分。
-參考論文: "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena" (Zheng et al., 2023)
-
-用法:
-    python -m src.eval.llm_judge
-    python -m src.eval.llm_judge --experiment pilot_test --model gemini-2.5-flash-lite
-"""
-
-import os
-import re
+import argparse
 import csv
 import json
+import re
+import sys
 import time
-import argparse
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from google import genai
-from google.genai import types
-from dotenv import load_dotenv
-from src.core.api_utils import _is_retryable, get_api_key_rotator, get_current_api_key, get_rate_limiter
-from src.eval.paths import (
-    resolve_annotation_input_path,
-    resolve_annotation_output_path,
-    resolve_pools_dir,
-)
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv() -> None:
+        return None
 
-# Load environment variables from .env file
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
+
+from src.eval.paths import resolve_annotation_path
+from src.eval.pool_data import build_annotation_rows, load_experiment_pool
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 load_dotenv()
 
-# 可用模型清單 (依優先順序排列)
 JUDGE_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
-
-# ============================================================
-# Prompt 設計
-# ============================================================
+ANNOTATION_COLUMNS = [
+    "Query ID",
+    "Query",
+    "Book ID",
+    "Title",
+    "Author",
+    "Words (萬)",
+    "Status",
+    "Tags",
+    "Intro",
+    "Score (0-3)",
+    "Comment",
+]
 
 SYSTEM_PROMPT = """\
 You are an expert relevance assessor for a web novel recommendation system.
 Your task is to judge how well a recommended book matches a user's search query.
 
 ### Scoring Rubric (0-3 scale):
-- **Score 0 – Irrelevant**: The book is completely unrelated to the user's core intent.
-- **Score 1 – Marginally Relevant**: The book shares only a superficial or tangential connection to the query. It might match one minor keyword but fails to satisfy the core intent.
-- **Score 2 – Partially Relevant**: The book satisfies some of the user's key requirements but misses important aspects. It could be a reasonable recommendation but is not ideal.
-- **Score 3 – Highly Relevant**: The book is an excellent match for the query. It satisfies the user's core intent and most (if not all) stated preferences. This is the kind of book the user is clearly looking for.
+- Score 0: The book is completely unrelated to the user's core intent.
+- Score 1: The book shares only a superficial or tangential connection to the query.
+- Score 2: The book satisfies some key requirements but misses important aspects.
+- Score 3: The book is an excellent match for the user's core intent.
 
 ### Important Guidelines:
-1. Focus on the USER'S INTENT, not just keyword overlap.
-2. Ignore hard constraints like status (ongoing/completed) or word count for your scoring. Only focus on semantic and genre relevance (tags, themes, plot).
-3. Books with empty or missing information (Title "Unknown", no intro) should be scored 0.
-4. Provide a brief reasoning in Traditional Chinese (繁體中文) explaining your score.
+1. Focus on the user's intent, not just keyword overlap.
+2. Ignore hard constraints like status or word count. Only judge semantic and genre relevance.
+3. Books with empty or missing information should be scored 0.
+4. Provide brief reasoning in Traditional Chinese.
 
 ### Output Format:
 Return a JSON object with exactly two fields:
@@ -63,52 +71,49 @@ Return a JSON object with exactly two fields:
 """
 
 
+def _load_api_utils():
+    from src.core.api_utils import (
+        _is_retryable,
+        get_api_key_rotator,
+        get_current_api_key,
+        get_rate_limiter,
+    )
+
+    return _is_retryable, get_api_key_rotator, get_current_api_key, get_rate_limiter
+
+
 def build_user_prompt(query: str, title: str, tags: str, intro: str) -> str:
-    """組裝 LLM 評分用的 User Prompt"""
     return f"""\
-### 使用者查詢 (User Query):
+### User Query:
 {query}
 
-### 推薦書籍資訊 (Recommended Book):
-- 書名: {title}
-- 標籤: {tags}
-- 簡介: {intro}
+### Recommended Book:
+- Title: {title}
+- Tags: {tags}
+- Intro: {intro}
 
 Please evaluate the relevance of this book to the user's query and return your judgment as JSON.
 """
 
 
-# ============================================================
-# 核心評分邏輯
-# ============================================================
-
 class LLMJudge:
-    """使用 LLM 進行自動化關聯度評分"""
-
     def __init__(self, model_id: Optional[str] = None):
-        try:
-            api_key = get_current_api_key()
-        except ValueError as e:
-            raise ValueError(f"無法取得 API Key: {e}")
+        if genai is None or types is None:
+            raise ImportError("google-genai is required to run llm_judge.py")
 
+        _, _, get_current_api_key, _ = _load_api_utils()
+        api_key = get_current_api_key()
         self.client = genai.Client(api_key=api_key)
+        self.types = types
         self.model_id = model_id or JUDGE_MODELS[0]
         self.models_to_try = [self.model_id]
-
-        # JSON Schema for structured output
         self.response_schema = {
             "type": "object",
             "properties": {
-                "reasoning": {
-                    "type": "string",
-                    "description": "Brief explanation for the score in Traditional Chinese"
-                },
-                "score": {
-                    "type": "integer",
-                    "description": "Relevance score from 0 to 3"
-                }
+                "reasoning": {"type": "string"},
+                "score": {"type": "integer"},
             },
-            "required": ["reasoning", "score"]
+            "required": ["reasoning", "score"],
         }
 
     @staticmethod
@@ -117,49 +122,37 @@ class LLMJudge:
         base_delay: float = 5.0,
         max_delay: float = 120.0,
     ) -> float:
-        """Use a fixed retry interval so judge retries stay predictable."""
         _ = attempt, max_delay
         return base_delay
 
     def _rotate_api_key(self) -> None:
-        """Rotate to the next configured API key and rebuild the GenAI client."""
+        _, get_api_key_rotator, _, _ = _load_api_utils()
         rotator = get_api_key_rotator()
         new_key = rotator.on_rate_limit_error()
         self.client = genai.Client(api_key=new_key)
         print(f"  [judge] API key rotated. Current index: {rotator.current_index}")
 
     def judge_single(self, query: str, title: str, tags: str, intro: str) -> Dict[str, Any]:
-        """
-        對單一 Query-Book pair 進行評分。
-        回傳 {"score": int, "reasoning": str}
-        """
-        # 防呆：書籍資訊不完整直接給 0 分
-        if not title or title == "Unknown" or title.strip() == "":
-            return {"score": 0, "reasoning": "書籍資訊不完整（Unknown），無法評分。"}
-
-        if not intro or intro.strip() == "" or intro.strip() == "[標籤: ]\n":
-            return {"score": 0, "reasoning": "書籍缺少簡介資訊，無法評估相關性。"}
+        if not title or title == "Unknown" or not title.strip():
+            return {"score": 0, "reasoning": "作品資訊不足，無法判定與需求相關。"}
+        if not intro or not intro.strip():
+            return {"score": 0, "reasoning": "缺少作品簡介，無法判定與需求相關。"}
 
         user_prompt = build_user_prompt(query, title, tags, intro)
         last_exception = None
 
         for model_id in self.models_to_try:
             try:
-                result = self._call_llm(model_id, user_prompt)
-                return result
-            except Exception as e:
-                last_exception = e
-                print(f"  [judge] 模型 {model_id} 失敗: {e}")
-                continue
+                return self._call_llm(model_id, user_prompt)
+            except Exception as exc:
+                last_exception = exc
+                print(f"  [judge] Model {model_id} failed: {exc}")
 
-        # 所有模型都失敗
-        print(f"  [judge] 所有模型皆失敗，最後錯誤: {last_exception}")
-        return {"score": 0, "reasoning": f"LLM 評分失敗: {last_exception}"}
+        return {"score": 0, "reasoning": f"LLM judge failed: {last_exception}"}
 
     def _call_llm(self, model_id: str, user_prompt: str) -> Dict[str, Any]:
-        """呼叫 LLM 進行評分 (含 retry 機制)"""
-
         attempt = 0
+        _is_retryable, _, _, get_rate_limiter = _load_api_utils()
 
         while True:
             try:
@@ -167,55 +160,49 @@ class LLMJudge:
                 is_gemma = "gemma" in model_id.lower()
 
                 if is_gemma:
-                # Gemma 不支援 structured output
-                    config_args = {}
-                    final_contents = (
-                    f"{SYSTEM_PROMPT}\n\n"
-                    f"{user_prompt}\n\n"
-                    "IMPORTANT: Output ONLY valid JSON with keys 'reasoning' (string) and 'score' (integer 0-3) in that order. No markdown."
-                )
+                    config_args: Dict[str, Any] = {}
+                    contents = (
+                        f"{SYSTEM_PROMPT}\n\n"
+                        f"{user_prompt}\n\n"
+                        "IMPORTANT: Output only valid JSON with keys 'reasoning' and 'score'."
+                    )
                 else:
                     config_args = {
-                    "response_mime_type": "application/json",
-                    "response_schema": self.response_schema,
-                    "system_instruction": SYSTEM_PROMPT,
-                }
-                    final_contents = user_prompt
+                        "response_mime_type": "application/json",
+                        "response_schema": self.response_schema,
+                        "system_instruction": SYSTEM_PROMPT,
+                    }
+                    contents = user_prompt
 
                 response = self.client.models.generate_content(
-                model=model_id,
-                contents=final_contents,
-                config=types.GenerateContentConfig(**config_args)
-            )
+                    model=model_id,
+                    contents=contents,
+                    config=self.types.GenerateContentConfig(**config_args),
+                )
 
                 if not response.text:
                     raise ValueError("Empty response from LLM")
 
                 raw_text = response.text.strip()
-            # Strip markdown code fence if present
                 raw_text = re.sub(r"^```(?:json)?\s*\n?", "", raw_text)
                 raw_text = re.sub(r"\n?```\s*$", "", raw_text)
-                raw_text = raw_text.strip()
+                parsed = json.loads(raw_text.strip())
 
-                parsed = json.loads(raw_text)
-
-            # Validate score range
                 score = int(parsed.get("score", 0))
-                score = max(0, min(3, score))  # Clamp to 0-3
-
+                score = max(0, min(3, score))
                 return {
                     "score": score,
-                    "reasoning": parsed.get("reasoning", "")
+                    "reasoning": str(parsed.get("reasoning", "")),
                 }
             except Exception as exc:
                 if not _is_retryable(exc):
                     raise
 
                 attempt += 1
-                error_str = str(exc)
-                is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
-                if is_rate_limit:
+                error_text = str(exc)
+                if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
                     self._rotate_api_key()
+
                 delay = self._retry_delay_seconds(attempt)
                 print(
                     f"  [judge] Model {model_id} hit a retryable error: {exc}. "
@@ -224,48 +211,17 @@ class LLMJudge:
                 time.sleep(delay)
 
 
-# ============================================================
-# CSV 讀寫與主流程
-# ============================================================
-
-def load_blind_tasks(csv_path: str) -> List[Dict[str, Any]]:
-    """讀取盲測 CSV"""
-    tasks = []
-    with open(csv_path, "r", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            tasks.append(row)
-    return tasks
-
-
-def load_existing_annotations(csv_path: str) -> Dict[str, Dict[str, str]]:
-    """讀取已標註的結果，回傳 {query_id_book_id: {"score": score, "comment": comment}}"""
-    annotated = {}
-    if os.path.exists(csv_path):
-        with open(csv_path, "r", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                key = _make_task_key(row)
-                if not key:
-                    continue
-                score = row.get("Score (0-3)", "")
-                comment = row.get("Comment", "")
-                if score != "":
-                    # 儲存分數與評論，以便續傳時恢復
-                    annotated[key] = {
-                        "score": score,
-                        "comment": comment
-                    }
-    return annotated
-
-
 def _make_task_key(row: Dict[str, Any]) -> str:
+    query_id = str(row.get("Query ID", "")).strip()
+    book_id = str(row.get("Book ID", "")).strip()
+    if query_id and book_id:
+        return f"{query_id}__{book_id}"
+
     query = str(row.get("Query", "")).strip()
-    q_id = str(row.get("Query ID", "")).strip()
-    b_id = str(row.get("Book ID", "")).strip()
-    if query and b_id:
-        return f"{query}__{b_id}"
-    return f"{q_id}_{b_id}" if q_id and b_id else ""
+    if query and book_id:
+        return f"{query}__{book_id}"
+
+    return ""
 
 
 def _is_row_scored(row: Dict[str, Any]) -> bool:
@@ -274,19 +230,38 @@ def _is_row_scored(row: Dict[str, Any]) -> bool:
     return bool(score or comment)
 
 
-def save_annotated_csv(tasks: List[Dict[str, Any]], csv_path: str):
-    """將標註結果合併存入 CSV，避免洗掉既有的非 blind 列。"""
-    if not tasks and not os.path.exists(csv_path):
-        return
+def load_existing_annotations(csv_path: Path) -> Dict[str, Dict[str, str]]:
+    annotations: Dict[str, Dict[str, str]] = {}
+    if not csv_path.exists():
+        return annotations
+
+    with csv_path.open("r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            key = _make_task_key(row)
+            if not key:
+                continue
+
+            score = str(row.get("Score (0-3)", "")).strip()
+            comment = str(row.get("Comment", "")).strip()
+            if score or comment:
+                annotations[key] = {"score": score, "comment": comment}
+
+    return annotations
+
+
+def save_annotations(tasks: List[Dict[str, Any]], csv_path: Path) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     merged_rows: List[Dict[str, Any]] = []
-    fieldnames: List[str] = []
     row_index: Dict[str, int] = {}
+    fieldnames: List[str] = list(ANNOTATION_COLUMNS)
 
-    if os.path.exists(csv_path):
-        with open(csv_path, "r", encoding="utf-8-sig") as f:
+    if csv_path.exists():
+        with csv_path.open("r", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
-            fieldnames = list(reader.fieldnames or [])
+            if reader.fieldnames:
+                fieldnames = list(dict.fromkeys([*fieldnames, *reader.fieldnames]))
             for row in reader:
                 merged_rows.append(dict(row))
                 key = _make_task_key(row)
@@ -298,193 +273,135 @@ def save_annotated_csv(tasks: List[Dict[str, Any]], csv_path: str):
             continue
 
         key = _make_task_key(task)
-        cleaned_task = {k: v for k, v in task.items() if v != ""}
+        cleaned_task = {
+            column: task.get(column, "")
+            for column in dict.fromkeys([*fieldnames, *task.keys()])
+        }
 
         if key and key in row_index:
-            target_row = merged_rows[row_index[key]]
-            for key_name, value in cleaned_task.items():
-                if value != "":
-                    target_row[key_name] = value
+            merged_rows[row_index[key]] = cleaned_task
         else:
             merged_rows.append(cleaned_task)
             if key:
                 row_index[key] = len(merged_rows) - 1
 
-        for column_name in cleaned_task.keys():
-            if column_name not in fieldnames:
-                fieldnames.append(column_name)
+        for column in cleaned_task:
+            if column not in fieldnames:
+                fieldnames.append(column)
 
-    if not merged_rows:
-        return
-
-    if not fieldnames:
-        fieldnames = list(merged_rows[0].keys())
-    else:
-        for row in merged_rows:
-            for column_name in row.keys():
-                if column_name not in fieldnames:
-                    fieldnames.append(column_name)
-
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(merged_rows)
 
 
 def run_judge(
-    experiment_name: str = "pilot_test",
+    experiment_dir: str,
+    experiment_name: Optional[str] = None,
     model_id: Optional[str] = None,
     batch_size: int = 10,
-    experiment_dir: str = "data/experiments/pools",
     annotations_dir: str = "data/experiments/annotations",
-):
-    """
-    主流程：讀取盲測資料，使用 LLM 進行評分，儲存結果。
-    支援中斷續傳：已評過的題目會自動跳過。
-    """
-    base_dir = resolve_pools_dir(Path(experiment_dir))
-    blind_csv = base_dir / f"{experiment_name}_blind.csv"
-    annotated_input_csv = resolve_annotation_input_path(
-        experiment_name=experiment_name,
-        pools_dir=base_dir,
-        annotations_dir=annotations_dir,
-    )
-    annotated_output_csv = resolve_annotation_output_path(
-        experiment_name=experiment_name,
-        annotations_dir=annotations_dir,
-    )
-
-    if not blind_csv.exists():
-        print(f"❌ 找不到盲測檔案: {blind_csv}")
+) -> None:
+    pooled_queries = load_experiment_pool(experiment_dir)
+    tasks = build_annotation_rows(pooled_queries)
+    if not tasks:
+        print("No pooled candidates found.")
         return
 
-    # 1. 讀取資料
-    print(f"📂 讀取盲測資料: {blind_csv}")
-    tasks = load_blind_tasks(str(blind_csv))
-    print(f"   共 {len(tasks)} 筆待評資料")
+    annotation_path = resolve_annotation_path(annotations_dir)
+    existing = load_existing_annotations(annotation_path)
 
-    # 2. 讀取已標註的結果 (支援續傳)
-    existing = load_existing_annotations(str(annotated_input_csv))
-    already_done_total = len(existing)
-    
-    # 找出當前 tasks 中有多少是已經評分過的
-    tasks_already_done = 0
+    already_done = 0
     for task in tasks:
         key = _make_task_key(task)
         if key in existing:
-            tasks_already_done += 1
-            
-    if already_done_total > 0:
-        print(f"   ⏩ 資料庫中已有 {already_done_total} 筆紀錄")
-        print(f"   ⏩ 目前待評清單中有 {tasks_already_done} 筆已評分，將自動跳過")
+            task["Score (0-3)"] = existing[key]["score"]
+            task["Comment"] = existing[key]["comment"]
+            already_done += 1
 
-    # 3. 初始化 LLM Judge
-    if already_done_total > 0:
-        print(f"   ?? 載入既有標註: {annotated_input_csv}")
-
-    annotated_output_csv.parent.mkdir(parents=True, exist_ok=True)
-    print(f"   ?? 共享標註輸出: {annotated_output_csv}")
+    label = experiment_name or Path(experiment_dir).name
+    print(f"Experiment: {label}")
+    print(f"Run directory: {Path(experiment_dir)}")
+    print(f"Pooled candidates: {len(tasks)}")
+    print(f"Existing annotations reused: {already_done}")
+    print(f"Annotation file: {annotation_path}")
 
     judge = LLMJudge(model_id=model_id)
-    print(f"🤖 使用模型: {judge.model_id}")
-    print(f"{'='*60}")
+    print(f"Judge model: {judge.model_id}")
+    print("=" * 60)
 
-    # 4. 逐筆評分
+    scored_count = already_done
     total = len(tasks)
-    scored_count = tasks_already_done
-    skipped_unknown = 0
 
-    for i, task in enumerate(tasks):
-        key = _make_task_key(task)
-
-        # 跳過已評分的
-        if key in existing:
-            task["Score (0-3)"] = existing[key]["score"]
-            if "Comment" in task or "comment" in task: # 避免 key 大小寫問題
-                task["Comment"] = existing[key]["comment"]
-            else:
-                task["Comment"] = existing[key]["comment"]
+    for index, task in enumerate(tasks, start=1):
+        if _is_row_scored(task):
             continue
 
-        query = task["Query"]
-        title = task.get("Title", "")
-        intro_raw = task.get("Intro", "")
+        print(f"\n[{index}/{total}] Query ID: {task['Query ID']} | Book: {task['Title'][:40]}")
+        result = judge.judge_single(
+            query=task["Query"],
+            title=task["Title"],
+            tags=task.get("Tags", ""),
+            intro=task.get("Intro", ""),
+        )
 
-        tags_str = ""
-        clean_intro = intro_raw
-        if "[標籤:" in intro_raw:
-            start_idx = intro_raw.find("[標籤:") + 4
-            end_idx = intro_raw.find("]", start_idx)
-            if end_idx != -1:
-                tags_str = intro_raw[start_idx:end_idx].strip()
-            clean_intro = re.sub(r"\[標籤:.*?\]\s*\n*", "", intro_raw, count=1).strip()
-
-        # 進度顯示
-        print(f"\n[{i+1}/{total}] Query ID: {task['Query ID']} | Book: {title[:30]}...")
-
-        result = judge.judge_single(query, title, tags_str, clean_intro)
-        score = result["score"]
-        reasoning = result["reasoning"]
-
-        task["Score (0-3)"] = str(score)
-        task["Comment"] = reasoning
-        existing[key] = {"score": str(score), "comment": reasoning}
+        task["Score (0-3)"] = str(result["score"])
+        task["Comment"] = result["reasoning"]
         scored_count += 1
 
-        # 標記跳過的 Unknown
-        if title == "Unknown" or title.strip() == "":
-            skipped_unknown += 1
+        print(f"  Score: {task['Score (0-3)']}/3 | {task['Comment'][:80]}")
 
-        print(f"   ✅ Score: {score}/3 | {reasoning[:60]}...")
-
-        # 定期儲存 (每 batch_size 筆存一次)
         if scored_count % batch_size == 0:
-            save_annotated_csv(tasks, str(annotated_output_csv))
-            print(f"\n   💾 已儲存進度 ({scored_count}/{total})")
+            save_annotations(tasks, annotation_path)
+            print(f"  Saved progress ({scored_count}/{total})")
 
-    # 5. 最終儲存
-    save_annotated_csv(tasks, str(annotated_output_csv))
+    save_annotations(tasks, annotation_path)
 
-    # 6. 報告
-    print(f"\n{'='*60}")
-    print(f"🎉 評分完成！")
-    print(f"   📊 總計: {total} 筆")
-    print(f"   ✅ 已評分: {scored_count} 筆")
-    print(f"   ⏭️  Unknown 自動 0 分: {skipped_unknown} 筆")
-    print(f"   💾 結果已儲存至: {annotated_output_csv}")
-    print(f"\n   下一步: 執行 python -m src.eval.metrics --experiment {experiment_name} 計算 NDCG")
+    print("\n" + "=" * 60)
+    print("Judging complete")
+    print(f"Total pooled candidates: {total}")
+    print(f"Annotated candidates: {scored_count}")
+    print(f"Saved to: {annotation_path}")
 
-
-# ============================================================
-# Entry Point
-# ============================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LLM-as-a-Judge 自動評分")
-    parser.add_argument("--experiment", type=str, default="pilot_test",
-                        help="實驗名稱 (預設: pilot_test)")
-    parser.add_argument("--model", type=str, default=None,
-                        help=f"指定 LLM 模型 (預設: {JUDGE_MODELS[0]})")
-    parser.add_argument("--batch-size", type=int, default=10,
-                        help="每幾筆儲存一次進度 (預設: 10)")
+    parser = argparse.ArgumentParser(description="Judge pooled run candidates with an LLM")
     parser.add_argument(
         "--experiment-dir",
         type=str,
-        default="data/experiments/pools",
-        help="Directory containing pool files, or a batch directory containing a pools/ folder",
+        default="data/experiments/runs",
+        help="Directory containing run JSON files",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default=None,
+        help="Optional label shown in output",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help=f"Judge model (default: {JUDGE_MODELS[0]})",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10,
+        help="Save progress every N newly scored candidates",
     )
     parser.add_argument(
         "--annotations-dir",
         type=str,
         default="data/experiments/annotations",
-        help="Shared directory for reusable LLM judge annotations",
+        help="Directory containing the shared annotation CSV",
     )
     args = parser.parse_args()
 
     run_judge(
+        experiment_dir=args.experiment_dir,
         experiment_name=args.experiment,
         model_id=args.model,
         batch_size=args.batch_size,
-        experiment_dir=args.experiment_dir,
         annotations_dir=args.annotations_dir,
     )

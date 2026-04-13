@@ -1,12 +1,12 @@
+import argparse
 import csv
-import json
-import re
 import statistics
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from src.eval.paths import resolve_annotation_input_path, resolve_pools_dir
+from src.eval.paths import resolve_annotation_path
+from src.eval.pool_data import load_experiment_pool
 from src.eval.tag_rules import apply_hard_filters, score_required_tags
 
 
@@ -27,101 +27,11 @@ def calculate_set_quality(scores: List[float], good_threshold: float = 2.0) -> D
     }
 
 
-def _build_row_book_metadata(row: Dict[str, str]) -> Dict[str, Any]:
-    words_in_10k = float(row.get("Words (萬)") or 0)
-    intro = row.get("Intro", "")
-
-    tags: List[str] = []
-    if "[標籤:" in intro:
-        start_idx = intro.find("[標籤:") + 4
-        end_idx = intro.find("]", start_idx)
-        if end_idx != -1:
-            tags_str = intro[start_idx:end_idx]
-            tags = [t.strip() for t in tags_str.split(",") if t.strip()]
-
-    return {
-        "words_total": words_in_10k * 10000,
-        "publish_status": row.get("Status", ""),
-        "tags": tags,
-        "is_animated": False,
-    }
-
-
-def _load_pool_metadata(csv_path: Path) -> Dict[str, Dict[str, Any]]:
-    """Load hard-constraint metadata from the generated blind CSV."""
-    pool_data: Dict[str, Dict[str, Any]] = {}
-    if not csv_path.exists():
-        return pool_data
-
-    with csv_path.open("r", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            book_id = str(row.get("Book ID", "")).strip()
-            if not book_id:
-                continue
-            pool_data[book_id] = _build_row_book_metadata(row)
-    return pool_data
-
-
-def _load_books_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
-    books_data: Dict[str, Dict[str, Any]] = {}
-    if not path.exists():
-        return books_data
-
-    with path.open("r", encoding="utf-8") as f:
-        try:
-            crawled_data = json.load(f)
-        except json.JSONDecodeError:
-            print("Warning: Failed to parse books_crawled.json")
-            return books_data
-
-    for book in crawled_data:
-        book_id = str(book.get("id", "")).strip()
-        if book_id:
-            books_data[book_id] = book
-    return books_data
-
-
-def _resolve_candidate_score(
-    query: str,
-    book_id: str,
-    base_score: float,
-    books_data: Dict[str, Dict[str, Any]],
-    golden_rules_map: Dict[str, Dict[str, Any]],
-    use_strict_filter: bool,
-    strict_only: bool,
-) -> float:
-    if not use_strict_filter and not strict_only:
-        return base_score
-
-    golden_rules = golden_rules_map.get(query, {})
-    if not golden_rules:
-        return 0.0 if strict_only else base_score
-
-    metadata = books_data.get(book_id, {})
-    if not apply_hard_filters(golden_rules, metadata):
-        return 0.0
-
-    if strict_only:
-        required_tags = golden_rules.get("required_tags") or []
-        if not required_tags:
-            return 3.0
-        strict_score, _, _, _ = score_required_tags(golden_rules, metadata)
-        return strict_score
-
-    required_tags = golden_rules.get("required_tags") or []
-    if not required_tags:
-        return base_score
-
-    strict_score, _, _, _ = score_required_tags(golden_rules, metadata)
-    return strict_score
-
-
 def _run_family(engine_name: str) -> str:
-    match = re.match(r"^(.*)_run\d+$", engine_name)
-    if match:
-        return match.group(1)
-    return engine_name
+    if "_run" not in engine_name:
+        return engine_name
+    prefix, _, suffix = engine_name.rpartition("_run")
+    return prefix if suffix.isdigit() else engine_name
 
 
 def _mean(values: List[float]) -> float:
@@ -130,6 +40,67 @@ def _mean(values: List[float]) -> float:
 
 def _stdev(values: List[float]) -> float:
     return statistics.stdev(values) if len(values) > 1 else 0.0
+
+
+def _candidate_metadata(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "words_total": candidate.get("words_total", 0),
+        "publish_status": candidate.get("publish_status", ""),
+        "tags": candidate.get("tags", []),
+        "is_animated": False,
+    }
+
+
+def _resolve_candidate_score(
+    base_score: float,
+    golden_rules: Dict[str, Any],
+    candidate: Dict[str, Any],
+    use_strict_filter: bool,
+    strict_only: bool,
+) -> float:
+    if not use_strict_filter and not strict_only:
+        return base_score
+
+    if not golden_rules:
+        return 0.0 if strict_only else base_score
+
+    metadata = _candidate_metadata(candidate)
+    if not apply_hard_filters(golden_rules, metadata):
+        return 0.0
+
+    required_tags = golden_rules.get("required_tags") or []
+    if strict_only:
+        if not required_tags:
+            return 3.0
+        strict_score, _, _, _ = score_required_tags(golden_rules, metadata)
+        return strict_score
+
+    if not required_tags:
+        return base_score
+
+    strict_score, _, _, _ = score_required_tags(golden_rules, metadata)
+    return strict_score
+
+
+def _load_annotations(annotation_path: Path) -> Dict[str, Dict[str, float]]:
+    annotations: Dict[str, Dict[str, float]] = {}
+
+    with annotation_path.open("r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            query_id = str(row.get("Query ID", "")).strip()
+            book_id = str(row.get("Book ID", "")).strip()
+            if not query_id or not book_id:
+                continue
+
+            try:
+                score = float(row.get("Score (0-3)", "") or 0)
+            except ValueError:
+                score = 0.0
+
+            annotations.setdefault(query_id, {})[book_id] = score
+
+    return annotations
 
 
 def _print_mode_summary(
@@ -151,7 +122,7 @@ def _print_mode_summary(
             best_score = 0.0
         summary.append((engine_name, avg_score, good_rate, strong_rate, best_score))
 
-    summary.sort(key=lambda x: x[1], reverse=True)
+    summary.sort(key=lambda item: item[1], reverse=True)
 
     if show_detail:
         print("\n" + "-" * 40)
@@ -169,7 +140,6 @@ def _print_mode_summary(
     for engine_name, avg_score, good_rate, strong_rate, best_score in summary:
         family_summary[_run_family(engine_name)].append(
             {
-                "engine_name": engine_name,
                 "avg_score": avg_score,
                 "good_rate": good_rate,
                 "strong_rate": strong_rate,
@@ -191,7 +161,7 @@ def _print_mode_summary(
 
         for family, runs in sorted(
             families_to_print.items(),
-            key=lambda item: _mean([r["avg_score"] for r in item[1]]),
+            key=lambda item: _mean([run["avg_score"] for run in item[1]]),
             reverse=True,
         ):
             avg_scores = [item["avg_score"] for item in runs]
@@ -218,91 +188,54 @@ def _print_mode_summary(
 
 
 def run_evaluation(
-    experiment_name: str,
-    experiment_dir: str = "data/experiments/pools",
+    experiment_dir: str,
+    experiment_name: Optional[str] = None,
     annotations_dir: str = "data/experiments/annotations",
     group_only: bool = False,
 ) -> None:
-    base_dir = Path(experiment_dir)
-    pools_dir = resolve_pools_dir(base_dir)
-    blind_csv = pools_dir / f"{experiment_name}_blind.csv"
-    annotated_csv = resolve_annotation_input_path(
-        experiment_name=experiment_name,
-        pools_dir=pools_dir,
-        annotations_dir=annotations_dir,
-    )
-    truth_json = pools_dir / f"{experiment_name}_truth.json"
+    pooled_queries = load_experiment_pool(experiment_dir)
+    annotation_path = resolve_annotation_path(annotations_dir)
+    if not annotation_path.exists():
+        raise FileNotFoundError(f"Missing annotation file: {annotation_path}")
 
-    if not truth_json.exists():
-        raise FileNotFoundError(f"Missing truth file: {truth_json}")
-    if not blind_csv.exists():
-        raise FileNotFoundError(f"Missing blind file: {blind_csv}")
-    if not annotated_csv.exists():
-        raise FileNotFoundError(f"Missing annotated file: {annotated_csv}")
-
-    with open("data/experiments/queries.json", "r", encoding="utf-8") as f:
-        queries_config = json.load(f)
-    golden_rules_map = {item["query"]: item.get("golden_rules", {}) for item in queries_config}
-
-    books_data = _load_books_metadata(Path("data/books_crawled.json"))
-    books_data.update(_load_pool_metadata(blind_csv))
-
-    with open(truth_json, "r", encoding="utf-8") as f:
-        truth_data = json.load(f)
-
-    annotations: Dict[str, Dict[str, float]] = {}
-    with annotated_csv.open("r", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            query = row["Query"]
-            book_id = row["Book ID"]
-            try:
-                score = float(row["Score (0-3)"])
-            except ValueError:
-                score = 0.0
-
-            annotations.setdefault(query, {})[book_id] = score
-
-            if str(book_id) not in books_data:
-                books_data[str(book_id)] = _build_row_book_metadata(row)
+    annotations = _load_annotations(annotation_path)
+    label = experiment_name or Path(experiment_dir).name
 
     print("\n" + "=" * 40)
     print("Experiment Evaluation")
     print("=" * 40)
-    print(f"Experiment: {experiment_name}")
+    print(f"Experiment: {label}")
+    print(f"Run directory: {Path(experiment_dir)}")
+    print(f"Annotation file: {annotation_path}")
 
     modes = [
         ("no-strict", False, False),
         ("strict-only", True, True),
     ]
     for mode_name, use_strict_filter, strict_only in modes:
-        engine_query_quality = defaultdict(list)
+        engine_query_quality: Dict[str, List[Dict[str, float]]] = defaultdict(list)
 
-        for truth_entry in truth_data:
-            query = truth_entry["query"]
-            candidates = truth_entry["candidates"]
+        for pooled_query in pooled_queries:
+            query_id = pooled_query["query_id"]
+            golden_rules = pooled_query.get("golden_rules", {})
+            engine_results: Dict[str, List[float]] = defaultdict(list)
 
-            engine_results = defaultdict(list)
-
-            for cand in candidates:
-                book_id = str(cand["book_id"])
-                base_score = annotations.get(query, {}).get(book_id, 0.0)
+            for candidate in pooled_query["candidates"]:
+                book_id = str(candidate.get("book_id", ""))
+                base_score = annotations.get(query_id, {}).get(book_id, 0.0)
                 score = _resolve_candidate_score(
-                    query=query,
-                    book_id=book_id,
                     base_score=base_score,
-                    books_data=books_data,
-                    golden_rules_map=golden_rules_map,
+                    golden_rules=golden_rules,
+                    candidate=candidate,
                     use_strict_filter=use_strict_filter,
                     strict_only=strict_only,
                 )
 
-                for engine_name, _rank in cand["original_ranks"].items():
+                for engine_name in candidate.get("original_ranks", {}):
                     engine_results[engine_name].append(score)
 
             for engine_name, scores in engine_results.items():
-                quality = calculate_set_quality(scores)
-                engine_query_quality[engine_name].append(quality)
+                engine_query_quality[engine_name].append(calculate_set_quality(scores))
 
         _print_mode_summary(mode_name, engine_query_quality, show_detail=not group_only)
 
@@ -310,21 +243,24 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Run Evaluation Metrics")
-    parser.add_argument("--experiment", type=str, default="pilot_test", help="Experiment name")
+    parser = argparse.ArgumentParser(description="Evaluate run quality from pooled run data")
     parser.add_argument(
         "--experiment-dir",
         type=str,
-        default="data/experiments/runs/batch_YYYYMMDD_HHMMSS",
-        help="Batch directory containing a pools/ folder",
+        default="data/experiments/runs",
+        help="Directory containing run JSON files",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default=None,
+        help="Optional label shown in output",
     )
     parser.add_argument(
         "--annotations-dir",
         type=str,
         default="data/experiments/annotations",
-        help="Shared directory for reusable LLM judge annotations",
+        help="Directory containing the shared annotation CSV",
     )
     parser.add_argument(
         "--group-only",
@@ -334,8 +270,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run_evaluation(
-        args.experiment,
         experiment_dir=args.experiment_dir,
+        experiment_name=args.experiment,
         annotations_dir=args.annotations_dir,
         group_only=args.group_only,
     )

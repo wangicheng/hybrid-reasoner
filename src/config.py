@@ -1,8 +1,13 @@
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from typing import List
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv() -> None:
+        return None
 
 # Load .env file
 load_dotenv()
