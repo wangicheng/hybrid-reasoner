@@ -1,6 +1,10 @@
 import sqlite3
 import json
+import time
+import jieba
+import numpy as np
 from typing import List, Dict, Any, Optional
+from rank_bm25 import BM25Okapi
 from src.config import settings
 
 class Database:
@@ -183,3 +187,128 @@ class Database:
             d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
             items.append(d)
         return items
+
+
+class BM25Index:
+    """
+    以 rank_bm25 (Okapi BM25) 在內存中對 novels 資料表建立索引。
+    使用 jieba 進行中文分詞，建立三個獨立索引：title / intro / author。
+
+    Usage:
+        db = Database()
+        bm25 = BM25Index(db)          # 自動建立索引
+        results = bm25.search_title("為美好世界獻上祝福", top_k=10)
+        # -> [{"item": {...}, "bm25_score": 12.34}, ...]
+    """
+
+    # 中文常見停用詞
+    _STOPWORDS = frozenset({
+        '的', '了', '和', '是', '就', '都', '而', '及', '與', '著',
+        '或', '一個', '沒有', '我們', '你們', '他們', '她們', '它們',
+        '這', '那', '在', '有', '不', '人', '也', '到', '說', '要',
+        '會', '對', '上', '下', '把', '讓', '被', '從', '去', '又',
+        '很', '過', '之', '所', '能', '為', '以', '如', '更', '但',
+        '卻', '才', '啊', '吧', '呢', '嗎', '喔', '哦', '耶', '呀',
+    })
+
+    def __init__(self, db: 'Database'):
+        self.db = db
+        self._items: List[Dict[str, Any]] = []
+
+        # BM25 索引實例
+        self._title_index = None
+        self._intro_index = None
+        self._author_index = None
+
+        self.build()
+
+    @staticmethod
+    def _tokenize(text: str) -> List[str]:
+        """使用 jieba 分詞 + 停用字過濾 + 小寫化。"""
+        if not text:
+            return []
+
+        tokens = []
+        for word in jieba.cut(text):
+            word = word.strip().lower()
+            if len(word) < 1:
+                continue
+            if word in BM25Index._STOPWORDS:
+                continue
+            tokens.append(word)
+        return tokens
+
+    def build(self) -> None:
+        """從 DB 讀取所有 novels 並建立 BM25 索引。"""
+        start = time.perf_counter()
+
+        self._items = self.db.get_all_items()
+
+        title_corpus: List[List[str]] = []
+        intro_corpus: List[List[str]] = []
+        author_corpus: List[List[str]] = []
+
+        for item in self._items:
+            # 書名索引：合併 name + backupname + illname
+            title_parts = ' '.join(filter(None, [
+                item.get('name', ''),
+                item.get('backupname', ''),
+                item.get('illname', ''),
+            ]))
+            title_corpus.append(self._tokenize(title_parts))
+
+            # 簡介索引
+            intro_corpus.append(self._tokenize(item.get('intro', '') or ''))
+
+            # 作者索引
+            author_corpus.append(self._tokenize(item.get('author', '') or ''))
+
+        # 建立 BM25 索引（空語料庫時使用空列表避免錯誤）
+        self._title_index = BM25Okapi(title_corpus) if title_corpus else None
+        self._intro_index = BM25Okapi(intro_corpus) if intro_corpus else None
+        self._author_index = BM25Okapi(author_corpus) if author_corpus else None
+
+        elapsed = time.perf_counter() - start
+        print(f"[BM25Index] Built indexes for {len(self._items)} novels in {elapsed:.2f}s")
+
+    def rebuild(self) -> None:
+        """重建索引（資料變更後呼叫）。"""
+        self.build()
+
+    def _search(self, index, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """通用搜尋方法：對指定索引進行 BM25 查詢。"""
+        if index is None or not self._items:
+            return []
+
+        query_tokens = self._tokenize(query)
+        if not query_tokens:
+            return []
+
+        scores = index.get_scores(query_tokens)
+
+        # 取 top_k 且 score > 0
+        top_indices = np.argsort(scores)[::-1][:top_k]
+
+        results = []
+        for idx in top_indices:
+            score = float(scores[idx])
+            if score <= 0:
+                break
+            results.append({
+                'item': self._items[idx],
+                'bm25_score': score,
+            })
+
+        return results
+
+    def search_title(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """BM25 書名搜尋。"""
+        return self._search(self._title_index, query, top_k)
+
+    def search_intro(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """BM25 簡介/內容搜尋。"""
+        return self._search(self._intro_index, query, top_k)
+
+    def search_author(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """BM25 作者搜尋。"""
+        return self._search(self._author_index, query, top_k)

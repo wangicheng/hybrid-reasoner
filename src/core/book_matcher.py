@@ -12,14 +12,15 @@ import re
 from difflib import SequenceMatcher
 from typing import List, Dict, Any, Optional
 
-from src.core.database import Database
+from src.core.database import Database, BM25Index
 
 
 class BookMatcher:
     """負責將模糊書名比對到書庫中的正式書名並取得標籤。"""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, bm25_index: Optional[BM25Index] = None):
         self.db = db
+        self.bm25_index = bm25_index
         self._title_cache: Optional[List[Dict[str, Any]]] = None
 
     # ─── Public API ───
@@ -106,11 +107,26 @@ class BookMatcher:
         extracted_tags: List[str],
         found_books: set,
     ):
-        """嘗試匹配書名：先 LIKE → 再 difflib。"""
+        """嘗試匹配書名：BM25 → LIKE → difflib。"""
         if not title or len(title) < 2:
             return
 
-        # 1) LIKE + gap LIKE
+        # 1) BM25 書名搜尋（優先）
+        if self.bm25_index is not None:
+            bm25_results = self.bm25_index.search_title(title, top_k=3)
+            if bm25_results:
+                book = bm25_results[0]['item']
+                bm25_score = bm25_results[0]['bm25_score']
+                if book.get('name') and book['name'] not in found_books:
+                    found_books.add(book['name'])
+                    tags = book.get('tags', [])
+                    if tags:
+                        print(f"[BookMatcher] {source} BM25匹配: 《{book['name']}》 (query='{title}', bm25={bm25_score:.2f})")
+                        print(f"[BookMatcher] 提取標籤: {', '.join(tags[:8])}")
+                        extracted_tags.extend(tags)
+                return
+
+        # 2) LIKE + gap LIKE (fallback)
         results = self.db.search_by_title_fuzzy(title)
         if results:
             book = results[0]
@@ -123,7 +139,7 @@ class BookMatcher:
                     extracted_tags.extend(tags)
             return
 
-        # 2) difflib 兜底
+        # 3) difflib 兜底
         match = self.fuzzy_match_title(title)
         if match and match["name"] not in found_books:
             found_books.add(match["name"])

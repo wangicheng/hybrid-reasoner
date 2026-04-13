@@ -1,9 +1,10 @@
 import json
+import jieba
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import settings
 from src.core.book_matcher import BookMatcher
-from src.core.database import Database
+from src.core.database import Database, BM25Index
 from src.core.explainer import generate_explanation
 from src.core.llm import parse_query
 from src.core.vector_store import VectorStore
@@ -21,7 +22,8 @@ class HybridEngine:
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
-        self.book_matcher = BookMatcher(self.db)
+        self.bm25_index = BM25Index(self.db)
+        self.book_matcher = BookMatcher(self.db, bm25_index=self.bm25_index)
         self.semantic_weight = (
             semantic_weight if semantic_weight is not None else settings.SEMANTIC_WEIGHT
         )
@@ -113,6 +115,27 @@ class HybridEngine:
             return "連載中"
         return None
 
+    @staticmethod
+    def _rrf_fuse(
+        vector_rank_map: Dict[str, int],
+        bm25_rank_map: Dict[str, int],
+        k: int = 60,
+    ) -> Dict[str, float]:
+        """
+        Reciprocal Rank Fusion (RRF).
+        Combines two rank maps into a single score map.
+        score(d) = 1/(k + rank_vector(d)) + 1/(k + rank_bm25(d))
+        """
+        all_ids = set(vector_rank_map.keys()) | set(bm25_rank_map.keys())
+        fused: Dict[str, float] = {}
+        # For items missing from one list, use a very large rank (low contribution)
+        default_rank = 99999
+        for doc_id in all_ids:
+            v_rank = vector_rank_map.get(doc_id, default_rank)
+            b_rank = bm25_rank_map.get(doc_id, default_rank)
+            fused[doc_id] = 1.0 / (k + v_rank) + 1.0 / (k + b_rank)
+        return fused
+
 
     def calculate_score(
         self,
@@ -120,11 +143,12 @@ class HybridEngine:
         vector_score: float,
         tag_terms_list: List[str],
         tag_mapping_weights: List[Dict[str, float]],
+        parsed=None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
-        breakdown: List[Dict[str, Any]] = []
-
+        # 1. 恢復語意相似度作為主權重
         semantic_score = 0.1 + 0.9 * vector_score
-        breakdown.append(
+        final_score = semantic_score
+        breakdown: List[Dict[str, Any]] = [
             {
                 "criteria": "semantic_track",
                 "label": "Semantic Track",
@@ -133,7 +157,7 @@ class HybridEngine:
                 "is_filter": False,
                 "reason": f"semantic score {semantic_score:.4f} (raw {vector_score:.4f})",
             }
-        )
+        ]
 
         attribute_score = 1.0
         has_tag_scoring = False
@@ -176,7 +200,7 @@ class HybridEngine:
             )
 
         if has_tag_scoring:
-            total_score = (
+            final_score = (
                 semantic_score * self.semantic_weight
                 + attribute_score * self.attribute_weight
             )
@@ -185,21 +209,40 @@ class HybridEngine:
                 f"({attribute_score:.4f} * {self.attribute_weight})"
             )
         else:
-            total_score = semantic_score
+            final_score = semantic_score
             fusion_reason = f"semantic only: {semantic_score:.4f}"
+
+        # 2. 精準標籤獎勵 (Exact Tag Bonus)
+        query_words = set(tag_terms_list) if tag_terms_list else set()
+            
+        item_tags = set(self._normalize_tags(item.get("tags", [])))
+        exact_matches = [w for w in query_words if w in item_tags and len(w) > 1]
+        
+        if exact_matches:
+            bonus = min(0.3, len(exact_matches) * 0.1)
+            final_score += bonus
+            breakdown.append({
+                "criteria": "tag_exact_match",
+                "label": "精準標籤獎勵",
+                "reason": f"精準命中標籤: {', '.join(exact_matches)}",
+                "raw_score": float(len(exact_matches)),
+                "weighted_score": bonus,
+                "is_filter": False,
+            })
+            fusion_reason += f" | Tag Bonus +{bonus:.2f}"
 
         breakdown.append(
             {
                 "criteria": "global_fusion",
                 "label": "Global Fusion",
-                "raw_score": total_score,
-                "weighted_score": total_score,
+                "raw_score": final_score,
+                "weighted_score": final_score,
                 "is_filter": False,
                 "reason": fusion_reason,
             }
         )
 
-        return total_score, breakdown
+        return final_score, breakdown
 
     def _post_filter(
         self,
@@ -334,6 +377,36 @@ class HybridEngine:
             payload_map[book_id] = payload
             vector_score_map[book_id] = float(hit["score"])
 
+        # ── BM25 intro recall (Stage 3 augmentation) ──
+        bm25_intro_results = self.bm25_index.search_intro(expanded_terms, top_k=200)
+        bm25_score_map: Dict[str, float] = {}
+        for result in bm25_intro_results:
+            bm25_item = result['item']
+            book_id = str(bm25_item.get('id', ''))
+            if not book_id or book_id == 'None':
+                continue
+            bm25_score_map[book_id] = result['bm25_score']
+            if book_id not in candidates_map:
+                candidates_map[book_id] = bm25_item
+                payload_map[book_id] = bm25_item
+                vector_score_map[book_id] = 0.0
+
+        # ── RRF fusion of vector + BM25 ranks ──
+        # Build rank maps (0-indexed, sorted by score desc)
+        vector_sorted = sorted(vector_score_map.items(), key=lambda x: x[1], reverse=True)
+        vector_rank_map = {doc_id: rank for rank, (doc_id, _) in enumerate(vector_sorted)}
+
+        bm25_sorted = sorted(bm25_score_map.items(), key=lambda x: x[1], reverse=True)
+        bm25_rank_map = {doc_id: rank for rank, (doc_id, _) in enumerate(bm25_sorted)}
+
+        rrf_scores = self._rrf_fuse(vector_rank_map, bm25_rank_map)
+
+        print(
+            f"[Engine] Retrieval: {len(vector_score_map)} vector, "
+            f"{len(bm25_score_map)} BM25, "
+            f"{len(rrf_scores)} RRF merged"
+        )
+
         if tag_terms_list:
             print(f"[Engine] Triggering mapped-tag recall for {len(tag_terms_list)} terms.")
             tag_queries = [f"tag: {term}" for term in tag_terms_list]
@@ -392,18 +465,35 @@ class HybridEngine:
                 negative_tag_terms.extend(result["tag"] for result in mapped)
             else:
                 negative_tag_terms.append(query_text)
+
         scored_items = []
         for item in candidates:
             book_id = str(item.get("id"))
             if not book_id or book_id == "None":
                 continue
             vector_score = vector_score_map.get(book_id, 0.0)
+            rrf_bonus = rrf_scores.get(book_id, 0.0)
+            
             final_score, breakdown = self.calculate_score(
                 item,
                 vector_score=vector_score,
                 tag_terms_list=tag_terms_list,
                 tag_mapping_weights=tag_mapping_weights,
+                parsed=parse_result,
             )
+            
+            # 將 RRF 作為加分項附加
+            final_score += rrf_bonus
+            
+            breakdown.append({
+                "criteria": "rrf_fusion",
+                "label": "RRF Fusion Bonus",
+                "reason": f"RRF排名加分: {rrf_bonus:.6f}",
+                "raw_score": rrf_bonus,
+                "weighted_score": rrf_bonus,
+                "is_filter": False,
+            })
+            
             scored_items.append(
                 {
                     "item": item,
