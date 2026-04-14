@@ -30,6 +30,7 @@ class BookMatcher:
         user_query: str,
         search_terms: str = "",
         reference_books: Optional[List[str]] = None,
+        query_intent: Optional[Any] = None,
     ) -> List[str]:
         """
         從使用者查詢提取參考小說的標籤（去重保序）。
@@ -38,28 +39,40 @@ class BookMatcher:
             user_query:       原始使用者輸入
             search_terms:     LLM 提取的搜尋關鍵詞
             reference_books:  LLM 明確標識的書名列表
+            query_intent:     意圖解析結果，用於避開負面書名
 
         Returns:
             合併後的標籤清單
         """
         extracted_tags: List[str] = []
         found_books: set = set()
+        
+        # 建立負面排除清單（來自 LLM 解析的不要的書 / 概念）
+        exclusions = set()
+        if query_intent:
+            if hasattr(query_intent, "hard_exclusions"):
+                exclusions.update(e.term for e in query_intent.hard_exclusions)
+            if hasattr(query_intent, "soft_exclusions"):
+                exclusions.update(e.term for e in query_intent.soft_exclusions)
 
         def _try(title: str, source: str):
+            # 檢查是否在負面清單中，如果包含負面詞則跳過
+            for exc in exclusions:
+                if title in exc or exc in title:
+                    print(f"[BookMatcher] 忽略負面參考書: {title} (Matches exclusion: {exc})")
+                    return
             self._try_match_book(title, source, extracted_tags, found_books)
 
-        # Layer 1: LLM reference_books（最高優先級）
+        # Layer 1: LLM reference_books（最高優先級，LLM 已被要求過濾負面教材）
         for title in (reference_books or []):
             _try(title, "LLM reference_books")
 
-        # Layer 2: 書名號包裹
+        # Layer 2: 書名號包裹 (加上負面過濾)
         for pattern in [r'《([^》]+)》', r'「([^」]+)」', r'『([^』]+)』', r'"([^"]+)"']:
             for match in re.findall(pattern, user_query):
                 _try(match, "書名號")
 
-        # Layer 3: search_terms >= 4 chars
-        if search_terms and len(search_terms) >= 4:
-            _try(search_terms, "search_term")
+        # Layer 3 (已移除): 原本使用 search_terms 做模糊匹配，但會導致如 "戰爭 戀愛" 匹配到毫不相干的搞笑作品《歸宅戰爭》，引發嚴重的字面陷阱。
 
         return list(dict.fromkeys(extracted_tags))
 

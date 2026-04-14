@@ -107,6 +107,47 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
             valid_criteria.append(item)
     
     final_result["criteria"] = valid_criteria
+
+    # 4. Normalize query_intent (Pre-Retrieval 意圖解析)
+    if isinstance(parsed, dict) and "query_intent" in parsed:
+        raw_intent = parsed["query_intent"]
+        if isinstance(raw_intent, dict):
+            # Normalize positive_terms
+            positive_terms = raw_intent.get("positive_terms", [])
+            if not isinstance(positive_terms, list):
+                positive_terms = []
+
+            # Normalize hard_exclusions
+            hard_exclusions = []
+            for exc in raw_intent.get("hard_exclusions", []):
+                if isinstance(exc, dict) and exc.get("term"):
+                    hard_exclusions.append({
+                        "term": str(exc["term"]).strip(),
+                        "strength": "hard",
+                        "weight": float(exc.get("weight", -1.0)),
+                        "reason": str(exc.get("reason", "")),
+                    })
+
+            # Normalize soft_exclusions
+            soft_exclusions = []
+            for exc in raw_intent.get("soft_exclusions", []):
+                if isinstance(exc, dict) and exc.get("term"):
+                    weight = float(exc.get("weight", -0.5))
+                    # Clamp weight to [-0.8, -0.3] range
+                    weight = max(-0.8, min(-0.3, weight))
+                    soft_exclusions.append({
+                        "term": str(exc["term"]).strip(),
+                        "strength": "soft",
+                        "weight": weight,
+                        "reason": str(exc.get("reason", "")),
+                    })
+
+            final_result["query_intent"] = {
+                "positive_terms": [str(t).strip() for t in positive_terms if str(t).strip()],
+                "hard_exclusions": hard_exclusions,
+                "soft_exclusions": soft_exclusions,
+            }
+
     return final_result
 
 
@@ -131,7 +172,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
     else:
         models_to_try = FALLBACK_MODELS
 
-    # 手動定義 Schema (简化为语义搜索 + 硬过滤模式)
+    # 手動定義 Schema (语义搜索 + 硬过滤 + 結構化意圖拆解)
     manual_schema = {
         "type": "object",
         "properties": {
@@ -149,7 +190,47 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
             "reference_books": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of book/novel/anime titles explicitly mentioned or referenced in the user query. Extract the title as-is from the query. Examples: '為美好世界獻上祝福' from '跟為美好世界獻上祝福差不多的', 'overlord' from '像overlord一樣的'"
+                "description": "List of book/novel/anime titles explicitly mentioned as POSITIVE examples you should reference. DO NOT include titles the user dislikes or wants to avoid. Example: '像overlord' -> ['overlord'], but '不要像《刮鬍》' -> []"
+            },
+            "query_intent": {
+                "type": "object",
+                "description": "結構化意圖拆解：將查詢拆分為正向搜尋詞與負向約束，避免否定詞進入 BM25 計分",
+                "properties": {
+                    "positive_terms": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "淨化後的正向搜尋關鍵詞，僅包含使用者真正想要的概念（不含否定修飾詞及被否定的詞彙）"
+                    },
+                    "hard_exclusions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "term": {"type": "string", "description": "要排除的標準化標籤/概念或特定書籍"},
+                                "strength": {"type": "string", "enum": ["hard"], "description": "固定為 hard"},
+                                "weight": {"type": "number", "description": "固定為 -1.0"},
+                                "reason": {"type": "string", "description": "排除原因"}
+                            },
+                            "required": ["term"]
+                        },
+                        "description": "絕對排除項 (AND NOT)。注意：請將使用者的情緒化抱怨（如：變白癡、爛造、膚淺）轉譯為對應的小說標準標籤（如：降智、無腦爽文、毒草）。如果是明確討厭的書（如不要戀愛光譜），將書名當作標籤放入此處。"
+                    },
+                    "soft_exclusions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "term": {"type": "string", "description": "要降權的標準化標籤/概念"},
+                                "strength": {"type": "string", "enum": ["soft"], "description": "固定為 soft"},
+                                "weight": {"type": "number", "description": "負權重，-0.3 到 -0.8 之間"},
+                                "reason": {"type": "string", "description": "降權原因"}
+                            },
+                            "required": ["term", "weight"]
+                        },
+                        "description": "柔性排除項：使用者表示「盡量不要」的概念。同樣需轉化為標準標籤。"
+                    }
+                },
+                "required": ["positive_terms"]
             },
             "criteria": {
                 "type": "array",
@@ -200,7 +281,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
                 }
             }
         },
-        "required": ["original_query", "criteria", "search_terms", "generated_keywords", "hypothetical_intro", "reference_books"]
+        "required": ["original_query", "criteria", "search_terms", "generated_keywords", "hypothetical_intro", "reference_books", "query_intent"]
     }
 
     system_instruction = """
@@ -255,17 +336,49 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
     - Example: "不要修仙" → semantic_similarity(query_text="修仙", is_negative=true)
     - If user says "角色不要太多", it means WANTS "few characters" → semantic_similarity(query_text="角色少", is_negative=false)
     
+    ### CRITICAL TASK: query_intent (結構化意圖拆解)
+    You MUST decompose the query into positive_terms and negative constraints.
+    This is the MOST IMPORTANT task — it prevents negation words from corrupting BM25 scoring.
+    
+    **Rules:**
+    1. **positive_terms**: Extract ONLY what the user WANTS. Never include negation words (不要/排除/禁止) or negated concepts.
+       - "推薦魔法學校小說，不要悲劇" → positive_terms: ["魔法學校", "奇幻", "校園"]
+       - "找輕鬆異世界小說，不要後宮不要NTR" → positive_terms: ["輕鬆", "異世界", "冒險"]
+    
+    2. **hard_exclusions**: For absolute exclusions (不要/不想要/排除/禁止/不能有)
+       - "不要悲劇" → hard_exclusions: [{term: "悲劇", strength: "hard", weight: -1.0, reason: "用戶明確排除悲劇"}]
+       - "排除BL" → hard_exclusions: [{term: "BL", strength: "hard", weight: -1.0, reason: "用戶排除BL"}]
+    
+    3. **soft_exclusions**: For soft preferences (盡量不要/最好不要/少一點/希望不要)
+       - "盡量不要後宮" → soft_exclusions: [{term: "後宮", strength: "soft", weight: -0.5, reason: "用戶偏好少後宮"}]
+       - "最好不要太虐" → soft_exclusions: [{term: "虐心", strength: "soft", weight: -0.4, reason: "用戶偏好不要太虐"}]
+       - The weight should be between -0.3 (mild preference) and -0.8 (strong preference)
+    
+    **Complete Example:**
+    Query: "推薦魔法學校冒險小說，不要悲劇，不要主角死亡，盡量不要後宮"
+    query_intent: {
+        positive_terms: ["魔法學校", "冒險", "奇幻", "校園", "魔法"],
+        hard_exclusions: [
+            {term: "悲劇", strength: "hard", weight: -1.0, reason: "用戶明確排除悲劇"},
+            {term: "主角死亡", strength: "hard", weight: -1.0, reason: "用戶明確排除主角死亡"}
+        ],
+        soft_exclusions: [
+            {term: "後宮", strength: "soft", weight: -0.5, reason: "用戶偏好少後宮"}
+        ]
+    }
+    
     ### TASK 1: Reference Books (reference_books)
-    If the user mentions ANY book, novel, anime, manga, or light novel title (with or without 《》), extract the title as-is.
-    - Example: "跟為美好世界獻上祝福差不多的" → reference_books: ["為美好世界獻上祝福"]
+    If the user mentions a book, novel, or anime AS A POSITIVE EXAMPLE (e.g. "想看類似《無職》的"), extract the title.
+    CRITICAL: DO NOT extract titles the user explicitly states they DISLIKE or want to AVOID (e.g. "不要像《刮鬍》的", "《戀愛光譜》我不喜歡").
     - Example: "像overlord一樣的" → reference_books: ["overlord"]
-    - Example: "《無職轉生》風格" → reference_books: ["無職轉生"]
-    - Example: "找類似轉生史萊姆跟盾之勇者的書" → reference_books: ["轉生史萊姆", "盾之勇者"]
-    - If no book is mentioned, return an empty list: reference_books: []
+    - Example: "不要像刀劍神域" → reference_books: [] (And put "刀劍神域" in hard_exclusions)
+    - If no POSITIVE book is mentioned, return an empty list: reference_books: []
+
     
     ### TASK 2: Query Expansion (generated_keywords)
     Generate 5-10 specific domain keywords in Traditional Chinese that capture the semantic intent.
     - Focus on genre-specific terms, tropes, themes
+    - IMPORTANT: Only include POSITIVE keywords the user wants. Do NOT include negated concepts.
     - Example for "科幻": ["太空", "未來", "科技", "星際", "機器人", "時間旅行"]
     
     ### TASK 3: Hypothetical Document Embeddings (hypothetical_intro)
@@ -285,7 +398,7 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
       hypothetical_intro: "厭倦了城市的喧囂，他回到鄉下繼承了一間破舊的小食堂。溫暖的料理，治癒了每一位客人的心靈..."
     
     ### Output Format
-    Always include: original_query, search_terms, generated_keywords, reference_books, hypothetical_intro, criteria
+    Always include: original_query, search_terms, generated_keywords, reference_books, hypothetical_intro, query_intent, criteria
     """
     
     if tag_list:

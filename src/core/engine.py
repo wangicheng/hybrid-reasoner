@@ -7,6 +7,11 @@ from src.core.book_matcher import BookMatcher
 from src.core.database import Database, BM25Index
 from src.core.explainer import generate_explanation
 from src.core.llm import parse_query
+from src.core.query_preprocessor import (
+    build_query_intent,
+    apply_negative_boost,
+    apply_hard_exclusions,
+)
 from src.core.vector_store import VectorStore
 
 
@@ -323,10 +328,18 @@ class HybridEngine:
             tag_list=self.all_tags_cache,
         )
 
+        # ── 階段一：Pre-Retrieval 意圖解析與查詢重構 ──
+        query_intent = build_query_intent(parse_result, user_query)
+        # 將結構化意圖回寫到 parse_result（便於下游使用）
+        parse_result = parse_result.model_copy(
+            update={"query_intent": query_intent}
+        )
+
         reference_tags = self.book_matcher.extract_reference_tags(
             user_query,
             search_terms=parse_result.search_terms,
             reference_books=parse_result.reference_books,
+            query_intent=query_intent,
         )
 
         tag_terms_list = self._dedupe_terms(
@@ -338,6 +351,8 @@ class HybridEngine:
             print(f"[Engine] Pre-mapping {len(tag_terms_list)} tag facets.")
             tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list)
 
+        # ── 使用淨化後的正向詞取代原始查詢送入 BM25 ──
+        # 語意搜尋仍用完整 expanded_terms（向量模型能處理否定語意）
         base_terms = parse_result.search_terms or parse_result.original_query
         expanded_terms = base_terms
 
@@ -355,6 +370,13 @@ class HybridEngine:
         if semantic_texts:
             semantic_expansion = " ".join(semantic_texts)
             expanded_terms = f"{expanded_terms} {semantic_expansion}".strip()
+
+        # BM25 查詢使用淨化後的正向詞，避免否定詞汙染 BM25 計分
+        sanitized_bm25_terms = query_intent.sanitized_bm25_query or expanded_terms
+        print(
+            f"[Engine] BM25 淨化查詢: \"{sanitized_bm25_terms}\" "
+            f"(原始: \"{base_terms}\")"
+        )
 
         retrieval_limit = 10000
         candidates_map: Dict[str, Dict[str, Any]] = {}
@@ -377,8 +399,10 @@ class HybridEngine:
             payload_map[book_id] = payload
             vector_score_map[book_id] = float(hit["score"])
 
-        # ── BM25 intro recall (Stage 3 augmentation) ──
-        bm25_intro_results = self.bm25_index.search_intro(expanded_terms, top_k=200)
+        # ── BM25 intro recall：使用淨化後的查詢 ──
+        bm25_intro_results = self.bm25_index.search_intro(
+            sanitized_bm25_terms, top_k=200
+        )
         bm25_score_map: Dict[str, float] = {}
         for result in bm25_intro_results:
             bm25_item = result['item']
@@ -439,7 +463,27 @@ class HybridEngine:
 
         print(f"[Engine] Candidate pool size: {len(candidates)}")
 
+        # ── 從 query_intent 建立負向約束（取代舊的 negative_criteria 邏輯）──
         negative_tag_terms: List[str] = []
+
+        # 從 query_intent.hard_exclusions 提取硬排除標籤
+        if query_intent.hard_exclusions:
+            for exc in query_intent.hard_exclusions:
+                try:
+                    mapped = self.vs.search_tags(
+                        f"tag: {exc.term}",
+                        limit=5,
+                        similarity_threshold=0.6,
+                    )
+                except Exception as e:
+                    print(f"[Engine] Warning: hard exclusion tag mapping failed: {e}")
+                    mapped = []
+                if mapped:
+                    negative_tag_terms.extend(result["tag"] for result in mapped)
+                else:
+                    negative_tag_terms.append(exc.term)
+
+        # 也從舊的 criteria is_negative 補充（向下相容）
         negative_criteria = [
             criteria
             for criteria in parse_result.criteria
@@ -448,19 +492,17 @@ class HybridEngine:
         ]
         for criteria in negative_criteria:
             query_text = self._criteria_params(criteria).get("query_text", "").strip()
-            if not query_text:
+            if not query_text or query_text in negative_tag_terms:
                 continue
-
             try:
                 mapped = self.vs.search_tags(
                     f"tag: {query_text}",
-                    limit=1,
-                    similarity_threshold=0.7,
+                    limit=5,
+                    similarity_threshold=0.6,
                 )
             except Exception as exc:
                 print(f"[Engine] Warning: negative tag mapping failed: {exc}")
                 mapped = []
-
             if mapped:
                 negative_tag_terms.extend(result["tag"] for result in mapped)
             else:
@@ -504,12 +546,34 @@ class HybridEngine:
                 }
             )
 
-        scored_items.sort(key=lambda result: result["score"], reverse=True)
+        # ── 階段一延伸：負權重機制 (Negative Boosting) ──
+        # 對軟排除命中的文件進行扣分
+        if query_intent.soft_exclusions:
+            scored_items = apply_negative_boost(
+                scored_items,
+                query_intent.soft_exclusions,
+                self._normalize_tags,
+            )
+
+        # ── 硬排除過濾（結合 query_intent + 舊有 post_filter）──
+        # 依指示：在結果排序前就徹底剔除，確保硬排除具有最優先的阻斷力
+
+        # 先用 query_intent 的硬排除進行 tag 過濾
+        if query_intent.hard_exclusions:
+            scored_items = apply_hard_exclusions(
+                scored_items,
+                query_intent.hard_exclusions,
+                self._normalize_tags,
+            )
+
+        # 再走舊有的 post_filter（處理 status/author/words/legacy negative_tag_terms）
         scored_items = self._post_filter(
             scored_items,
             parse_result.criteria,
             negative_tag_terms,
         )
+        
+        # 過濾乾淨後，才進行最終排序
         scored_items.sort(key=lambda result: result["score"], reverse=True)
 
         if not scored_items:
@@ -565,6 +629,7 @@ class HybridEngine:
             "generated_keywords": parse_result.generated_keywords,
             "hypothetical_intro": parse_result.hypothetical_intro,
             "reference_tags": reference_tags,
+            "query_intent": query_intent.model_dump() if query_intent else None,
             "query_vector": query_vector,
             "results": final_results,
             "engine": "HybridEngine",
