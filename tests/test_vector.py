@@ -1,5 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
+from src.core.engine import HybridEngine
 from src.core.vector_store import VectorStore
 
 class TestVectorStore(unittest.TestCase):
@@ -39,6 +41,24 @@ class TestVectorStore(unittest.TestCase):
         self.assertEqual(results[0]["score"], 0.9)
         mock_genai_client.models.embed_content.assert_called()
         mock_client.query_points.assert_called()
+
+
+class TestHyDERetrievalText(unittest.TestCase):
+    def test_engine_prefers_hypothetical_intro_for_semantic_retrieval(self):
+        engine = HybridEngine.__new__(HybridEngine)
+        parse_result = SimpleNamespace(
+            hypothetical_intro="A disgraced knight wanders a dying kingdom and protects a cursed girl.",
+            search_terms="fantasy kingdom cursed girl knight",
+            original_query="want fantasy novels",
+            criteria=[],
+        )
+
+        retrieval_text = engine._build_semantic_retrieval_text(parse_result)
+
+        self.assertEqual(
+            retrieval_text,
+            "Intro: A disgraced knight wanders a dying kingdom and protects a cursed girl.",
+        )
 
 if __name__ == '__main__':
     unittest.main()

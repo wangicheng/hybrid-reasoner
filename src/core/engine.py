@@ -135,6 +135,36 @@ class HybridEngine:
     ) -> List[str]:
         return self._dedupe_terms(generated_keywords)
 
+    def _build_semantic_retrieval_text(self, parse_result: Any) -> str:
+        hypothetical_intro = str(getattr(parse_result, "hypothetical_intro", "") or "").strip()
+        if hypothetical_intro:
+            return f"Intro: {hypothetical_intro}"
+
+        base_terms = str(getattr(parse_result, "search_terms", "") or "").strip()
+        if not base_terms:
+            base_terms = str(getattr(parse_result, "original_query", "") or "").strip()
+
+        positive_semantic = [
+            criteria
+            for criteria in getattr(parse_result, "criteria", [])
+            if criteria.name == "semantic_similarity"
+            and not getattr(criteria, "is_negative", False)
+        ]
+
+        semantic_texts = []
+        normalized_base_terms = "".join(str(base_terms).split()).lower()
+        for criteria in positive_semantic:
+            query_text = self._criteria_params(criteria).get("query_text", "").strip()
+            normalized_query_text = "".join(query_text.split()).lower()
+            if query_text and normalized_query_text != normalized_base_terms:
+                semantic_texts.append(query_text)
+
+        if semantic_texts:
+            semantic_expansion = " ".join(semantic_texts)
+            return f"{base_terms} {semantic_expansion}".strip()
+
+        return base_terms
+
     def _resolve_negative_tag_terms(self, criteria_list: List[Any]) -> List[str]:
         """Negative semantic criteria are only used to resolve blocked tag terms."""
         negative_tag_terms: List[str] = []
@@ -364,25 +394,7 @@ class HybridEngine:
             print(f"[Engine] Pre-mapping {len(tag_terms_list)} tag facets.")
             tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list)
 
-        base_terms = parse_result.search_terms or parse_result.original_query
-        expanded_terms = base_terms
-
-        positive_semantic = [
-            criteria
-            for criteria in parse_result.criteria
-            if criteria.name == "semantic_similarity"
-            and not getattr(criteria, "is_negative", False)
-        ]
-        semantic_texts = []
-        normalized_base_terms = "".join(str(base_terms).split()).lower()
-        for criteria in positive_semantic:
-            query_text = self._criteria_params(criteria).get("query_text", "").strip()
-            normalized_query_text = "".join(query_text.split()).lower()
-            if query_text and normalized_query_text != normalized_base_terms:
-                semantic_texts.append(query_text)
-        if semantic_texts:
-            semantic_expansion = " ".join(semantic_texts)
-            expanded_terms = f"{expanded_terms} {semantic_expansion}".strip()
+        semantic_retrieval_text = self._build_semantic_retrieval_text(parse_result)
 
         retrieval_limit = 10000
         candidates_map: Dict[str, Dict[str, Any]] = {}
@@ -390,7 +402,7 @@ class HybridEngine:
         payload_map: Dict[str, Dict[str, Any]] = {}
 
         vector_results, query_vector = self.vs.search(
-            expanded_terms,
+            semantic_retrieval_text,
             limit=retrieval_limit,
             query_filter=None,
             with_payload=True,
@@ -483,6 +495,8 @@ class HybridEngine:
                 "search_terms": parse_result.search_terms,
                 "generated_keywords": parse_result.generated_keywords,
                 "tag_intent": parse_result.tag_intent.model_dump(),
+                "hypothetical_intro": parse_result.hypothetical_intro,
+                "semantic_retrieval_text": semantic_retrieval_text,
                 "query_vector": query_vector,
                 "results": [],
                 "message": "No matching novels were found after applying the filters.",
@@ -533,6 +547,7 @@ class HybridEngine:
             "generated_keywords": parse_result.generated_keywords,
             "tag_intent": parse_result.tag_intent.model_dump(),
             "hypothetical_intro": parse_result.hypothetical_intro,
+            "semantic_retrieval_text": semantic_retrieval_text,
             "related_books": related_books,
             "reference_tags": [],
             "parse_metadata": parse_result.parse_metadata,

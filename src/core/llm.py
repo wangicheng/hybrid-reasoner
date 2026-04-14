@@ -500,6 +500,7 @@ def _criteria_to_key(criteria: Any) -> Tuple[str, bool, str]:
 def _merge_query_parse_results(
     user_query: str,
     tag_intent: TagIntent,
+    hypothetical_intro: str,
     structured_slots: Dict[str, Any],
     total_latency_ms: float,
     branch_latencies_ms: Dict[str, float],
@@ -599,7 +600,7 @@ def _merge_query_parse_results(
         search_terms=semantic_query_text,
         generated_keywords=list(tag_intent.positive_terms),
         tag_intent=tag_intent,
-        hypothetical_intro="",
+        hypothetical_intro=str(hypothetical_intro or "").strip(),
         criteria=merged_criteria,
         parse_metadata=metadata,
     )
@@ -725,6 +726,138 @@ def _generate_json_task(
         sampling_temperature=sampling_temperature,
         enforce_rate_limit=enforce_rate_limit,
     )
+
+
+def _generate_text_from_contents(
+    *,
+    contents: str,
+    task_label: str,
+    system_instruction: str,
+    model_id: Optional[str] = None,
+    sampling_temperature: float = 0.4,
+    enforce_rate_limit: bool = True,
+) -> str:
+    from src.core.api_utils import (
+        get_api_key_rotator,
+        get_current_api_key,
+        get_rate_limiter,
+    )
+
+    selected_model = str(model_id or DEFAULT_PARSER_MODEL).strip() or DEFAULT_PARSER_MODEL
+
+    print(f"[llm:{task_label}] trying model: {selected_model}")
+
+    rotator = get_api_key_rotator()
+    if not getattr(rotator, "api_keys", None):
+        raise RuntimeError(f"[llm:{task_label}] no API keys configured")
+
+    request_count = 0
+    total_api_keys = len(rotator.api_keys)
+
+    while True:
+        api_key = get_current_api_key()
+        key_index = rotator.current_index + 1
+        client = genai.Client(api_key=api_key)
+
+        try:
+            if enforce_rate_limit:
+                print(f"[llm:{task_label}] waiting for rate limiter before request.")
+                get_rate_limiter().wait(api_key)
+
+            config_args = {
+                "system_instruction": system_instruction,
+                "temperature": sampling_temperature,
+                "top_p": 0.95,
+            }
+
+            request_count += 1
+            print(
+                f"[llm:{task_label}] sending request "
+                f"(request {request_count}, key {key_index}/{total_api_keys})..."
+            )
+            started_at = time.perf_counter()
+            response = _call_with_timeout(
+                lambda: client.models.generate_content(
+                    model=selected_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**config_args),
+                ),
+                timeout_seconds=LLM_REQUEST_TIMEOUT_SECONDS,
+                label=f"{task_label}:{selected_model}",
+            )
+            latency = time.perf_counter() - started_at
+            print(f"[llm:{task_label}] response received in {latency:.1f}s.")
+
+            raw_text = _extract_text_from_response(response).strip()
+            if raw_text:
+                return raw_text
+            raise ValueError(f"{task_label} returned empty text")
+        except Exception as exc:
+            print(f"[llm:{task_label}] request failed on key {key_index}/{total_api_keys}: {exc}")
+            continue
+        finally:
+            if total_api_keys > 1:
+                rotator.rotate()
+
+
+def _generate_hypothetical_intro(
+    *,
+    user_query: str,
+    semantic_understanding: Dict[str, Any],
+    tag_projection: Dict[str, Any],
+    model_id: Optional[str] = None,
+    sampling_temperature: float = 0.4,
+) -> str:
+    semantic_query_text = str(semantic_understanding.get("semantic_query_text") or "").strip()
+    intent_summary = str(semantic_understanding.get("intent_summary") or "").strip()
+    positive_concepts = [
+        str(term).strip()
+        for term in semantic_understanding.get("positive_concepts", [])
+        if str(term).strip()
+    ]
+    negative_concepts = [
+        str(term).strip()
+        for term in semantic_understanding.get("negative_concepts", [])
+        if str(term).strip()
+    ]
+    projected_tags = [
+        str(term).strip()
+        for term in tag_projection.get("positive_terms", [])
+        if str(term).strip()
+    ]
+
+    system_instruction = """
+You write HyDE passages for semantic retrieval against novel intros.
+
+Return only the hypothetical intro text. Do not return JSON, markdown, lists, labels, or explanations.
+
+Rules:
+- Write a realistic novel intro or jacket summary in Traditional Chinese unless the query clearly uses another language.
+- Keep it to 3-5 sentences.
+- Focus on premise, conflict, tone, and the kind of emotional or thematic experience the reader wants.
+- Make it resemble the wording found in real novel intros.
+- Prefer positive description of desired qualities instead of listing exclusions.
+- Avoid repetition, slogan-like phrasing, and bullet-list cadence.
+""".strip()
+
+    contents = (
+        f"Original Query:\n{user_query}\n\n"
+        f"Semantic Query Text:\n{semantic_query_text or '(empty)'}\n\n"
+        f"Intent Summary:\n{intent_summary or '(empty)'}\n\n"
+        f"Positive Concepts:\n{', '.join(positive_concepts) if positive_concepts else '(empty)'}\n\n"
+        f"Negative Concepts:\n{', '.join(negative_concepts) if negative_concepts else '(empty)'}\n\n"
+        f"Projected Tags:\n{', '.join(projected_tags) if projected_tags else '(empty)'}\n\n"
+        "Write one hypothetical intro that would be highly similar to the target novels' real intros."
+    )
+
+    return _generate_text_from_contents(
+        contents=contents,
+        task_label="hyde_intro",
+        system_instruction=system_instruction,
+        model_id=model_id,
+        sampling_temperature=sampling_temperature,
+        enforce_rate_limit=False,
+    ).strip()
 
 
 
@@ -945,6 +1078,16 @@ Rules:
         semantic_understanding=semantic_understanding,
         tag_projection=tag_projection,
     )
+    started_hyde_at = time.perf_counter()
+    hypothetical_intro = _generate_hypothetical_intro(
+        user_query=user_query,
+        semantic_understanding=semantic_understanding,
+        tag_projection=tag_projection,
+        model_id=model_id,
+        sampling_temperature=sampling_temperature,
+    )
+    branch_latencies_ms["hyde_intro"] = (time.perf_counter() - started_hyde_at) * 1000
+
     structured_context = _build_structured_context_from_semantic_understanding(
         semantic_understanding,
         tag_projection=tag_projection,
@@ -976,6 +1119,7 @@ Rules:
     merged_result = _merge_query_parse_results(
         user_query=user_query,
         tag_intent=tag_intent,
+        hypothetical_intro=hypothetical_intro,
         structured_slots=structured_slots,
         total_latency_ms=total_latency_ms,
         branch_latencies_ms=branch_latencies_ms,
@@ -984,8 +1128,9 @@ Rules:
         update={
             "parse_metadata": {
                 **merged_result.parse_metadata,
-                "parser_mode": "response_schema_three_call",
-                "task_split": "semantic_understanding_tag_projection_structured",
+                "parser_mode": "response_schema_three_call_plus_hyde",
+                "task_split": "semantic_understanding_tag_projection_hyde_structured",
+                "hyde_enabled": True,
             }
         }
     )
