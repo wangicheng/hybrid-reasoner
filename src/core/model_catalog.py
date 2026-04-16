@@ -4,15 +4,16 @@ import re
 from typing import Iterable, List, Tuple
 
 
-DEFAULT_MODEL_ID = "gemma-3-27b-it"
+# The model used by default for parsing and generation when none is specified.
+DEFAULT_MODEL_ID = "gemma-4-31b-it"
 
-MODEL_OPTIONS: List[Tuple[str, str]] = [
-    ("gemma-3-27b-it", "Gemma 3 27B"),
-    ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
+AVAILABLE_MODELS: List[Tuple[str, str]] = [
+    ("gemma-4-31b-it", "Gemma 4 31B"),
+    ("gemini-1.5-flash", "Gemini 1.5 Flash"),
     ("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
 ]
 
-MODEL_PRIORITY_ORDER = [model_id for model_id, _label in MODEL_OPTIONS]
+MODEL_PRIORITY_ORDER = [model_id for model_id, _label in AVAILABLE_MODELS]
 JUDGE_MODELS = list(MODEL_PRIORITY_ORDER)
 
 

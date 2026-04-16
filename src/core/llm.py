@@ -1,4 +1,4 @@
-﻿import json
+import json
 import functools
 import time
 import re
@@ -9,8 +9,8 @@ from google.genai import types
 from pydantic import BaseModel as PydanticBaseModel
 from src.models.schemas import QueryParseResult, ScoringCriteria, ScoringParameters, TagIntent
 
-# ??????謘?(???????制??謅???????剜???蹇?????
-DEFAULT_PARSER_MODEL = "gemma-3-27b-it"
+# ??????謘?(???????制??謅???????剜???蹇?????# Model defaults
+DEFAULT_PARSER_MODEL = "gemma-4-31b-it"
 LLM_REQUEST_TIMEOUT_SECONDS = 45.0
 
 DEBUG_LLM_OUTPUT = True
@@ -678,6 +678,7 @@ def _generate_json_from_contents(
                 "system_instruction": system_instruction,
                 "temperature": sampling_temperature,
                 "top_p": 0.95,
+                "max_output_tokens": 1024,
             }
 
             request_count += 1
@@ -768,6 +769,7 @@ def _generate_text_from_contents(
                 "system_instruction": system_instruction,
                 "temperature": sampling_temperature,
                 "top_p": 0.95,
+                "max_output_tokens": 1024,
             }
 
             request_count += 1
@@ -968,6 +970,7 @@ Return JSON with:
     - Put directly rejected ideas into `negative_concepts`.
     - Use `ambiguities` for things that are unclear or could be interpreted in more than one way.
     - Do not output hard constraints such as completion status, author, or word count here.
+    - IMPORTANT: Do NOT repeat characters or words endlessly. Ensure all text is concise and well-formed.
 """.strip()
 
     tag_projection_instruction = f"""

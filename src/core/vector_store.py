@@ -25,7 +25,8 @@ class VectorStore:
 
         self._current_api_key = get_current_api_key()
         self.genai_client = genai.Client(api_key=self._current_api_key)
-        self.embedding_model = "gemini-embedding-001"
+        self.embedding_model = "gemini-embedding-2-preview"
+        self.dim = 768
         self._ensure_collection()
 
     def _update_api_key_on_rate_limit(self) -> None:

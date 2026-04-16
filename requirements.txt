@@ -8,4 +8,5 @@ google-genai
 fastapi
 uvicorn
 jieba
+rank_bm25
 beautifulsoup4
