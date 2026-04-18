@@ -137,10 +137,6 @@ class HybridEngine:
         return self._dedupe_terms(generated_keywords)
 
     def _build_semantic_retrieval_text(self, parse_result: Any) -> str:
-        hypothetical_intro = str(getattr(parse_result, "hypothetical_intro", "") or "").strip()
-        if hypothetical_intro:
-            return f"Intro: {hypothetical_intro}"
-
         base_terms = str(getattr(parse_result, "search_terms", "") or "").strip()
         if not base_terms:
             base_terms = str(getattr(parse_result, "original_query", "") or "").strip()
@@ -229,6 +225,22 @@ class HybridEngine:
             v_rank = vector_rank_map.get(doc_id, default_rank)
             b_rank = bm25_rank_map.get(doc_id, default_rank)
             fused[doc_id] = 1.0 / (k + v_rank) + 1.0 / (k + b_rank)
+        return fused
+
+    @staticmethod
+    def _rrf_fuse_multi(
+        *rank_maps: Dict[str, int],
+        k: int = 60,
+    ) -> Dict[str, float]:
+        """Multi-way Reciprocal Rank Fusion."""
+        all_ids: set = set()
+        for rank_map in rank_maps:
+            all_ids |= set(rank_map.keys())
+        fused: Dict[str, float] = {}
+        default_rank = 99999
+        for doc_id in all_ids:
+            score = sum(1.0 / (k + rm.get(doc_id, default_rank)) for rm in rank_maps)
+            fused[doc_id] = score
         return fused
 
 
@@ -342,6 +354,9 @@ class HybridEngine:
         scored_items: List[Dict[str, Any]],
         criteria_list: List[Any],
         negative_tag_terms: List[str],
+        positive_tag_terms: Optional[List[str]] = None,
+        required_tag_terms: Optional[List[str]] = None,
+        result_limit: int = 5,
     ) -> List[Dict[str, Any]]:
         filtered: List[Dict[str, Any]] = []
 
@@ -360,18 +375,29 @@ class HybridEngine:
                 words_min = params.get("min_val")
                 words_max = params.get("max_val")
 
+        # Fix 3: Pre-compute exact whitelist blocked tags (invariant across results)
+        blocked_exact = set(negative_tag_terms) & set(self.all_tags_cache or [])
+
         for result in scored_items:
             item = result["item"]
             excluded = False
             book_tags = self._normalize_tags(item.get("tags", []))
 
-            for negative_term in negative_tag_terms:
-                if any(
-                    negative_term in book_tag or book_tag in negative_term
-                    for book_tag in book_tags
-                ):
+            # Exact whitelist match for negative tags
+            if blocked_exact:
+                book_tag_set = set(book_tags)
+                if blocked_exact & book_tag_set:
                     excluded = True
-                    break
+
+            # Substring fallback for non-whitelist negative terms
+            if not excluded:
+                for negative_term in negative_tag_terms:
+                    if any(
+                        negative_term in book_tag or book_tag in negative_term
+                        for book_tag in book_tags
+                    ):
+                        excluded = True
+                        break
 
             if not excluded and status_filter:
                 item_status = self._normalize_status(item.get("publish_status", ""))
@@ -394,10 +420,43 @@ class HybridEngine:
                 filtered.append(result)
 
         print(
-            f"[PostFilter] {len(scored_items)} -> {len(filtered)} "
+            f"[PostFilter] Hard filters: {len(scored_items)} -> {len(filtered)} "
             f"(removed {len(scored_items) - len(filtered)})"
         )
-        return filtered
+
+        # ── 1. Strict required tags filter ──
+        if required_tag_terms and self.all_tags_cache:
+            required_set = set(required_tag_terms) & set(self.all_tags_cache)
+            if required_set:
+                strictly_matched = []
+                for result in filtered:
+                    book_tags = set(self._normalize_tags(result["item"].get("tags", [])))
+                    if required_set.issubset(book_tags):
+                        strictly_matched.append(result)
+                print(f"[PostFilter] Required tags {required_set} filtered: {len(filtered)} -> {len(strictly_matched)}")
+                if len(strictly_matched) > 0:
+                    filtered = strictly_matched
+
+        # ── 2. Positive tag coverage-based ranking ──
+        target_tag_set: set = set()
+        if positive_tag_terms and self.all_tags_cache:
+            target_tag_set = set(positive_tag_terms) & set(self.all_tags_cache)
+
+        if target_tag_set:
+            # Sort by number of positive tag hits
+            for result in filtered:
+                book_tags = set(self._normalize_tags(result["item"].get("tags", [])))
+                matched_count = len(target_tag_set & book_tags)
+                result["_tag_coverage"] = matched_count
+            
+            # Sort descending by coverage, but preserve original RRF order for ties
+            filtered.sort(key=lambda r: r.get("_tag_coverage", 0), reverse=True)
+
+            print(
+                f"[PostFilter] Sorted {len(filtered)} results by positive tag coverage (out of {len(target_tag_set)} tags)"
+            )
+
+        return filtered[:result_limit]
 
     async def search(
         self,
@@ -456,6 +515,33 @@ class HybridEngine:
             payload_map[book_id] = payload
             vector_score_map[book_id] = float(hit["score"])
 
+        # ── HyDE vector recall (secondary channel) ──
+        hyde_score_map: Dict[str, float] = {}
+        hypothetical_intro = str(getattr(parse_result, "hypothetical_intro", "") or "").strip()
+        if hypothetical_intro:
+            try:
+                hyde_text = f"Intro: {hypothetical_intro}"
+                hyde_results, _ = self.vs.search(
+                    hyde_text,
+                    limit=200,
+                    query_filter=None,
+                    with_payload=True,
+                )
+                for hit in hyde_results:
+                    payload = hit.get("payload") or {}
+                    book_id = payload.get("id")
+                    if not book_id:
+                        continue
+                    book_id = str(book_id)
+                    hyde_score_map[book_id] = float(hit["score"])
+                    if book_id not in candidates_map:
+                        candidates_map[book_id] = payload
+                        payload_map[book_id] = payload
+                        vector_score_map[book_id] = 0.0
+                print(f"[Engine] HyDE recall: {len(hyde_score_map)} candidates")
+            except Exception as exc:
+                print(f"[Engine] HyDE recall failed: {exc}")
+
         # ── BM25 查詢淨化：從查詢中移除負向詞，避免汙染 BM25 計分 ──
         tag_intent = parse_result.tag_intent
         bm25_base = parse_result.search_terms or parse_result.original_query
@@ -483,7 +569,7 @@ class HybridEngine:
                 payload_map[book_id] = bm25_item
                 vector_score_map[book_id] = 0.0
 
-        # ── RRF fusion of vector + BM25 ranks ──
+        # ── RRF fusion of vector + HyDE + BM25 ranks ──
         vector_sorted = sorted(
             vector_score_map.items(), key=lambda x: x[1], reverse=True
         )
@@ -498,10 +584,20 @@ class HybridEngine:
             doc_id: rank for rank, (doc_id, _) in enumerate(bm25_sorted)
         }
 
-        rrf_scores = self._rrf_fuse(vector_rank_map, bm25_rank_map)
+        if hyde_score_map:
+            hyde_sorted = sorted(
+                hyde_score_map.items(), key=lambda x: x[1], reverse=True
+            )
+            hyde_rank_map = {
+                doc_id: rank for rank, (doc_id, _) in enumerate(hyde_sorted)
+            }
+            rrf_scores = self._rrf_fuse_multi(vector_rank_map, hyde_rank_map, bm25_rank_map)
+        else:
+            rrf_scores = self._rrf_fuse(vector_rank_map, bm25_rank_map)
 
         print(
             f"[Engine] Retrieval: {len(vector_score_map)} vector, "
+            f"{len(hyde_score_map)} HyDE, "
             f"{len(bm25_score_map)} BM25, "
             f"{len(rrf_scores)} RRF merged"
         )
@@ -582,10 +678,14 @@ class HybridEngine:
             )
 
         scored_items.sort(key=lambda result: result["score"], reverse=True)
+        # Separate required_tags for hard filtering and positive_terms for soft sorting
         scored_items = self._post_filter(
             scored_items,
             parse_result.criteria,
             negative_tag_terms,
+            positive_tag_terms=list(parse_result.tag_intent.positive_terms),
+            required_tag_terms=list(parse_result.tag_intent.required_tags),
+            result_limit=limit,
         )
         scored_items.sort(key=lambda result: result["score"], reverse=True)
 

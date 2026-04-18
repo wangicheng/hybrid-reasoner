@@ -29,15 +29,18 @@ class RateLimiter:
         bucket_key = bucket or "__global__"
         with self._lock:
             now = time.monotonic()
-            last_call_time = self._last_call_time_by_bucket.get(bucket_key)
-            if last_call_time is not None:
-                elapsed = now - last_call_time
+            last_call = self._last_call_time_by_bucket.get(bucket_key, 0.0)
+            
+            if last_call == 0.0:
+                earliest_possible = now
             else:
-                elapsed = self.min_interval
-            if elapsed < self.min_interval:
-                sleep_time = self.min_interval - elapsed
-                time.sleep(sleep_time)
-            self._last_call_time_by_bucket[bucket_key] = time.monotonic()
+                earliest_possible = max(now, last_call + self.min_interval)
+            
+            sleep_time = earliest_possible - now
+            self._last_call_time_by_bucket[bucket_key] = earliest_possible
+            
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
 
 # Global shared rate limiter instance (callers use per-key buckets when available)

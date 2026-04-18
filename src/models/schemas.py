@@ -6,6 +6,7 @@ class TagIntent(BaseModel):
     Dedicated positive/negative tag extraction result.
     """
     search_terms: str = Field(default="", description="Primary retrieval phrase for the tag-intent task.")
+    required_tags: List[str] = Field(default_factory=list, description="Tags the user explicitly demands as hard constraints.")
     positive_terms: List[str] = Field(default_factory=list, description="Positive tag-like concepts extracted from the query.")
     negative_terms: List[str] = Field(default_factory=list, description="Negative tag-like concepts explicitly rejected by the user.")
 

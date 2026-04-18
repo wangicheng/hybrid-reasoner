@@ -44,6 +44,36 @@ def _is_null_like_text(value: Any) -> bool:
     return text in {"", "null", "none", "nil", "n/a", "na", "unknown", "unspecified"}
 
 
+def _sanitize_repetition(text: str, max_repeat_ratio: float = 0.3) -> str:
+    """Detect and truncate repetitive LLM output (e.g. 'asetsetset...')."""
+    if not text or len(text) < 30:
+        return text
+    words = text.split()
+    if len(words) < 5:
+        return text
+    unique_ratio = len(set(words)) / len(words)
+    if unique_ratio >= max_repeat_ratio:
+        return text
+    # Find where repetition begins and truncate
+    seen_bigrams: set = set()
+    cutoff = len(words)
+    repeat_streak = 0
+    for i in range(len(words) - 1):
+        bigram = (words[i], words[i + 1])
+        if bigram in seen_bigrams:
+            repeat_streak += 1
+            if repeat_streak > 3:
+                cutoff = max(0, i - 2)
+                break
+        else:
+            repeat_streak = 0
+            seen_bigrams.add(bigram)
+    truncated = " ".join(words[:cutoff]).strip()
+    if truncated and truncated != text:
+        print(f"[llm:sanitize] Truncated repetitive output: {len(text)} -> {len(truncated)} chars")
+    return truncated if truncated else text
+
+
 def _extract_text_from_response(response: Any) -> str:
     text_chunks: List[str] = []
 
@@ -143,13 +173,20 @@ def _compose_retrieval_search_terms(
     user_query: str,
     semantic_query_text: str,
     positive_terms: List[str],
+    required_tags: Optional[List[str]] = None,
     max_positive_terms: int = 6,
 ) -> str:
+    # Fix 3: Required tags get priority placement in retrieval text
+    required_deduped = _dedupe_terms([str(t).strip() for t in (required_tags or [])])
     tag_like_terms = _dedupe_terms([str(term).strip() for term in positive_terms])[:max_positive_terms]
     base_text = str(semantic_query_text or "").strip()
 
     segments: List[str] = []
-    segments.extend(tag_like_terms)
+    # Required tags first for stronger vector recall on must-have concepts
+    segments.extend(required_deduped)
+    for term in tag_like_terms:
+        if term not in required_deduped:
+            segments.append(term)
     if base_text:
         segments.append(base_text)
 
@@ -183,11 +220,11 @@ def _coerce_string_list(value: Any) -> List[str]:
 def _normalize_semantic_understanding(parsed: Any, user_query: str) -> Dict[str, Any]:
     normalized = parsed if isinstance(parsed, dict) else {}
 
-    semantic_query_text = str(
+    semantic_query_text = _sanitize_repetition(str(
         normalized.get("semantic_query_text")
         or normalized.get("search_terms")
         or user_query
-    ).strip() or user_query
+    ).strip() or user_query)
     intent_summary = str(
         normalized.get("intent_summary")
         or normalized.get("summary")
@@ -253,6 +290,12 @@ def _build_tag_projection_context(semantic_understanding: Dict[str, Any]) -> str
 
 def _normalize_tag_projection(parsed: Any) -> Dict[str, Any]:
     normalized = parsed if isinstance(parsed, dict) else {}
+    # Fix 1: Preserve required_tags from LLM output
+    required_tags = _dedupe_terms(
+        _coerce_string_list(
+            normalized.get("required_tags")
+        )
+    )
     positive_terms = _dedupe_terms(
         _coerce_string_list(
             normalized.get("positive_terms")
@@ -269,6 +312,7 @@ def _normalize_tag_projection(parsed: Any) -> Dict[str, Any]:
     )
 
     return {
+        "required_tags": required_tags,
         "positive_terms": positive_terms,
         "negative_terms": negative_terms,
     }
@@ -279,6 +323,7 @@ def _build_tag_intent_from_projection(
     semantic_understanding: Dict[str, Any],
     tag_projection: Dict[str, Any],
 ) -> TagIntent:
+    required_tags = list(tag_projection.get("required_tags") or [])
     positive_terms = list(tag_projection.get("positive_terms") or [])
     negative_terms = list(tag_projection.get("negative_terms") or [])
 
@@ -287,16 +332,20 @@ def _build_tag_intent_from_projection(
     if not negative_terms:
         negative_terms = list(semantic_understanding.get("negative_concepts") or [])
 
-    deduped_positive_terms = _dedupe_terms([str(term).strip() for term in positive_terms])
+    deduped_required_tags = _dedupe_terms([str(term).strip() for term in required_tags])
+    # Fix 2: Cap positive_terms to 8 to prevent atmosphere tags from diluting core subject tags
+    deduped_positive_terms = _dedupe_terms([str(term).strip() for term in positive_terms])[:8]
     deduped_negative_terms = _dedupe_terms([str(term).strip() for term in negative_terms])
     search_terms = _compose_retrieval_search_terms(
         user_query=user_query,
         semantic_query_text=str(semantic_understanding.get("semantic_query_text") or ""),
         positive_terms=deduped_positive_terms,
+        required_tags=deduped_required_tags,
     )
 
     return TagIntent(
         search_terms=search_terms,
+        required_tags=deduped_required_tags,
         positive_terms=deduped_positive_terms,
         negative_terms=deduped_negative_terms,
     )
@@ -414,10 +463,12 @@ def _apply_structured_draft_guards(
 
     status_candidate = structured_draft.get("target_status_candidate", {})
     status_value = str(structured_slots.get("target_status") or "").strip().lower()
+    # Relaxed guard: only require is_explicit=True for status.
+    # Evidence substring matching is too strict for Chinese queries where the
+    # LLM may extract slightly different text (e.g. "要完結了的" vs "完結了的").
     if (
         status_value in {"completed", "ongoing"}
         and status_candidate.get("is_explicit")
-        and _query_contains_evidence(user_query, status_candidate.get("evidence"))
     ):
         guarded["target_status"] = status_value
 
@@ -590,6 +641,7 @@ def _merge_query_parse_results(
         "latency_ms": round(total_latency_ms, 2),
         "branches": {name: round(latency, 2) for name, latency in branch_latencies_ms.items()},
         "tag_intent": {
+            "required_count": len(tag_intent.required_tags),
             "positive_count": len(tag_intent.positive_terms),
             "negative_count": len(tag_intent.negative_terms),
         },
@@ -615,6 +667,7 @@ def _build_parallel_context(
         "Return strict JSON only. Use snake_case keys. Do not wrap the JSON in markdown.",
         "The final system merges outputs from multiple branches, so focus only on your assigned subtask.",
         "Use Traditional Chinese for generated retrieval terms and hypothetical intros unless the query explicitly uses another title language.",
+        "CRITICAL: Do NOT repeat words, phrases, or characters endlessly. Be concise and stop generating as soon as the JSON is complete.",
     ]
 
     if tag_list:
@@ -662,7 +715,8 @@ def _generate_json_from_contents(
     request_count = 0
     total_api_keys = len(rotator.api_keys)
 
-    while True:
+    max_attempts = max(3, total_api_keys * 2)
+    for attempt in range(max_attempts):
         api_key = get_current_api_key()
         key_index = rotator.current_index + 1
         client = genai.Client(api_key=api_key)
@@ -706,6 +760,8 @@ def _generate_json_from_contents(
         finally:
             if total_api_keys > 1:
                 rotator.rotate()
+
+    raise RuntimeError(f"Failed to generate JSON after {max_attempts} attempts. Last error: {last_exception}")
 
 
 def _generate_json_task(
@@ -755,7 +811,9 @@ def _generate_text_from_contents(
     request_count = 0
     total_api_keys = len(rotator.api_keys)
 
-    while True:
+    max_attempts = max(3, total_api_keys * 2)
+    last_exception = None
+    for attempt in range(max_attempts):
         api_key = get_current_api_key()
         key_index = rotator.current_index + 1
         client = genai.Client(api_key=api_key)
@@ -795,11 +853,14 @@ def _generate_text_from_contents(
                 return raw_text
             raise ValueError(f"{task_label} returned empty text")
         except Exception as exc:
+            last_exception = exc
             print(f"[llm:{task_label}] request failed on key {key_index}/{total_api_keys}: {exc}")
             continue
         finally:
             if total_api_keys > 1:
                 rotator.rotate()
+
+    raise RuntimeError(f"Failed to generate text after {max_attempts} attempts. Last error: {last_exception}")
 
 
 def _generate_hypothetical_intro(
@@ -852,7 +913,7 @@ Rules:
         "Write one hypothetical intro that would be highly similar to the target novels' real intros."
     )
 
-    return _generate_text_from_contents(
+    raw_intro = _generate_text_from_contents(
         contents=contents,
         task_label="hyde_intro",
         system_instruction=system_instruction,
@@ -860,6 +921,7 @@ Rules:
         sampling_temperature=sampling_temperature,
         enforce_rate_limit=False,
     ).strip()
+    return _sanitize_repetition(raw_intro)
 
 
 
@@ -905,6 +967,10 @@ def _parse_query_parallel_ctx_v2(
     tag_projection_schema = {
         "type": "object",
         "properties": {
+            "required_tags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "positive_terms": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -914,7 +980,7 @@ def _parse_query_parallel_ctx_v2(
                 "items": {"type": "string"},
             },
         },
-        "required": ["positive_terms", "negative_terms"],
+        "required": ["required_tags", "positive_terms", "negative_terms"],
     }
 
     string_candidate_schema = {
@@ -979,19 +1045,22 @@ Return JSON with:
 You are the tag projection pass.
 
     Return JSON with:
+    - required_tags
     - positive_terms
     - negative_terms
 
     Rules:
     - The input includes the original query and the semantic understanding JSON.
-    - Project semantic concepts into short tag-like terms.
-    - Prefer exact tag names from AVAILABLE TAGS whenever possible.
-    - `positive_terms` should contain enough tag-like concepts to drive retrieval and tag mapping.
-    - Return 5-12 `positive_terms` when the query supports that many distinct concepts.
+    - `required_tags` must contain tags the user explicitly demands or specifies as the core subject (e.g. "我想看校園", "找異世界" must yield "校園", "異世界").
+      If the user says "不一定要X" or "X也可以", do NOT put X in required_tags.
+      Typically 0-4 tags. Only include tags from AVAILABLE TAGS.
+    - `positive_terms` should contain broader tag-like concepts for semantic retrieval and soft scoring.
+      These are "nice to have" but not mandatory. Include tags from AVAILABLE TAGS when possible.
+      Return 5-12 terms when the query supports that many distinct concepts.
     - `negative_terms` should contain only concepts the user explicitly rejects or excludes.
-    - Return 3-8 `negative_terms` when the query contains multiple explicit dislikes.
+      Return 3-8 terms when the query contains multiple explicit dislikes.
     - If a concept should stay only in semantic retrieval text and not be projected into tags, omit it.
-    - Return only these two keys. Do not emit helper fields such as `rejected_terms`, `mapping_notes`, `intent_summary`, or explanations.
+    - Return only these three keys.
 """.strip()
 
     structured_instruction = f"""
