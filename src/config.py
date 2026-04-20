@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # Use absolute paths based on PROJECT_ROOT
     QDRANT_PATH: str = str(PROJECT_ROOT / "data" / "qdrant_storage")
     DB_PATH: str = str(PROJECT_ROOT / "data" / "hybrid_reasoner.db")
+    TAG_DESCRIPTIONS_PATH: str = str(PROJECT_ROOT / "data" / "tag_descriptions.json")
+    GEMINI_TAG_DESCRIPTION_ENABLED: bool = False
     
     # Dual-Track Fusion Weights (語意-屬性雙軌融合權重)
     # w1 = SEMANTIC_WEIGHT, w2 = ATTRIBUTE_WEIGHT

@@ -37,8 +37,11 @@ class HybridEngine:
             if attribute_weight is not None
             else settings.ATTRIBUTE_WEIGHT
         )
+        self.use_tag_descriptions = bool(settings.GEMINI_TAG_DESCRIPTION_ENABLED)
         self.all_tags_cache: Optional[Tuple[str, ...]] = None
+        self.tag_descriptions_cache: Optional[Tuple[Tuple[str, str], ...]] = None
         self._load_tags_cache()
+        self._load_tag_descriptions_cache()
         if not self.all_tags_cache:
             raise RuntimeError(
                 "Tag metadata file 'data/all_tags.json' is missing or empty."
@@ -66,6 +69,60 @@ class HybridEngine:
 
         raise RuntimeError(
             f"Tag metadata file '{tags_path}' is empty or has an unexpected format."
+        )
+
+    def _load_tag_descriptions_cache(self) -> None:
+        self.tag_descriptions_cache = None
+        if not self.use_tag_descriptions:
+            return
+
+        descriptions_path = settings.TAG_DESCRIPTIONS_PATH
+        try:
+            with open(descriptions_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except UnicodeDecodeError:
+            with open(descriptions_path, "r", encoding="utf-16") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            raise RuntimeError(
+                f"Tag descriptions file '{descriptions_path}' not found while GEMINI_TAG_DESCRIPTION_ENABLED=true."
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load tag descriptions from '{descriptions_path}': {exc}"
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"Tag descriptions file '{descriptions_path}' must be a JSON object."
+            )
+
+        normalized_descriptions: Dict[str, str] = {}
+        for tag in self.all_tags_cache or tuple():
+            value = data.get(tag)
+            if value is None:
+                continue
+            description = str(value).strip()
+            if description:
+                normalized_descriptions[tag] = description
+
+        missing_tags = [
+            tag for tag in (self.all_tags_cache or tuple()) if tag not in normalized_descriptions
+        ]
+        if missing_tags:
+            print(
+                f"[Engine] Tag descriptions missing for {len(missing_tags)} tags; "
+                "those tags will be injected without description lines."
+            )
+
+        self.tag_descriptions_cache = tuple(
+            (tag, normalized_descriptions[tag])
+            for tag in (self.all_tags_cache or tuple())
+            if tag in normalized_descriptions
+        )
+        print(
+            f"[Engine] Loaded {len(self.tag_descriptions_cache)} tag descriptions "
+            f"from {descriptions_path}."
         )
 
     @staticmethod
@@ -326,6 +383,8 @@ class HybridEngine:
             user_query,
             model_id=model_id,
             tag_list=self.all_tags_cache,
+            tag_descriptions=self.tag_descriptions_cache,
+            use_tag_descriptions=self.use_tag_descriptions,
         )
 
         # ── 階段一：Pre-Retrieval 意圖解析與查詢重構 ──
@@ -342,8 +401,17 @@ class HybridEngine:
             query_intent=query_intent,
         )
 
+        allowed_tags = set(self.all_tags_cache or tuple())
+        extracted_canonical_tags = [
+            tag
+            for tag in parse_result.extracted_tags
+            if tag in allowed_tags
+        ]
+
         tag_terms_list = self._dedupe_terms(
-            list(parse_result.generated_keywords) + reference_tags[:8]
+            extracted_canonical_tags
+            + list(parse_result.generated_keywords)
+            + reference_tags[:8]
         )
 
         tag_mapping_weights: List[Dict[str, float]] = []

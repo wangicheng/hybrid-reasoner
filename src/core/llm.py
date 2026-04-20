@@ -1,7 +1,7 @@
 import os
 import json
 import functools
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from google import genai
 from google.genai import types
 from src.models.schemas import QueryParseResult
@@ -41,6 +41,7 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
         "original_query": user_query,
         "search_terms": user_query, # Default
         "generated_keywords": [],
+        "extracted_tags": [],
         "reference_books": [],
         "hypothetical_intro": "",
         "criteria": []
@@ -52,6 +53,8 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
         if "original_query" in parsed: final_result["original_query"] = parsed["original_query"]
         if "search_terms" in parsed: final_result["search_terms"] = parsed["search_terms"]
         if "generated_keywords" in parsed: final_result["generated_keywords"] = parsed["generated_keywords"]
+        if "extracted_tags" in parsed: final_result["extracted_tags"] = parsed["extracted_tags"]
+        elif "final_tags" in parsed: final_result["extracted_tags"] = parsed["final_tags"]
         if "reference_books" in parsed: final_result["reference_books"] = parsed["reference_books"]
         if "hypothetical_intro" in parsed: final_result["hypothetical_intro"] = parsed["hypothetical_intro"]
         
@@ -108,7 +111,20 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
     
     final_result["criteria"] = valid_criteria
 
-    # 4. Normalize query_intent (Pre-Retrieval 意圖解析)
+    # 4. Normalize extracted_tags
+    normalized_extracted_tags: List[str] = []
+    seen_tags = set()
+    raw_extracted_tags = final_result.get("extracted_tags", [])
+    if isinstance(raw_extracted_tags, list):
+        for raw_tag in raw_extracted_tags:
+            tag = str(raw_tag).strip()
+            if not tag or tag in seen_tags:
+                continue
+            seen_tags.add(tag)
+            normalized_extracted_tags.append(tag)
+    final_result["extracted_tags"] = normalized_extracted_tags
+
+    # 5. Normalize query_intent (Pre-Retrieval 意圖解析)
     if isinstance(parsed, dict) and "query_intent" in parsed:
         raw_intent = parsed["query_intent"]
         if isinstance(raw_intent, dict):
@@ -151,10 +167,14 @@ def _normalize_llm_output(parsed: Any, user_query: str) -> Dict[str, Any]:
     return final_result
 
 
-from typing import Any, Dict, List, Optional, Tuple
-
 @functools.lru_cache(maxsize=1000)
-def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optional[Tuple[str, ...]] = None) -> QueryParseResult:
+def parse_query(
+    user_query: str,
+    model_id: Optional[str] = None,
+    tag_list: Optional[Tuple[str, ...]] = None,
+    tag_descriptions: Optional[Tuple[Tuple[str, str], ...]] = None,
+    use_tag_descriptions: bool = False,
+) -> QueryParseResult:
     """
     使用 Google GenAI SDK (v1.0+) 將自然語言查詢轉換為結構化搜尋條件。
     支援多模型 fallback：當主要模型遇到配額限制或錯誤時，自動嘗試下一個模型。
@@ -182,6 +202,11 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
                 "type": "array", 
                 "items": {"type": "string"},
                 "description": "5-10 specific domain keywords for semantic expansion."
+            },
+            "extracted_tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "3-8 canonical tags selected from AVAILABLE TAGS that best match user intent."
             },
             "hypothetical_intro": {
                 "type": "string",
@@ -374,14 +399,21 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
     - Example: "不要像刀劍神域" → reference_books: [] (And put "刀劍神域" in hard_exclusions)
     - If no POSITIVE book is mentioned, return an empty list: reference_books: []
 
-    
-    ### TASK 2: Query Expansion (generated_keywords)
+        ### TASK 2: Tag Extraction (extracted_tags)
+        Extract 3-8 canonical tags from AVAILABLE TAGS.
+        - Must use exact tag names from AVAILABLE TAGS
+        - Prefer content tags (題材/風格/情緒/世界觀) over publisher/platform tags,
+            unless the query explicitly asks for publisher/platform constraints
+        - Never output tags explicitly excluded by user intent
+        - If evidence is weak, return fewer tags rather than over-tagging
+
+        ### TASK 3: Query Expansion (generated_keywords)
     Generate 5-10 specific domain keywords in Traditional Chinese that capture the semantic intent.
     - Focus on genre-specific terms, tropes, themes
     - IMPORTANT: Only include POSITIVE keywords the user wants. Do NOT include negated concepts.
     - Example for "科幻": ["太空", "未來", "科技", "星際", "機器人", "時間旅行"]
     
-    ### TASK 3: Hypothetical Document Embeddings (hypothetical_intro)
+    ### TASK 4: Hypothetical Document Embeddings (hypothetical_intro)
     Generate a hypothetical book introduction (50-100 words) that matches the query perfectly.
     - **Style**: Dramatic, engaging, using web novel tropes
     - **Language**: Traditional Chinese (繁體中文)
@@ -398,12 +430,42 @@ def parse_query(user_query: str, model_id: Optional[str] = None, tag_list: Optio
       hypothetical_intro: "厭倦了城市的喧囂，他回到鄉下繼承了一間破舊的小食堂。溫暖的料理，治癒了每一位客人的心靈..."
     
     ### Output Format
-    Always include: original_query, search_terms, generated_keywords, reference_books, hypothetical_intro, query_intent, criteria
+    Always include: original_query, search_terms, extracted_tags, generated_keywords, reference_books, hypothetical_intro, query_intent, criteria
     """
     
     if tag_list:
-        tag_hint = f"\n\n### AVAILABLE TAGS (Method 2)\nUse the following tags for reference when generating keywords:\n{', '.join(tag_list)}"
+        tag_hint = (
+            "\n\n### AVAILABLE TAGS\n"
+            "Use only these canonical tags when filling extracted_tags:\n"
+            f"{', '.join(tag_list)}"
+        )
         full_system_instruction += tag_hint
+
+    if use_tag_descriptions and tag_descriptions:
+        description_map = {
+            str(tag).strip(): str(desc).strip()
+            for tag, desc in tag_descriptions
+            if str(tag).strip() and str(desc).strip()
+        }
+
+        if tag_list:
+            description_lines = [
+                f"- {tag}: {description_map[tag]}"
+                for tag in tag_list
+                if tag in description_map
+            ]
+        else:
+            description_lines = [
+                f"- {tag}: {desc}"
+                for tag, desc in description_map.items()
+            ]
+
+        if description_lines:
+            full_system_instruction += (
+                "\n\n### TAG DEFINITIONS\n"
+                "Use these concise definitions to reduce confusion among similar tags.\n"
+                + "\n".join(description_lines)
+            )
 
     last_exception = None
 

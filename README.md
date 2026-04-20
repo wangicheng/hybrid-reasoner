@@ -54,6 +54,31 @@ python -m src.web_api
 
 The API serves the web UI at `http://localhost:8000`.
 
+## Gemini Tag Description A/B
+
+Use this experiment to compare Gemini tag extraction quality with and without tag definitions.
+
+1. Prepare tag descriptions in `data/tag_descriptions.json`.
+2. Run one command:
+
+   ```bash
+   python scripts/run_gemini_tag_description_ab.py --model-id gemini-2.5-flash-lite
+   ```
+
+3. Check outputs in `data/experiments/tag_description_ab/`:
+
+   - `gemini_no_tag_desc_report.json`
+   - `gemini_with_tag_desc_report.json`
+   - `gemini_tag_desc_comparison.json`
+   - `summary.md`
+
+To enable tag definitions in production parse flow, set:
+
+```ini
+GEMINI_TAG_DESCRIPTION_ENABLED=true
+TAG_DESCRIPTIONS_PATH=data/tag_descriptions.json
+```
+
 ## Data Import
 
 1. Crawl data.
