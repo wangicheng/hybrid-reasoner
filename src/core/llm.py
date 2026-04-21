@@ -1,8 +1,10 @@
 ﻿import json
 import functools
+import os
 import time
 import re
 import threading
+import ast
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 from google import genai
 from google.genai import types
@@ -11,13 +13,65 @@ from src.models.schemas import QueryParseResult, ScoringCriteria, ScoringParamet
 
 # ??????謘?(???????制??謅???????剜???蹇?????
 DEFAULT_PARSER_MODEL = "gemma-3-27b-it"
-LLM_REQUEST_TIMEOUT_SECONDS = 45.0
+PARSER_VARIANT_SEMANTIC_SECTIONS_V3_TAGLITE = "semantic_sections_v3_taglite"
+DEFAULT_PARSER_VARIANT = PARSER_VARIANT_SEMANTIC_SECTIONS_V3_TAGLITE
+
+
+def _load_llm_timeout_seconds() -> Optional[float]:
+    raw_value = str(os.getenv("HYBRID_REASONER_LLM_TIMEOUT_SECONDS", "")).strip()
+    if not raw_value:
+        return 180.0
+
+    if raw_value.lower() in {"0", "none", "off", "disable", "disabled"}:
+        return None
+
+    try:
+        timeout_seconds = float(raw_value)
+    except ValueError:
+        return 180.0
+    return timeout_seconds if timeout_seconds > 0 else None
+
+
+LLM_REQUEST_TIMEOUT_SECONDS: Optional[float] = _load_llm_timeout_seconds()
+LLM_RETRY_DELAY_SECONDS = 10.0
 
 DEBUG_LLM_OUTPUT = True
 _T = TypeVar("_T")
 
 
-def _call_with_timeout(func: Callable[[], _T], timeout_seconds: float, label: str) -> _T:
+class ParserBranchError(RuntimeError):
+    def __init__(
+        self,
+        task_label: str,
+        message: str,
+        branch_metadata: Dict[str, Any],
+    ) -> None:
+        super().__init__(message)
+        self.task_label = task_label
+        self.branch_metadata = branch_metadata
+        self.parser_metadata: Dict[str, Any] = {}
+
+
+def _parser_mode_for_variant() -> str:
+    return "semantic_sections_v3_taglite_three_call"
+
+
+def _augment_exception_with_call_metadata(exc: Exception, call_metadata: Dict[str, Any]) -> None:
+    existing = getattr(exc, "llm_call_metadata", None)
+    if isinstance(existing, dict):
+        existing.update(call_metadata)
+    else:
+        setattr(exc, "llm_call_metadata", call_metadata)
+
+
+def _call_with_timeout(
+    func: Callable[[], _T],
+    timeout_seconds: Optional[float],
+    label: str,
+) -> _T:
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return func()
+
     result: Dict[str, _T] = {}
     error: Dict[str, Exception] = {}
     completed = threading.Event()
@@ -87,36 +141,210 @@ def _parse_json_object_from_text(raw_text: str) -> Optional[Dict[str, Any]]:
         try:
             parsed = json.loads(normalized)
         except json.JSONDecodeError:
-            continue
+            try:
+                parsed = ast.literal_eval(normalized)
+            except (ValueError, SyntaxError):
+                continue
         if isinstance(parsed, dict):
             return parsed
 
     return None
 
 
-def _coerce_response_to_json_object(response: Any, task_label: str) -> Dict[str, Any]:
+def _repair_structured_payload_from_text(raw_text: str) -> Optional[Dict[str, Any]]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return None
+
+    candidate_keys = [
+        "target_status_candidate",
+        "author_name_candidate",
+        "words_min_candidate",
+        "words_max_candidate",
+    ]
+
+    repaired: Dict[str, Any] = {}
+    for candidate_key in candidate_keys:
+        pattern = re.compile(
+            rf'"?{re.escape(candidate_key)}"?\s*:\s*(null|\{{[^{{}}]*\}})',
+            re.IGNORECASE | re.DOTALL,
+        )
+        match = pattern.search(text)
+        if not match:
+            continue
+
+        candidate_text = match.group(1).strip()
+        if candidate_text.lower() == "null":
+            repaired[candidate_key] = {
+                "value": "" if "words_" not in candidate_key else 0,
+                "evidence": "",
+                "is_explicit": False,
+            }
+            continue
+
+        parsed_candidate = _parse_json_object_from_text(candidate_text)
+        if isinstance(parsed_candidate, dict):
+            repaired[candidate_key] = parsed_candidate
+
+    return repaired or None
+
+
+def _parse_marked_section_output(
+    raw_text: str,
+    expected_sections: List[str],
+) -> Dict[str, str]:
+    text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip():
+        raise ValueError("Marked section output was empty")
+
+    section_pattern = re.compile(r"^\[(?P<name>[a-z_]+)\]\s*$", re.MULTILINE)
+    matches = list(section_pattern.finditer(text))
+    if not matches:
+        preview = text[:200].replace("\n", "\\n")
+        raise ValueError(f"Marked section output missing section headers; raw_text={preview}")
+
+    sections: Dict[str, str] = {}
+    for index, match in enumerate(matches):
+        name = match.group("name")
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections[name] = text[start:end].strip()
+
+    missing = [name for name in expected_sections if name not in sections]
+    if missing:
+        raise ValueError(f"Marked section output missing sections: {', '.join(missing)}")
+
+    return sections
+
+
+def _parse_semantic_sections_text(raw_text: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    sections = _parse_marked_section_output(
+        raw_text,
+        expected_sections=[
+            "semantic_query_text",
+            "positive_concepts",
+            "negative_concepts",
+        ],
+    )
+
+    def _parse_list_section(section_text: str) -> List[str]:
+        items: List[str] = []
+        for raw_line in str(section_text or "").splitlines():
+            cleaned = re.sub(r"^\s*[-*•]\s*", "", raw_line).strip()
+            if not cleaned:
+                continue
+            if "," in cleaned and not any(token in cleaned for token in ("、", "，")):
+                parts = [part.strip() for part in cleaned.split(",")]
+                items.extend(part for part in parts if part)
+                continue
+            items.append(cleaned)
+        return _dedupe_terms(items)
+
+    parsed = {
+        "semantic_query_text": str(sections["semantic_query_text"]).strip(),
+        "positive_concepts": _parse_list_section(sections["positive_concepts"]),
+        "negative_concepts": _parse_list_section(sections["negative_concepts"]),
+    }
+    return parsed, {
+        "parse_source": "marked_sections",
+        "recovered_from_raw_text": False,
+    }
+
+
+def _parse_semantic_sections_v3_text(raw_text: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    sections = _parse_marked_section_output(
+        raw_text,
+        expected_sections=[
+            "semantic_query_text",
+            "intent_summary",
+            "positive_concepts",
+            "negative_concepts",
+        ],
+    )
+
+    parsed, _ = _parse_semantic_sections_text(
+        "\n".join(
+            [
+                "[semantic_query_text]",
+                str(sections["semantic_query_text"]).strip(),
+                "[positive_concepts]",
+                str(sections["positive_concepts"]).strip(),
+                "[negative_concepts]",
+                str(sections["negative_concepts"]).strip(),
+            ]
+        )
+    )
+    parsed["intent_summary"] = str(sections["intent_summary"]).strip()
+    return parsed, {
+        "parse_source": "marked_sections_v3",
+        "recovered_from_raw_text": False,
+    }
+
+
+def _coerce_response_to_json_object(
+    response: Any,
+    task_label: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     parsed = getattr(response, "parsed", None)
     if isinstance(parsed, PydanticBaseModel):
         if hasattr(parsed, "model_dump"):
-            return parsed.model_dump()
-        return parsed.dict()
+            return parsed.model_dump(), {
+                "parse_source": "sdk_parsed_pydantic",
+                "recovered_from_raw_text": False,
+            }
+        return parsed.dict(), {
+            "parse_source": "sdk_parsed_pydantic",
+            "recovered_from_raw_text": False,
+        }
     if isinstance(parsed, dict):
-        return parsed
+        return parsed, {
+            "parse_source": "sdk_parsed_dict",
+            "recovered_from_raw_text": False,
+        }
     if parsed is not None and hasattr(parsed, "model_dump"):
-        return parsed.model_dump()
+        return parsed.model_dump(), {
+            "parse_source": "sdk_parsed_model_dump",
+            "recovered_from_raw_text": False,
+        }
     if parsed is not None and hasattr(parsed, "dict"):
-        return parsed.dict()
+        return parsed.dict(), {
+            "parse_source": "sdk_parsed_dict_method",
+            "recovered_from_raw_text": False,
+        }
 
     raw_text = _extract_text_from_response(response)
     reparsed = _parse_json_object_from_text(raw_text)
     if reparsed is not None:
         print(f"[llm:{task_label}] recovered JSON from raw text because parsed payload was missing.")
-        return reparsed
+        return reparsed, {
+            "parse_source": "raw_text_json",
+            "recovered_from_raw_text": True,
+        }
+
+    if task_label == "structured":
+        repaired = _repair_structured_payload_from_text(raw_text)
+        if repaired is not None:
+            print(f"[llm:{task_label}] repaired structured payload from raw text fragments.")
+            return repaired, {
+                "parse_source": "structured_text_repair",
+                "recovered_from_raw_text": True,
+            }
 
     raw_preview = raw_text[:200].replace("\n", "\\n") if raw_text else "(empty)"
     raise ValueError(
         f"Structured output missing parsed payload for {task_label}; raw_text={raw_preview}"
     )
+
+
+def _coerce_response_to_text(response: Any, task_label: str) -> Tuple[str, Dict[str, Any]]:
+    raw_text = _extract_text_from_response(response)
+    if raw_text:
+        return raw_text, {
+            "parse_source": "raw_text",
+            "recovered_from_raw_text": False,
+        }
+
+    raise ValueError(f"Text output missing raw text for {task_label}")
 def _query_contains_evidence(user_query: str, evidence: Any) -> bool:
     query = str(user_query or "").strip()
     snippet = str(evidence or "").strip()
@@ -247,6 +475,30 @@ def _build_tag_projection_context(semantic_understanding: Dict[str, Any]) -> str
         f"- positive_concepts: {', '.join(positive_concepts) if positive_concepts else '(empty)'}",
         f"- negative_concepts: {', '.join(negative_concepts) if negative_concepts else '(empty)'}",
         f"- ambiguities: {', '.join(ambiguities) if ambiguities else '(empty)'}",
+    ]
+    return "\n".join(lines)
+
+
+def _build_tag_projection_compact_context(semantic_understanding: Dict[str, Any]) -> str:
+    semantic_query_text = str(semantic_understanding.get("semantic_query_text") or "").strip()
+    intent_summary = str(semantic_understanding.get("intent_summary") or "").strip()
+    positive_concepts = [
+        str(term).strip()
+        for term in semantic_understanding.get("positive_concepts", [])
+        if str(term).strip()
+    ][:4]
+    negative_concepts = [
+        str(term).strip()
+        for term in semantic_understanding.get("negative_concepts", [])
+        if str(term).strip()
+    ][:3]
+
+    lines = [
+        "SEMANTIC UNDERSTANDING OUTPUT (COMPACT):",
+        f"- semantic_query_text: {semantic_query_text or '(empty)'}",
+        f"- intent_summary: {intent_summary or '(empty)'}",
+        f"- strongest_positive_concepts: {', '.join(positive_concepts) if positive_concepts else '(empty)'}",
+        f"- strongest_negative_concepts: {', '.join(negative_concepts) if negative_concepts else '(empty)'}",
     ]
     return "\n".join(lines)
 
@@ -502,7 +754,7 @@ def _merge_query_parse_results(
     tag_intent: TagIntent,
     structured_slots: Dict[str, Any],
     total_latency_ms: float,
-    branch_latencies_ms: Dict[str, float],
+    branch_metrics: Dict[str, Dict[str, Any]],
 ) -> QueryParseResult:
     semantic_query_text = str(tag_intent.search_terms or user_query).strip() or user_query
     merged_criteria = [
@@ -587,7 +839,18 @@ def _merge_query_parse_results(
 
     metadata = {
         "latency_ms": round(total_latency_ms, 2),
-        "branches": {name: round(latency, 2) for name, latency in branch_latencies_ms.items()},
+        "branches": branch_metrics,
+        "parser_mode": _parser_mode_for_variant(),
+        "parser_variant": DEFAULT_PARSER_VARIANT,
+        "task_split": "semantic_understanding_tag_projection_structured",
+        "total_request_count": sum(
+            int(branch.get("request_count", 0) or 0)
+            for branch in branch_metrics.values()
+        ),
+        "total_retry_count": sum(
+            int(branch.get("retry_count", 0) or 0)
+            for branch in branch_metrics.values()
+        ),
         "tag_intent": {
             "positive_count": len(tag_intent.positive_terms),
             "negative_count": len(tag_intent.negative_terms),
@@ -608,10 +871,16 @@ def _merge_query_parse_results(
 def _build_parallel_context(
     tag_list: Optional[Tuple[str, ...]] = None,
     reference_book_context: Optional[str] = None,
+    response_contract: str = "json",
 ) -> str:
+    output_instruction = (
+        "Return marked sections only. Do not use JSON."
+        if response_contract == "sections"
+        else "Return strict JSON only. Use snake_case keys. Do not wrap the JSON in markdown."
+    )
     sections = [
         "You are one branch of a web novel query parser.",
-        "Return strict JSON only. Use snake_case keys. Do not wrap the JSON in markdown.",
+        output_instruction,
         "The final system merges outputs from multiple branches, so focus only on your assigned subtask.",
         "Use Traditional Chinese for generated retrieval terms and hypothetical intros unless the query explicitly uses another title language.",
     ]
@@ -638,12 +907,116 @@ def _generate_json_from_contents(
     contents: str,
     task_label: str,
     system_instruction: str,
-    response_schema: Dict[str, Any],
+    response_schema: Optional[Dict[str, Any]],
     model_id: Optional[str] = None,
     sampling_temperature: float = 0.2,
     enforce_rate_limit: bool = True,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     from src.core.api_utils import (
+        _is_retryable,
+        get_api_key_rotator,
+        get_current_api_key,
+        get_rate_limiter,
+    )
+
+    selected_model = str(model_id or DEFAULT_PARSER_MODEL).strip() or DEFAULT_PARSER_MODEL
+    use_response_schema = True
+    last_exception = None
+
+    print(f"[llm:{task_label}] trying model: {selected_model}")
+
+    rotator = get_api_key_rotator()
+    if not getattr(rotator, "api_keys", None):
+        raise RuntimeError(f"[llm:{task_label}] no API keys configured")
+
+    request_count = 0
+    total_api_keys = len(rotator.api_keys)
+
+    while True:
+        api_key = get_current_api_key()
+        key_index = rotator.current_index + 1
+        client = genai.Client(api_key=api_key)
+
+        try:
+            if enforce_rate_limit:
+                print(f"[llm:{task_label}] waiting for rate limiter before request.")
+                get_rate_limiter().wait(api_key)
+
+            config_args = {
+                "system_instruction": system_instruction,
+                "temperature": sampling_temperature,
+                "top_p": 0.95,
+            }
+            if use_response_schema:
+                config_args["response_mime_type"] = "application/json"
+                config_args["response_schema"] = response_schema
+
+            request_count += 1
+            print(
+                f"[llm:{task_label}] sending request "
+                f"(request {request_count}, key {key_index}/{total_api_keys})..."
+            )
+            started_at = time.perf_counter()
+            response = _call_with_timeout(
+                lambda: client.models.generate_content(
+                    model=selected_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**config_args),
+                ),
+                timeout_seconds=LLM_REQUEST_TIMEOUT_SECONDS,
+                label=f"{task_label}:{selected_model}",
+            )
+            latency = time.perf_counter() - started_at
+            print(f"[llm:{task_label}] response received in {latency:.1f}s.")
+            parsed_payload, parse_metadata = _coerce_response_to_json_object(response, task_label)
+            return parsed_payload, {
+                "request_count": request_count,
+                "retry_count": max(0, request_count - 1),
+                "first_attempt_success": request_count == 1,
+                "used_response_schema": use_response_schema,
+                "parse_source": parse_metadata.get("parse_source", "unknown"),
+                "recovered_from_raw_text": bool(parse_metadata.get("recovered_from_raw_text")),
+                "model_id": selected_model,
+                "last_retry_error": str(last_exception) if last_exception else "",
+            }
+        except Exception as exc:
+            last_exception = exc
+            print(f"[llm:{task_label}] request failed on key {key_index}/{total_api_keys}: {exc}")
+            call_metadata = {
+                "request_count": request_count,
+                "retry_count": max(0, request_count - 1),
+                "first_attempt_success": False,
+                "used_response_schema": use_response_schema,
+                "parse_source": "failed",
+                "recovered_from_raw_text": False,
+                "model_id": selected_model,
+                "last_retry_error": str(exc),
+            }
+            _augment_exception_with_call_metadata(exc, call_metadata)
+            if _is_retryable(exc):
+                print(
+                    f"[llm:{task_label}] retryable error; sleeping "
+                    f"{LLM_RETRY_DELAY_SECONDS:.1f}s before next attempt."
+                )
+                time.sleep(LLM_RETRY_DELAY_SECONDS)
+                continue
+            raise
+        finally:
+            if total_api_keys > 1:
+                rotator.rotate()
+
+
+def _generate_text_from_contents(
+    *,
+    contents: str,
+    task_label: str,
+    system_instruction: str,
+    model_id: Optional[str] = None,
+    sampling_temperature: float = 0.2,
+    enforce_rate_limit: bool = True,
+) -> Tuple[str, Dict[str, Any]]:
+    from src.core.api_utils import (
+        _is_retryable,
         get_api_key_rotator,
         get_current_api_key,
         get_rate_limiter,
@@ -671,14 +1044,6 @@ def _generate_json_from_contents(
                 print(f"[llm:{task_label}] waiting for rate limiter before request.")
                 get_rate_limiter().wait(api_key)
 
-            config_args = {
-                "response_mime_type": "application/json",
-                "response_schema": response_schema,
-                "system_instruction": system_instruction,
-                "temperature": sampling_temperature,
-                "top_p": 0.95,
-            }
-
             request_count += 1
             print(
                 f"[llm:{task_label}] sending request "
@@ -689,18 +1054,50 @@ def _generate_json_from_contents(
                 lambda: client.models.generate_content(
                     model=selected_model,
                     contents=contents,
-                    config=types.GenerateContentConfig(**config_args),
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=sampling_temperature,
+                        top_p=0.95,
+                    ),
                 ),
                 timeout_seconds=LLM_REQUEST_TIMEOUT_SECONDS,
                 label=f"{task_label}:{selected_model}",
             )
             latency = time.perf_counter() - started_at
             print(f"[llm:{task_label}] response received in {latency:.1f}s.")
-            return _coerce_response_to_json_object(response, task_label)
+            raw_text, parse_metadata = _coerce_response_to_text(response, task_label)
+            return raw_text, {
+                "request_count": request_count,
+                "retry_count": max(0, request_count - 1),
+                "first_attempt_success": request_count == 1,
+                "used_response_schema": False,
+                "parse_source": parse_metadata.get("parse_source", "raw_text"),
+                "recovered_from_raw_text": False,
+                "model_id": selected_model,
+                "last_retry_error": str(last_exception) if last_exception else "",
+            }
         except Exception as exc:
             last_exception = exc
             print(f"[llm:{task_label}] request failed on key {key_index}/{total_api_keys}: {exc}")
-            continue
+            call_metadata = {
+                "request_count": request_count,
+                "retry_count": max(0, request_count - 1),
+                "first_attempt_success": False,
+                "used_response_schema": False,
+                "parse_source": "failed",
+                "recovered_from_raw_text": False,
+                "model_id": selected_model,
+                "last_retry_error": str(exc),
+            }
+            _augment_exception_with_call_metadata(exc, call_metadata)
+            if _is_retryable(exc):
+                print(
+                    f"[llm:{task_label}] retryable error; sleeping "
+                    f"{LLM_RETRY_DELAY_SECONDS:.1f}s before next attempt."
+                )
+                time.sleep(LLM_RETRY_DELAY_SECONDS)
+                continue
+            raise
         finally:
             if total_api_keys > 1:
                 rotator.rotate()
@@ -711,11 +1108,11 @@ def _generate_json_task(
     user_query: str,
     task_label: str,
     system_instruction: str,
-    response_schema: Dict[str, Any],
+    response_schema: Optional[Dict[str, Any]],
     model_id: Optional[str] = None,
     sampling_temperature: float = 0.2,
     enforce_rate_limit: bool = True,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return _generate_json_from_contents(
         contents=f"User Query: {user_query}",
         task_label=task_label,
@@ -738,6 +1135,12 @@ def _parse_query_parallel_ctx_v2(
     shared_context = _build_parallel_context(
         tag_list=tag_list,
         reference_book_context=reference_book_context,
+        response_contract="json",
+    )
+    semantic_sections_context = _build_parallel_context(
+        tag_list=tag_list,
+        reference_book_context=reference_book_context,
+        response_contract="sections",
     )
 
     semantic_understanding_schema = {
@@ -753,19 +1156,54 @@ def _parse_query_parallel_ctx_v2(
                 "type": "array",
                 "items": {"type": "string"},
             },
-            "ambiguities": {
-                "type": "array",
-                "items": {"type": "string"},
-            },
         },
         "required": [
             "semantic_query_text",
             "intent_summary",
             "positive_concepts",
             "negative_concepts",
-            "ambiguities",
         ],
     }
+
+    semantic_sections_v3_instruction = f"""
+{semantic_sections_context}
+
+You are the semantic understanding pass for retrieval text.
+
+Return exactly four marked sections in this exact order:
+[semantic_query_text]
+<one compact retrieval line>
+[intent_summary]
+<one short sentence capturing the user's semantic intent>
+[positive_concepts]
+- <concept 1>
+- <concept 2>
+[negative_concepts]
+- <concept 1>
+- <concept 2>
+
+Rules:
+- Do not return JSON.
+- Do not add any sections other than the four listed above.
+- `semantic_query_text` must be a compact retrieval query, not a long explanation.
+- Prefer 8-16 words or a few short noun/adjective phrases.
+- Compress aggressively. Omit explanation, repetition, and flavor text that does not help retrieval.
+- `intent_summary` must be short: one sentence, ideally under 35 Chinese characters or about 20 words.
+- Preserve literal domain anchors when the user gives them, such as named subgenres, activity domains, or trope labels. Do not replace them with broader neighboring concepts.
+- If the user clearly requests multiple required facets, keep all of them alive in `semantic_query_text`. Do not collapse them into a single broad theme.
+- Make it tag-heavy only when the tags are explicit or strongly supported by the user query itself.
+- `positive_concepts` and `negative_concepts` should be short concept phrases, not full sentences.
+- `positive_concepts` should contain at most 6 items.
+- `negative_concepts` should contain at most 5 items.
+- Include only explicit or high-confidence retrieval anchors in `positive_concepts`.
+- Put directly rejected ideas into `negative_concepts`.
+- If the user says a concept is optional, acceptable-but-not-required, or "not necessary", do not place it in `positive_concepts` unless it is also clearly core to the request.
+- Use related books only as soft calibration. Do not import extra traits from example titles unless the user explicitly asks for those traits.
+- Do not let example works override the user's literal constraints.
+- Do not broaden exact concepts into nearby but looser substitutes.
+- Do not output hard constraints such as completion status, author, or word count here.
+- Do not put optional concepts into `negative_concepts` unless the user explicitly rejects them.
+""".strip()
 
     tag_projection_schema = {
         "type": "object",
@@ -810,34 +1248,15 @@ def _parse_query_parallel_ctx_v2(
             "words_min_candidate": number_candidate_schema,
             "words_max_candidate": number_candidate_schema,
         },
-        "required": [],
+        "required": [
+            "target_status_candidate",
+            "author_name_candidate",
+            "words_min_candidate",
+            "words_max_candidate",
+        ],
     }
 
-    semantic_understanding_instruction = f"""
-{shared_context}
-
-You are the semantic understanding pass for retrieval text.
-
-Return JSON with:
-- semantic_query_text
-- intent_summary
-- positive_concepts
-- negative_concepts
-- ambiguities
-
-    Rules:
-    - `semantic_query_text` is the short retrieval text that will be embedded and compared against novel intros.
-    - Write `semantic_query_text` as a compact retrieval query, not a long explanation.
-    - Prefer 8-20 words or a few short noun/adjective phrases.
-    - Make it tag-heavy when the query clearly implies genres, tropes, vibes, or themes.
-    - Keep richer reasoning, nuance, and examples inside `intent_summary`, not `semantic_query_text`.
-    - `positive_concepts` and `negative_concepts` should be short concept phrases, not full sentences.
-    - Put directly rejected ideas into `negative_concepts`.
-    - Use `ambiguities` for things that are unclear or could be interpreted in more than one way.
-    - Do not output hard constraints such as completion status, author, or word count here.
-""".strip()
-
-    tag_projection_instruction = f"""
+    tag_projection_lite_instruction = f"""
 {shared_context}
 
 You are the tag projection pass.
@@ -847,15 +1266,15 @@ You are the tag projection pass.
     - negative_terms
 
     Rules:
-    - The input includes the original query and the semantic understanding JSON.
-    - Project semantic concepts into short tag-like terms.
+    - The input includes the original query and a compact semantic understanding summary.
+    - Project only the strongest retrieval anchors into short tag-like terms.
     - Prefer exact tag names from AVAILABLE TAGS whenever possible.
-    - `positive_terms` should contain enough tag-like concepts to drive retrieval and tag mapping.
-    - Return 5-12 `positive_terms` when the query supports that many distinct concepts.
-    - `negative_terms` should contain only concepts the user explicitly rejects or excludes.
-    - Return 3-8 `negative_terms` when the query contains multiple explicit dislikes.
-    - If a concept should stay only in semantic retrieval text and not be projected into tags, omit it.
-    - Return only these two keys. Do not emit helper fields such as `rejected_terms`, `mapping_notes`, `intent_summary`, or explanations.
+    - Be conservative. Omit weak, optional, or example-derived concepts.
+    - `positive_terms` should contain 3-6 high-confidence terms only.
+    - `negative_terms` should contain 0-4 explicit exclusions only.
+    - Avoid near-duplicates, synonyms, and broad filler terms.
+    - If a concept belongs only in semantic retrieval text and not in tags, omit it.
+    - Return only these two keys. Do not emit helper fields, explanations, or notes.
 """.strip()
 
     structured_instruction = f"""
@@ -863,7 +1282,7 @@ You are the tag projection pass.
 
 You are the structured constraints pass.
 
-Return JSON with any of:
+Return JSON with exactly these four keys:
 - target_status_candidate
 - author_name_candidate
 - words_min_candidate
@@ -871,14 +1290,16 @@ Return JSON with any of:
 
 Rules:
 - Only identify hard constraints that are directly stated in the query.
-- Each candidate must include `value`, `evidence`, and `is_explicit`.
+- Each candidate must always include `value`, `evidence`, and `is_explicit`.
 - `evidence` must be a short verbatim quote copied from the user query.
 - Set `is_explicit` to true only when the quoted evidence directly supports the candidate value.
 - Never infer hard constraints from examples, vibes, or semantic themes.
 - Normalize completion status values to `completed` or `ongoing`.
 - Use numeric word counts for `words_min_candidate` and `words_max_candidate`.
-- If a structured constraint is absent or uncertain, omit that candidate entirely.
-- Never use placeholder values such as `none`, `null`, `unknown`, `0`, or fake evidence like `none`.
+- If a structured constraint is absent or uncertain, keep the key but return an empty candidate:
+  - string candidate: `{{"value":"","evidence":"","is_explicit":false}}`
+  - numeric candidate: `{{"value":0,"evidence":"","is_explicit":false}}`
+- Outside the explicit empty-candidate format above, never use placeholder values such as `none`, `null`, `unknown`, or fake evidence like `none`.
 """.strip()
 
     def _run_schema_task(
@@ -887,58 +1308,136 @@ Rules:
         schema: Dict[str, Any],
         contents: Optional[str] = None,
         normalizer: Optional[Any] = None,
-    ) -> Tuple[Any, float]:
+        use_marked_sections: bool = False,
+    ) -> Tuple[Any, Dict[str, Any]]:
         started_at = time.perf_counter()
-        if contents is None:
-            raw_result = _generate_json_task(
-                user_query=user_query,
-                task_label=task_label,
-                system_instruction=instruction,
-                response_schema=schema,
-                model_id=model_id,
-                sampling_temperature=sampling_temperature,
-                enforce_rate_limit=False,
-            )
-        else:
-            raw_result = _generate_json_from_contents(
-                contents=contents,
-                task_label=task_label,
-                system_instruction=instruction,
-                response_schema=schema,
-                model_id=model_id,
-                sampling_temperature=sampling_temperature,
-                enforce_rate_limit=False,
-            )
+        try:
+            if use_marked_sections:
+                request_contents = contents if contents is not None else f"User Query: {user_query}"
+                raw_text, call_metadata = _generate_text_from_contents(
+                    contents=request_contents,
+                    task_label=task_label,
+                    system_instruction=instruction,
+                    model_id=model_id,
+                    sampling_temperature=sampling_temperature,
+                    enforce_rate_limit=False,
+                )
+                raw_result, parse_metadata = _parse_semantic_sections_v3_text(raw_text)
+                call_metadata["parse_source"] = parse_metadata.get("parse_source", "marked_sections")
+                call_metadata["recovered_from_raw_text"] = bool(
+                    parse_metadata.get("recovered_from_raw_text", False)
+                )
+            else:
+                if contents is None:
+                    raw_result, call_metadata = _generate_json_task(
+                        user_query=user_query,
+                        task_label=task_label,
+                        system_instruction=instruction,
+                        response_schema=schema,
+                        model_id=model_id,
+                        sampling_temperature=sampling_temperature,
+                        enforce_rate_limit=False,
+                    )
+                else:
+                    raw_result, call_metadata = _generate_json_from_contents(
+                        contents=contents,
+                        task_label=task_label,
+                        system_instruction=instruction,
+                        response_schema=schema,
+                        model_id=model_id,
+                        sampling_temperature=sampling_temperature,
+                        enforce_rate_limit=False,
+                    )
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            call_metadata = getattr(exc, "llm_call_metadata", {})
+            branch_metadata = {
+                "success": False,
+                "latency_ms": round(elapsed_ms, 2),
+                "request_count": int(call_metadata.get("request_count", 0) or 0),
+                "retry_count": int(call_metadata.get("retry_count", 0) or 0),
+                "first_attempt_success": bool(call_metadata.get("first_attempt_success", False)),
+                "used_response_schema": bool(call_metadata.get("used_response_schema", False)),
+                "parse_source": str(call_metadata.get("parse_source", "failed")),
+                "recovered_from_raw_text": bool(call_metadata.get("recovered_from_raw_text", False)),
+                "model_id": str(call_metadata.get("model_id") or model_id or DEFAULT_PARSER_MODEL),
+                "last_retry_error": str(call_metadata.get("last_retry_error", "")),
+                "error": str(exc),
+            }
+            raise ParserBranchError(task_label, f"{task_label} failed: {exc}", branch_metadata) from exc
+
         if DEBUG_LLM_OUTPUT:
             print(f"[debug:{task_label}] raw={json.dumps(raw_result, ensure_ascii=False)}")
         result = normalizer(raw_result) if normalizer else raw_result
         if DEBUG_LLM_OUTPUT:
             print(f"[debug:{task_label}] normalized={json.dumps(result, ensure_ascii=False)}")
-        return result, (time.perf_counter() - started_at) * 1000
+        latency_ms = (time.perf_counter() - started_at) * 1000
+        branch_metadata = {
+            "success": True,
+            "latency_ms": round(latency_ms, 2),
+            "request_count": int(call_metadata.get("request_count", 0) or 0),
+            "retry_count": int(call_metadata.get("retry_count", 0) or 0),
+            "first_attempt_success": bool(call_metadata.get("first_attempt_success", False)),
+            "used_response_schema": bool(call_metadata.get("used_response_schema", False)),
+            "parse_source": str(call_metadata.get("parse_source", "unknown")),
+            "recovered_from_raw_text": bool(call_metadata.get("recovered_from_raw_text", False)),
+            "model_id": str(call_metadata.get("model_id") or model_id or DEFAULT_PARSER_MODEL),
+            "last_retry_error": str(call_metadata.get("last_retry_error", "")),
+        }
+        return result, branch_metadata
 
     started_at = time.perf_counter()
-    branch_latencies_ms: Dict[str, float] = {}
+    branch_metrics: Dict[str, Dict[str, Any]] = {}
 
-    semantic_understanding, latency_ms = _run_schema_task(
-        "semantic_understanding",
-        semantic_understanding_instruction,
-        semantic_understanding_schema,
-        normalizer=lambda raw: _normalize_semantic_understanding(raw, user_query),
-    )
-    branch_latencies_ms["semantic_understanding"] = latency_ms
+    def _attach_parser_metadata(exc: ParserBranchError) -> ParserBranchError:
+        branch_metrics[exc.task_label] = exc.branch_metadata
+        exc.parser_metadata = {
+            "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            "branches": branch_metrics,
+            "parser_mode": _parser_mode_for_variant(),
+            "parser_variant": DEFAULT_PARSER_VARIANT,
+            "task_split": "semantic_understanding_tag_projection_structured",
+            "failed_branch": exc.task_label,
+            "total_request_count": sum(
+                int(branch.get("request_count", 0) or 0)
+                for branch in branch_metrics.values()
+            ),
+            "total_retry_count": sum(
+                int(branch.get("retry_count", 0) or 0)
+                for branch in branch_metrics.values()
+            ),
+        }
+        return exc
 
+    try:
+        semantic_understanding, branch_metadata = _run_schema_task(
+            "semantic_understanding",
+            semantic_sections_v3_instruction,
+            semantic_understanding_schema,
+            normalizer=lambda raw: _normalize_semantic_understanding(raw, user_query),
+            use_marked_sections=True,
+        )
+        branch_metrics["semantic_understanding"] = branch_metadata
+    except ParserBranchError as exc:
+        raise _attach_parser_metadata(exc)
+
+    tag_projection_context = _build_tag_projection_compact_context(semantic_understanding)
+    tag_projection_label = "Compact Semantic Understanding"
     tag_projection_contents = (
         f"Original Query:\n{user_query}\n\n"
-        f"Semantic Understanding JSON:\n{json.dumps(semantic_understanding, ensure_ascii=False)}"
+        f"{tag_projection_label}:\n{tag_projection_context}"
     )
-    tag_projection, latency_ms = _run_schema_task(
-        "tag_projection",
-        tag_projection_instruction,
-        tag_projection_schema,
-        contents=tag_projection_contents,
-        normalizer=_normalize_tag_projection,
-    )
-    branch_latencies_ms["tag_projection"] = latency_ms
+    try:
+        tag_projection, branch_metadata = _run_schema_task(
+            "tag_projection",
+            tag_projection_lite_instruction,
+            tag_projection_schema,
+            contents=tag_projection_contents,
+            normalizer=_normalize_tag_projection,
+        )
+        branch_metrics["tag_projection"] = branch_metadata
+    except ParserBranchError as exc:
+        raise _attach_parser_metadata(exc)
 
     tag_intent = _build_tag_intent_from_projection(
         user_query=user_query,
@@ -953,14 +1452,17 @@ Rules:
         f"Original Query:\n{user_query}\n\n"
         f"{structured_context}"
     )
-    structured_candidates, latency_ms = _run_schema_task(
-        "structured",
-        structured_instruction,
-        structured_schema,
-        contents=structured_contents,
-        normalizer=_normalize_structured_draft,
-    )
-    branch_latencies_ms["structured"] = latency_ms
+    try:
+        structured_candidates, branch_metadata = _run_schema_task(
+            "structured",
+            structured_instruction,
+            structured_schema,
+            contents=structured_contents,
+            normalizer=_normalize_structured_draft,
+        )
+        branch_metrics["structured"] = branch_metadata
+    except ParserBranchError as exc:
+        raise _attach_parser_metadata(exc)
 
     structured_slots = _apply_structured_draft_guards(
         user_query,
@@ -978,17 +1480,9 @@ Rules:
         tag_intent=tag_intent,
         structured_slots=structured_slots,
         total_latency_ms=total_latency_ms,
-        branch_latencies_ms=branch_latencies_ms,
+        branch_metrics=branch_metrics,
     )
-    return merged_result.model_copy(
-        update={
-            "parse_metadata": {
-                **merged_result.parse_metadata,
-                "parser_mode": "response_schema_three_call",
-                "task_split": "semantic_understanding_tag_projection_structured",
-            }
-        }
-    )
+    return merged_result
 
 
 @functools.lru_cache(maxsize=1000)

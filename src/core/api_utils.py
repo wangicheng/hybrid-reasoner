@@ -50,12 +50,18 @@ def get_rate_limiter() -> RateLimiter:
 
 
 def _is_retryable(exc: Exception) -> bool:
-    """Check if an exception is a retryable API error (429 or 503)."""
+    """Check if an exception is a retryable API or transient network error."""
     error_str = str(exc)
     # Match known retryable status codes
     if is_rate_limit_error(exc):
         return True
+    if "500" in error_str or "INTERNAL" in error_str:
+        return True
     if "503" in error_str or "UNAVAILABLE" in error_str:
+        return True
+    if "502" in error_str or "BAD_GATEWAY" in error_str:
+        return True
+    if "504" in error_str or "DEADLINE_EXCEEDED" in error_str or "GATEWAY_TIMEOUT" in error_str:
         return True
     # Add network-level errors
     # WinError 10013 is common on Windows when a socket/connect attempt is

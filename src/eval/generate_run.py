@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from src.core.database import Database
 from src.core.engine import HybridEngine
 from src.core.api_utils import _is_retryable
+from src.core.llm import DEFAULT_PARSER_VARIANT
 from src.core.model_catalog import normalize_model_id
 from src.core.vector_store import VectorStore
 
@@ -59,7 +60,7 @@ class RunGenerator:
         query: str,
         q_id: str,
         cache_namespace: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Run a single query until it succeeds.
 
@@ -70,9 +71,23 @@ class RunGenerator:
         attempt = 0
         while True:
             try:
-                return asyncio.run(self._search_once(engine, query, cache_namespace=cache_namespace))
+                response = asyncio.run(self._search_once(engine, query, cache_namespace=cache_namespace))
+                return response, {
+                    "query_attempts": attempt + 1,
+                    "query_retry_count": attempt,
+                    "first_attempt_success": attempt == 0,
+                }
             except Exception as exc:
                 if not _is_retryable(exc):
+                    setattr(
+                        exc,
+                        "query_execution_metadata",
+                        {
+                            "query_attempts": attempt + 1,
+                            "query_retry_count": attempt,
+                            "first_attempt_success": attempt == 0,
+                        },
+                    )
                     raise
 
                 attempt += 1
@@ -97,6 +112,7 @@ class RunGenerator:
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
             "fixed retrieval path, "
             f"model={normalize_model_id(self.model_id)}, "
+            f"parser_variant={DEFAULT_PARSER_VARIANT}, "
             f"run_suffix={run_suffix or 'none'})"
         )
 
@@ -141,7 +157,7 @@ class RunGenerator:
                 print(f"   - Processing query: {query[:30]}...")
 
                 try:
-                    response = self._search_with_retry(
+                    response, execution_metadata = self._search_with_retry(
                         engine,
                         query,
                         q_id,
@@ -176,6 +192,9 @@ class RunGenerator:
                         {
                             "query_id": q_id,
                             "query": query,
+                            "model_id": normalize_model_id(self.model_id),
+                            "parser_variant": DEFAULT_PARSER_VARIANT,
+                            "execution_metadata": execution_metadata,
                             "parse_metadata": parse_metadata,
                             "parsed_criteria": parsed_criteria,
                             "results": extracted_results,
@@ -187,7 +206,11 @@ class RunGenerator:
                         {
                             "query_id": q_id,
                             "query": query,
+                            "model_id": normalize_model_id(self.model_id),
+                            "parser_variant": DEFAULT_PARSER_VARIANT,
+                            "execution_metadata": getattr(query_err, "query_execution_metadata", {}),
                             "parsed_criteria": [],
+                            "parse_metadata": getattr(query_err, "parser_metadata", {}),
                             "results": [],
                             "error": str(query_err),
                         }
@@ -233,14 +256,10 @@ if __name__ == "__main__":
         sample_queries = json.load(f)
 
     experiments = [
-        # {
-        #     "name": "gemma3",
-        #     "model_id": "gemma-3-27b-it",
-        # },
         {
-            "name": "gemma4",
+            "name": "gemma4_default_parser",
             "model_id": "gemma-4-31b-it",
-        }
+        },
     ]
 
     repeats = max(1, args.repeats)
@@ -254,7 +273,10 @@ if __name__ == "__main__":
         print(f"\n=== Trial {repeat_index}/{repeats} ===")
         for exp in experiments:
             model_id = normalize_model_id(exp.get("model_id"))
-            generator = RunGenerator(k_per_engine=10, model_id=model_id)
+            generator = RunGenerator(
+                k_per_engine=10,
+                model_id=model_id,
+            )
             try:
                 generator.generate_run(
                     queries_config=sample_queries,
@@ -267,7 +289,7 @@ if __name__ == "__main__":
             except Exception as exc:
                 print(
                     f"Failed experiment {exp['name']} on model {model_id} "
-                    f"({run_suffix or 'single'}): {exc}"
+                    f"(parser_variant={DEFAULT_PARSER_VARIANT}, {run_suffix or 'single'}): {exc}"
                 )
 
     print("\nFixed-path experiments finished!")
