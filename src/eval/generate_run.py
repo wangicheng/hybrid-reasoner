@@ -106,10 +106,13 @@ class RunGenerator:
         semantic_weight: float = 0.3,
         attribute_weight: float = 0.7,
         run_suffix: str = "",
+        enable_bm25: bool = False,
+        bm25_weight: float = 0.3,
     ) -> None:
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
+            f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight}, "
             "fixed retrieval path, "
             f"model={normalize_model_id(self.model_id)}, "
             f"parser_variant={DEFAULT_PARSER_VARIANT}, "
@@ -122,6 +125,8 @@ class RunGenerator:
             vs=vs,
             semantic_weight=semantic_weight,
             attribute_weight=attribute_weight,
+            enable_bm25=enable_bm25,
+            bm25_weight=bm25_weight,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -245,6 +250,17 @@ if __name__ == "__main__":
         default="data/experiments/runs",
         help="Directory for generated run files",
     )
+    parser.add_argument(
+        "--disable-bm25",
+        action="store_true",
+        help="Disable BM25 retrieval in HybridEngine",
+    )
+    parser.add_argument(
+        "--bm25-weight",
+        type=float,
+        default=0.3,
+        help="Weight for BM25 score fusion",
+    )
     args = parser.parse_args()
 
     queries_path = Path("data/experiments/queries.json")
@@ -255,10 +271,18 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
+    # Allow experiments to toggle BM25 for comparison
     experiments = [
         {
-            "name": "gemma4_default_parser",
+            "name": "gemma4_default_parser_bm25_off",
             "model_id": "gemma-4-31b-it",
+            "enable_bm25": False,
+        },
+        {
+            "name": "gemma4_default_parser_bm25_on",
+            "model_id": "gemma-4-31b-it",
+            "enable_bm25": True,
+            "bm25_weight": 0.1,
         },
     ]
 
@@ -277,6 +301,8 @@ if __name__ == "__main__":
                 k_per_engine=10,
                 model_id=model_id,
             )
+            enable_bm25 = exp.get("enable_bm25", not args.disable_bm25)
+            bm25_weight = exp.get("bm25_weight", args.bm25_weight)
             try:
                 generator.generate_run(
                     queries_config=sample_queries,
@@ -285,6 +311,8 @@ if __name__ == "__main__":
                     semantic_weight=0.4,
                     attribute_weight=0.6,
                     run_suffix=run_suffix,
+                    enable_bm25=enable_bm25,
+                    bm25_weight=bm25_weight,
                 )
             except Exception as exc:
                 print(

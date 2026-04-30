@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # w1 = SEMANTIC_WEIGHT, w2 = ATTRIBUTE_WEIGHT
     SEMANTIC_WEIGHT: float = 0.3
     ATTRIBUTE_WEIGHT: float = 0.7
+    
+    # BM25 Experimental settings
+    ENABLE_BM25: bool = False
+    BM25_WEIGHT: float = 0.3
+    BM25_K1: float = 1.2
+    BM25_B: float = 0.75
+    TOP_K_BM25: int = 1000  # Default to fetching many to merge
 
     class Config:
         env_file = ".env"

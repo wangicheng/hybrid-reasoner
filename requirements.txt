@@ -9,3 +9,4 @@ fastapi
 uvicorn
 jieba
 beautifulsoup4
+rank_bm25

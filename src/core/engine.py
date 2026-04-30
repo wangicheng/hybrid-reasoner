@@ -7,6 +7,7 @@ from src.core.database import Database
 from src.core.explainer import generate_explanation
 from src.core.llm import parse_query
 from src.core.vector_store import VectorStore
+from src.core.lexical_store import LexicalStore
 
 
 class HybridEngine:
@@ -16,11 +17,22 @@ class HybridEngine:
         self,
         db: Optional[Database] = None,
         vs: Optional[VectorStore] = None,
+        lexical_store: Optional[LexicalStore] = None,
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None,
+        bm25_weight: Optional[float] = None,
+        enable_bm25: Optional[bool] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
+        
+        self.enable_bm25 = enable_bm25 if enable_bm25 is not None else settings.ENABLE_BM25
+        self.bm25_weight = bm25_weight if bm25_weight is not None else settings.BM25_WEIGHT
+        if self.enable_bm25:
+            self.lexical_store = lexical_store if lexical_store is not None else LexicalStore(self.db)
+        else:
+            self.lexical_store = None
+            
         self.book_matcher = BookMatcher(self.db)
         self.semantic_weight = (
             semantic_weight if semantic_weight is not None else settings.SEMANTIC_WEIGHT
@@ -185,12 +197,13 @@ class HybridEngine:
         self,
         item: Dict[str, Any],
         vector_score: float,
+        norm_bm25_score: float,
         tag_terms_list: List[str],
         tag_mapping_weights: List[Dict[str, float]],
     ) -> Tuple[float, List[Dict[str, Any]]]:
         breakdown: List[Dict[str, Any]] = []
 
-        semantic_score = 0.1 + 0.9 * vector_score
+        semantic_score = vector_score
         breakdown.append(
             {
                 "criteria": "semantic_track",
@@ -198,9 +211,26 @@ class HybridEngine:
                 "raw_score": vector_score,
                 "weighted_score": semantic_score,
                 "is_filter": False,
-                "reason": f"semantic score {semantic_score:.4f} (raw {vector_score:.4f})",
+                "reason": f"semantic score {semantic_score:.4f}",
             }
         )
+
+        if self.enable_bm25:
+            # BM25 is purely lexical tracking. We assume lexical_score scales from 0 to 1
+            lexical_score = norm_bm25_score
+            breakdown.append(
+                {
+                    "criteria": "lexical_track",
+                    "label": "BM25 Lexical Track",
+                    "raw_score": norm_bm25_score,
+                    "weighted_score": lexical_score,
+                    "is_filter": False,
+                    "reason": f"bm25 score {lexical_score:.4f}",
+                }
+            )
+            # Additive boosting prevents penalizing purely semantic matches that lacked keywords
+            boost = lexical_score * self.bm25_weight
+            semantic_score = min(1.0, semantic_score + boost)
 
         attribute_score = 1.0
         has_tag_scoring = False
@@ -226,7 +256,7 @@ class HybridEngine:
                     matched_details.append(f"{target_term}->{best_tag}({best_score:.2f})")
 
             average_similarity = total_facet_score / len(tag_mapping_weights)
-            attribute_score = 0.1 + 0.9 * average_similarity
+            attribute_score = average_similarity
             has_tag_scoring = True
             breakdown.append(
                 {
@@ -405,6 +435,20 @@ class HybridEngine:
             payload_map[book_id] = payload
             vector_score_map[book_id] = float(hit["score"])
 
+        bm25_score_map: Dict[str, float] = {}
+        if self.enable_bm25 and self.lexical_store:
+            bm25_results = self.lexical_store.search(expanded_terms, limit=getattr(settings, "TOP_K_BM25", 1000))
+            for res in bm25_results:
+                item = res["item"]
+                book_id = str(item.get("id"))
+                if not book_id:
+                    continue
+                bm25_score_map[book_id] = float(res["score"])
+                if book_id not in candidates_map:
+                    candidates_map[book_id] = item
+                    payload_map[book_id] = item
+                    vector_score_map[book_id] = 0.0
+
         if tag_terms_list and tag_mapping_weights:
             recall_tags = self._extract_recall_tags(tag_mapping_weights)
             if recall_tags:
@@ -445,22 +489,41 @@ class HybridEngine:
             list(parse_result.tag_intent.negative_terms)
         ) or self._resolve_negative_tag_terms(parse_result.criteria)
         scored_items = []
+        max_bm25 = 1.0
+        min_bm25 = 0.0
+        if self.enable_bm25 and bm25_score_map:
+            max_bm25 = max(bm25_score_map.values())
+            min_bm25 = min(bm25_score_map.values())
+            if max_bm25 <= min_bm25: 
+                max_bm25 = min_bm25 + 1.0
+            
         for item in candidates:
             book_id = str(item.get("id"))
             if not book_id or book_id == "None":
                 continue
             vector_score = vector_score_map.get(book_id, 0.0)
+            raw_bm25_score = bm25_score_map.get(book_id, 0.0) if self.enable_bm25 else 0.0
+            
+            if self.enable_bm25 and raw_bm25_score > 0:
+                # Min-Max normalization
+                norm_bm25_score = (raw_bm25_score - min_bm25) / (max_bm25 - min_bm25)
+            else:
+                norm_bm25_score = 0.0
+
+            
             final_score, breakdown = self.calculate_score(
                 item,
-                vector_score=vector_score,
-                tag_terms_list=tag_terms_list,
-                tag_mapping_weights=tag_mapping_weights,
+                vector_score,
+                norm_bm25_score,
+                tag_terms_list,
+                tag_mapping_weights,
             )
             scored_items.append(
                 {
                     "item": item,
                     "score": float(final_score),
                     "vector_score": vector_score,
+                    "bm25_score": raw_bm25_score,
                     "breakdown": breakdown,
                     "payload": payload_map.get(book_id, {}),
                 }
