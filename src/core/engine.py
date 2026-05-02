@@ -152,7 +152,7 @@ class HybridEngine:
 
             try:
                 mapped = self.vs.search_tags(
-                    f"tag: {query_text}",
+                    f"這部作品的類型偏向{query_text}",
                     limit=1,
                     similarity_threshold=0.7,
                 )

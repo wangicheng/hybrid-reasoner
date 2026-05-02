@@ -141,8 +141,8 @@ class VectorStore:
         self._ensure_named_collection(collection_name)
 
         tag_vectors = self._embed_with_retry(
-            [f"tag: {tag}" for tag in normalized_tags],
-            task_type="RETRIEVAL_QUERY",
+            [f"這部作品的類型偏向{tag}" for tag in normalized_tags],
+            task_type="RETRIEVAL_DOCUMENT",
         )
         points = []
         for tag, vector in zip(normalized_tags, tag_vectors):
@@ -316,7 +316,7 @@ class VectorStore:
 
         try:
             query_vectors = self._embed_with_retry(
-                [f"tag: {tag}" for tag in target_tags],
+                [f"這部作品的類型偏向{tag}" for tag in target_tags],
                 task_type="RETRIEVAL_QUERY",
             )
             results: List[Dict[str, float]] = []
