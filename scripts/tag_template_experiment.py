@@ -52,6 +52,7 @@ EXPERIMENT_CONFIG = {
     "output_dir": DEFAULT_EXPERIMENT_ROOT / "runs",
     "templates_file": None,
     "query_template": "tag: {label}",
+    "use_symmetric_templates": True,
     "include_canonical_label_queries": False,
     "max_items": None,
     "query_task_type": "RETRIEVAL_QUERY",
@@ -665,6 +666,7 @@ def make_report_markdown(
     query_task_type: str,
     candidate_task_type: str,
     query_template: str,
+    use_symmetric_templates: bool,
 ) -> str:
     lines = [
         "# Tag Template Mapping Experiment",
@@ -677,6 +679,7 @@ def make_report_markdown(
         f"- query task type: `{query_task_type}`",
         f"- candidate task type: `{candidate_task_type}`",
         f"- fixed query template: `{query_template}`",
+        f"- symmetric templates: `{use_symmetric_templates}`",
         "",
         "## Ranking",
         "",
@@ -741,11 +744,13 @@ def preview_setup(
     candidate_labels: Sequence[str],
     templates: Sequence[Dict[str, str]],
     query_template: str,
+    use_symmetric_templates: bool,
 ) -> None:
     print(f"Loaded {len(dataset)} evaluation labels and {len(examples)} mapping queries.")
     print(f"Candidate canonical tags: {len(candidate_labels)}")
     print(f"Templates: {len(templates)}")
     print(f"Fixed query template: {query_template}")
+    print(f"Symmetric templates: {use_symmetric_templates}")
     for example in examples[:5]:
         payload = {
             "query_text": example.query_text,
@@ -799,7 +804,7 @@ def main() -> None:
     )
 
     if preview:
-        preview_setup(dataset, examples, candidate_labels, templates, query_template)
+        preview_setup(dataset, examples, candidate_labels, templates, query_template, bool(config.get("use_symmetric_templates")))
         print(f"Dataset exported to {output_dir / 'dataset.json'}")
         return
 
@@ -817,6 +822,26 @@ def main() -> None:
 
     results: List[Dict[str, object]] = []
     for template in templates:
+        # Determine query template for this run
+        current_query_template = query_template
+        if config.get("use_symmetric_templates"):
+            current_query_template = template["template"]
+
+        # Re-embed queries if symmetric or if it's the first time
+        current_query_vectors = query_vectors
+        if config.get("use_symmetric_templates"):
+            query_rendered_texts = [render_text(current_query_template, example.query_text) for example in examples]
+            current_query_vectors = get_rendered_vectors(
+                rendered_texts=query_rendered_texts,
+                output_dir=output_dir,
+                cache_name=f"queries_{template['name']}",
+                template_text=current_query_template,
+                role="query",
+                model=model,
+                task_type=query_task_type,
+                batch_size=batch_size,
+            )
+
         candidate_rendered_texts = [render_text(template["template"], label) for label in candidate_labels]
         candidate_vectors = get_rendered_vectors(
             rendered_texts=candidate_rendered_texts,
@@ -833,8 +858,8 @@ def main() -> None:
                 template=template,
                 candidate_labels=candidate_labels,
                 candidate_vectors=candidate_vectors,
-                query_vectors=query_vectors,
-                query_template=query_template,
+                query_vectors=current_query_vectors,
+                query_template=current_query_template,
                 examples=examples,
             )
         )
@@ -878,6 +903,7 @@ def main() -> None:
             query_task_type=query_task_type,
             candidate_task_type=candidate_task_type,
             query_template=query_template,
+            use_symmetric_templates=bool(config.get("use_symmetric_templates")),
         ),
         encoding="utf-8",
     )
