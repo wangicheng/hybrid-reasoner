@@ -175,39 +175,37 @@ class VectorStore:
         is_list = isinstance(text, list)
         max_api_key_attempts = len(get_api_key_rotator().api_keys)
 
-        while attempt < max_attempts:
-            try:
-                get_rate_limiter().wait(self._current_api_key)
-                response = self.genai_client.models.embed_content(
-                    model=self.embedding_model,
-                    contents=text,
-                    config=types.EmbedContentConfig(task_type=task_type),
-                )
-                if is_list:
-                    return [list(embedding.values) for embedding in response.embeddings]
-                return list(response.embeddings[0].values)
-            except Exception as exc:
-                attempt += 1
-                error_text = str(exc)
-                is_quota_error = is_rate_limit_error(exc)
-                if is_quota_error and attempt < max_attempts and max_api_key_attempts > 1:
-                    print(
-                        f"[VectorStore] Embedding failed ({error_text[:80]}). "
-                        f"Retrying with rotated key, attempt {attempt}."
-                    )
-                    self._update_api_key_on_rate_limit()
-                    continue
-                if (is_quota_error or _is_retryable(exc)) and attempt < max_attempts:
-                    backoff_seconds = 2 * attempt
-                    print(
-                        f"[VectorStore] Embedding failed ({error_text[:80]}). "
-                        f"Retrying in {backoff_seconds}s, attempt {attempt}."
-                    )
-                    time.sleep(backoff_seconds)
-                    continue
-                raise
+        import concurrent.futures
 
-        raise RuntimeError("Max embed retries exceeded")
+        def _embed_single(single_text: str) -> List[float]:
+            attempt = 0
+            while attempt < max_attempts:
+                try:
+                    get_rate_limiter().wait(self._current_api_key)
+                    resp = self.genai_client.models.embed_content(
+                        model=self.embedding_model,
+                        contents=single_text,
+                        config=types.EmbedContentConfig(task_type=task_type),
+                    )
+                    return list(resp.embeddings[0].values)
+                except Exception as exc:
+                    attempt += 1
+                    error_text = str(exc)
+                    is_quota_error = is_rate_limit_error(exc)
+                    if is_quota_error and attempt < max_attempts and max_api_key_attempts > 1:
+                        self._update_api_key_on_rate_limit()
+                        continue
+                    if (is_quota_error or _is_retryable(exc)) and attempt < max_attempts:
+                        time.sleep(2 * attempt)
+                        continue
+                    raise
+            raise RuntimeError("Max embed retries exceeded")
+
+        if is_list:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                return list(executor.map(_embed_single, text))
+        else:
+            return _embed_single(text)
 
     def search(
         self,
