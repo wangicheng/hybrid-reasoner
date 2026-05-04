@@ -18,10 +18,15 @@ class HybridEngine:
         vs: Optional[VectorStore] = None,
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None,
+        allowed_book_ids: Optional[set[str]] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
-        self.book_matcher = BookMatcher(self.db)
+        self.allowed_book_ids = self._normalize_allowed_book_ids(allowed_book_ids)
+        self.book_matcher = BookMatcher(
+            self.db,
+            allowed_book_ids=self.allowed_book_ids,
+        )
         self.semantic_weight = (
             semantic_weight if semantic_weight is not None else settings.SEMANTIC_WEIGHT
         )
@@ -42,6 +47,30 @@ class HybridEngine:
 
         if not self.vs.collection_exists("novel_tags"):
             raise RuntimeError("Qdrant collection 'novel_tags' is missing.")
+
+    @staticmethod
+    def _normalize_allowed_book_ids(
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> Optional[set[str]]:
+        if not allowed_book_ids:
+            return None
+        normalized = {
+            str(book_id).strip()
+            for book_id in allowed_book_ids
+            if str(book_id).strip()
+        }
+        return normalized or None
+
+    def _is_allowed_book_id(self, book_id: Any) -> bool:
+        if self.allowed_book_ids is None:
+            return True
+        return str(book_id or "").strip() in self.allowed_book_ids
+
+    def _augment_parse_metadata(self, parse_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        metadata = dict(parse_metadata or {})
+        metadata["subset_enabled"] = self.allowed_book_ids is not None
+        metadata["subset_size"] = len(self.allowed_book_ids) if self.allowed_book_ids else None
+        return metadata
 
     def _load_tags_cache(self) -> None:
         tags_path = "data/all_tags.json"
@@ -394,6 +423,7 @@ class HybridEngine:
             limit=retrieval_limit,
             query_filter=None,
             with_payload=True,
+            allowed_point_ids=self.allowed_book_ids,
         )
         for hit in vector_results:
             payload = hit.get("payload") or {}
@@ -401,6 +431,8 @@ class HybridEngine:
             if not book_id:
                 continue
             book_id = str(book_id)
+            if not self._is_allowed_book_id(book_id):
+                continue
             candidates_map[book_id] = payload
             payload_map[book_id] = payload
             vector_score_map[book_id] = float(hit["score"])
@@ -409,10 +441,16 @@ class HybridEngine:
             recall_tags = self._extract_recall_tags(tag_mapping_weights)
             if recall_tags:
                 print(f"[Engine] Triggering mapped-tag recall for {len(recall_tags)} resolved tags.")
-                tag_recall_items = self.db.search_by_tags_any(recall_tags, limit=retrieval_limit)
+                tag_recall_items = self.db.search_by_tags_any(
+                    recall_tags,
+                    limit=retrieval_limit,
+                    allowed_book_ids=self.allowed_book_ids,
+                )
                 for item in tag_recall_items:
                     book_id = str(item.get("id", "")).strip()
                     if not book_id:
+                        continue
+                    if not self._is_allowed_book_id(book_id):
                         continue
                     if book_id not in candidates_map:
                         candidates_map[book_id] = item
@@ -421,6 +459,8 @@ class HybridEngine:
 
         candidates: List[Dict[str, Any]] = []
         for book_id, item in candidates_map.items():
+            if not self._is_allowed_book_id(book_id):
+                continue
             if not item.get("classification") or not item.get("words_total"):
                 db_item = self.db.get_item(book_id)
                 if db_item:
@@ -489,7 +529,7 @@ class HybridEngine:
                 "engine": "HybridEngine",
                 "related_books": related_books,
                 "reference_tags": [],
-                "parse_metadata": parse_result.parse_metadata,
+                "parse_metadata": self._augment_parse_metadata(parse_result.parse_metadata),
             }
 
         final_results = scored_items[:limit]
@@ -535,7 +575,7 @@ class HybridEngine:
             "hypothetical_intro": parse_result.hypothetical_intro,
             "related_books": related_books,
             "reference_tags": [],
-            "parse_metadata": parse_result.parse_metadata,
+            "parse_metadata": self._augment_parse_metadata(parse_result.parse_metadata),
             "query_vector": query_vector,
             "results": final_results,
             "engine": "HybridEngine",

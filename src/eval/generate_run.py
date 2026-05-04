@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from src.core.database import Database
 from src.core.engine import HybridEngine
+from src.core.single_prompt_engine import SinglePromptLLMEngine
 from src.core.api_utils import _is_retryable
 from src.core.llm import DEFAULT_PARSER_VARIANT
 from src.core.model_catalog import normalize_model_id
@@ -36,7 +37,7 @@ class RunGenerator:
 
     async def _search_once(
         self,
-        engine: HybridEngine,
+        engine: Any,
         query: str,
         cache_namespace: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -56,7 +57,7 @@ class RunGenerator:
 
     def _search_with_retry(
         self,
-        engine: HybridEngine,
+        engine: Any,
         query: str,
         q_id: str,
         cache_namespace: Optional[str] = None,
@@ -103,25 +104,53 @@ class RunGenerator:
         queries_config: List[Dict[str, Any]],
         engine_name: str,
         output_dir: Path,
+        engine_type: str = "hybrid",
         semantic_weight: float = 0.3,
         attribute_weight: float = 0.7,
         run_suffix: str = "",
+        engine_kwargs: Optional[Dict[str, Any]] = None,
+        run_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
+        engine_kwargs = dict(engine_kwargs or {})
+        run_metadata = dict(run_metadata or {})
+        run_metadata.setdefault("engine_type", engine_type)
+        vs = None
+        if engine_type == "hybrid":
+            vs = VectorStore(collection_name="novels")
+            engine = HybridEngine(
+                db=self.db,
+                vs=vs,
+                semantic_weight=semantic_weight,
+                attribute_weight=attribute_weight,
+                **engine_kwargs,
+            )
+        elif engine_type == "single_prompt_llm":
+            engine = SinglePromptLLMEngine(
+                db=self.db,
+                include_intro=True,
+                intro_char_limit=None,
+                **engine_kwargs,
+            )
+        elif engine_type == "hybrid_rerank":
+            from src.core.hybrid_rerank_engine import HybridRerankEngine
+            vs = VectorStore(collection_name="novels")
+            engine = HybridRerankEngine(
+                db=self.db,
+                vs=vs,
+                semantic_weight=semantic_weight,
+                attribute_weight=attribute_weight,
+                **engine_kwargs,
+            )
+        else:
+            raise ValueError(f"Unsupported engine_type: {engine_type}")
+
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
-            f"(W1: {semantic_weight}, W2: {attribute_weight}, "
-            "fixed retrieval path, "
+            f"(engine_type={engine_type}, "
+            f"W1: {semantic_weight}, W2: {attribute_weight}, "
             f"model={normalize_model_id(self.model_id)}, "
-            f"parser_variant={DEFAULT_PARSER_VARIANT}, "
+            f"parser_variant={getattr(engine, 'PARSER_VARIANT', DEFAULT_PARSER_VARIANT)}, "
             f"run_suffix={run_suffix or 'none'})"
-        )
-
-        vs = VectorStore(collection_name="novels")
-        engine = HybridEngine(
-            db=self.db,
-            vs=vs,
-            semantic_weight=semantic_weight,
-            attribute_weight=attribute_weight,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +195,7 @@ class RunGenerator:
                     results = response.get("results", [])
                     parsed_criteria = response.get("parsed_criteria", [])
                     parse_metadata = response.get("parse_metadata", {})
+                    parser_variant = response.get("parser_variant", DEFAULT_PARSER_VARIANT)
                     extracted_results = []
 
                     for rank, res in enumerate(results):
@@ -193,10 +223,12 @@ class RunGenerator:
                             "query_id": q_id,
                             "query": query,
                             "model_id": normalize_model_id(self.model_id),
-                            "parser_variant": DEFAULT_PARSER_VARIANT,
+                            "parser_variant": parser_variant,
                             "execution_metadata": execution_metadata,
                             "parse_metadata": parse_metadata,
                             "parsed_criteria": parsed_criteria,
+                            "engine_type": engine_type,
+                            "run_metadata": run_metadata,
                             "results": extracted_results,
                         }
                     )
@@ -207,10 +239,12 @@ class RunGenerator:
                             "query_id": q_id,
                             "query": query,
                             "model_id": normalize_model_id(self.model_id),
-                            "parser_variant": DEFAULT_PARSER_VARIANT,
+                            "parser_variant": getattr(engine, "PARSER_VARIANT", DEFAULT_PARSER_VARIANT),
                             "execution_metadata": getattr(query_err, "query_execution_metadata", {}),
                             "parsed_criteria": [],
                             "parse_metadata": getattr(query_err, "parser_metadata", {}),
+                            "engine_type": engine_type,
+                            "run_metadata": run_metadata,
                             "results": [],
                             "error": str(query_err),
                         }
@@ -221,7 +255,8 @@ class RunGenerator:
 
             print(f"[{engine_name}] Run complete! Saved to {output_path}")
         finally:
-            vs.client.close()
+            if vs is not None:
+                vs.client.close()
 
 
 if __name__ == "__main__":
@@ -258,6 +293,12 @@ if __name__ == "__main__":
     experiments = [
         {
             "name": "gemma4_default_parser",
+            "engine_type": "hybrid",
+            "model_id": "gemma-4-31b-it",
+        },
+        {
+            "name": "gemma4_single_prompt_full_catalog",
+            "engine_type": "single_prompt_llm",
             "model_id": "gemma-4-31b-it",
         },
     ]
@@ -282,6 +323,7 @@ if __name__ == "__main__":
                     queries_config=sample_queries,
                     engine_name=exp["name"],
                     output_dir=output_folder,
+                    engine_type=str(exp.get("engine_type", "hybrid")).strip() or "hybrid",
                     semantic_weight=0.4,
                     attribute_weight=0.6,
                     run_suffix=run_suffix,
@@ -289,7 +331,8 @@ if __name__ == "__main__":
             except Exception as exc:
                 print(
                     f"Failed experiment {exp['name']} on model {model_id} "
-                    f"(parser_variant={DEFAULT_PARSER_VARIANT}, {run_suffix or 'single'}): {exc}"
+                    f"(engine_type={exp.get('engine_type', 'hybrid')}, "
+                    f"parser_variant={DEFAULT_PARSER_VARIANT}, {run_suffix or 'single'}): {exc}"
                 )
 
     print("\nFixed-path experiments finished!")

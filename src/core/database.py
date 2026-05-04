@@ -170,21 +170,57 @@ class Database:
             return d
         return None
 
-    def get_all_items(self) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _normalize_row(row: sqlite3.Row) -> Dict[str, Any]:
+        item = dict(row)
+        item["tags"] = _normalize_tag_list(item["tags"]) if item.get("tags") else []
+        return item
+
+    @staticmethod
+    def _normalize_allowed_book_ids(
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> Optional[set[str]]:
+        if not allowed_book_ids:
+            return None
+        normalized = {
+            str(book_id).strip()
+            for book_id in allowed_book_ids
+            if str(book_id).strip()
+        }
+        return normalized or None
+
+    def _filter_items_by_ids(
+        self,
+        items: List[Dict[str, Any]],
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        normalized_ids = self._normalize_allowed_book_ids(allowed_book_ids)
+        if not normalized_ids:
+            return items
+        return [
+            item
+            for item in items
+            if str(item.get("id", "")).strip() in normalized_ids
+        ]
+
+    def get_all_items(
+        self,
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> List[Dict[str, Any]]:
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM novels")
         rows = cursor.fetchall()
         conn.close()
-        items = []
-        for row in rows:
-            d = dict(row)
-            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
-            items.append(d)
-        return items
+        items = [self._normalize_row(row) for row in rows]
+        return self._filter_items_by_ids(items, allowed_book_ids)
 
-    def search_by_title_fuzzy(self, keyword: str) -> List[Dict[str, Any]]:
+    def search_by_title_fuzzy(
+        self,
+        keyword: str,
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> List[Dict[str, Any]]:
         if not keyword:
             return []
             
@@ -206,15 +242,14 @@ class Database:
             rows = cursor.fetchall()
         
         conn.close()
-        
-        items = []
-        for row in rows:
-            d = dict(row)
-            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
-            items.append(d)
-        return items
+        items = [self._normalize_row(row) for row in rows]
+        return self._filter_items_by_ids(items, allowed_book_ids)
 
-    def search_by_author(self, author_name: str) -> List[Dict[str, Any]]:
+    def search_by_author(
+        self,
+        author_name: str,
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> List[Dict[str, Any]]:
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -224,15 +259,15 @@ class Database:
         
         rows = cursor.fetchall()
         conn.close()
-        
-        items = []
-        for row in rows:
-            d = dict(row)
-            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
-            items.append(d)
-        return items
+        items = [self._normalize_row(row) for row in rows]
+        return self._filter_items_by_ids(items, allowed_book_ids)
 
-    def search_by_tags_any(self, tags: List[str], limit: int = 10000) -> List[Dict[str, Any]]:
+    def search_by_tags_any(
+        self,
+        tags: List[str],
+        limit: int = 10000,
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> List[Dict[str, Any]]:
         normalized_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
         if not normalized_tags:
             return []
@@ -252,10 +287,6 @@ class Database:
         cursor.execute(sql, params)
         rows = cursor.fetchall()
         conn.close()
-
-        items = []
-        for row in rows:
-            d = dict(row)
-            d["tags"] = _normalize_tag_list(d["tags"]) if d.get("tags") else []
-            items.append(d)
-        return items
+        items = [self._normalize_row(row) for row in rows]
+        filtered_items = self._filter_items_by_ids(items, allowed_book_ids)
+        return filtered_items[:limit]

@@ -207,6 +207,43 @@ class VectorStore:
         else:
             return _embed_single(text)
 
+    @staticmethod
+    def _merge_with_allowed_ids_filter(
+        query_filter: Optional[rest.Filter],
+        allowed_point_ids: Optional[set[str]] = None,
+    ) -> Optional[rest.Filter]:
+        if not allowed_point_ids:
+            return query_filter
+
+        normalized_ids = [
+            str(point_id).strip()
+            for point_id in allowed_point_ids
+            if str(point_id).strip()
+        ]
+        if not normalized_ids:
+            return query_filter
+
+        id_condition = rest.HasIdCondition(has_id=normalized_ids)
+        if query_filter is None:
+            return rest.Filter(must=[id_condition])
+
+        must_conditions: List[Any] = []
+        existing_must = query_filter.must
+        if existing_must is None:
+            pass
+        elif isinstance(existing_must, list):
+            must_conditions.extend(existing_must)
+        else:
+            must_conditions.append(existing_must)
+        must_conditions.append(id_condition)
+
+        return rest.Filter(
+            should=query_filter.should,
+            min_should=query_filter.min_should,
+            must=must_conditions,
+            must_not=query_filter.must_not,
+        )
+
     def search(
         self,
         query_text: str,
@@ -214,14 +251,19 @@ class VectorStore:
         query_filter: Optional[rest.Filter] = None,
         with_payload: bool = True,
         collection_name: Optional[str] = None,
+        allowed_point_ids: Optional[set[str]] = None,
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
         target_collection = collection_name or self.collection_name
+        effective_filter = self._merge_with_allowed_ids_filter(
+            query_filter=query_filter,
+            allowed_point_ids=allowed_point_ids,
+        )
 
         response = self.client.query_points(
             collection_name=target_collection,
             query=vector,
-            query_filter=query_filter,
+            query_filter=effective_filter,
             limit=limit,
             with_payload=with_payload,
         )
