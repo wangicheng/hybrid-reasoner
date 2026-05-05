@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import json
 import sys
 import time
@@ -98,6 +99,68 @@ class RunGenerator:
                 )
                 time.sleep(delay)
 
+    def _process_single_query(self, q_conf: Dict[str, Any], engine: HybridEngine, engine_name: str, run_suffix: str) -> Dict[str, Any]:
+        q_id = q_conf["id"]
+        query = q_conf["query"]
+
+        print(f"   - Processing query: {query[:30]}...")
+
+        try:
+            response, execution_metadata = self._search_with_retry(
+                engine,
+                query,
+                q_id,
+                cache_namespace=run_suffix or engine_name,
+            )
+            results = response.get("results", [])
+            parsed_criteria = response.get("parsed_criteria", [])
+            parse_metadata = response.get("parse_metadata", {})
+            extracted_results = []
+
+            for rank, res in enumerate(results):
+                item = res.get("item", {})
+                b_id = str(item.get("id", "")).strip()
+                if not b_id:
+                    continue
+
+                author_name = item.get("author") or item.get("user", {}).get("name", "")
+                extracted_results.append(
+                    {
+                        "book_id": b_id,
+                        "title": item.get("name", ""),
+                        "author": author_name,
+                        "intro": item.get("intro", ""),
+                        "words_total": item.get("words_total", 0),
+                        "publish_status": item.get("publish_status", ""),
+                        "tags": item.get("tags", []),
+                        "rank": rank + 1,
+                    }
+                )
+
+            return {
+                "query_id": q_id,
+                "query": query,
+                "model_id": normalize_model_id(self.model_id),
+                "parser_variant": DEFAULT_PARSER_VARIANT,
+                "execution_metadata": execution_metadata,
+                "parse_metadata": parse_metadata,
+                "parsed_criteria": parsed_criteria,
+                "results": extracted_results,
+            }
+        except Exception as query_err:
+            print(f"     ?? Error processing query {q_id}: {query_err}")
+            return {
+                "query_id": q_id,
+                "query": query,
+                "model_id": normalize_model_id(self.model_id),
+                "parser_variant": DEFAULT_PARSER_VARIANT,
+                "execution_metadata": getattr(query_err, "query_execution_metadata", {}),
+                "parsed_criteria": [],
+                "parse_metadata": getattr(query_err, "parser_metadata", {}),
+                "results": [],
+                "error": str(query_err),
+            }
+
     def generate_run(
         self,
         queries_config: List[Dict[str, Any]],
@@ -156,75 +219,16 @@ class RunGenerator:
                 print(f"   ?? Could not load existing file: {exc}")
 
         try:
-            for q_conf in queries_config:
-                q_id = q_conf["id"]
-                query = q_conf["query"]
-
-                if q_id in processed_query_ids:
-                    print(f"   - Skipping query: {q_id} (already completed)")
-                    continue
-
-                print(f"   - Processing query: {query[:30]}...")
-
-                try:
-                    response, execution_metadata = self._search_with_retry(
-                        engine,
-                        query,
-                        q_id,
-                        cache_namespace=run_suffix or engine_name,
-                    )
-                    results = response.get("results", [])
-                    parsed_criteria = response.get("parsed_criteria", [])
-                    parse_metadata = response.get("parse_metadata", {})
-                    extracted_results = []
-
-                    for rank, res in enumerate(results):
-                        item = res.get("item", {})
-                        b_id = str(item.get("id", "")).strip()
-                        if not b_id:
-                            continue
-
-                        author_name = item.get("author") or item.get("user", {}).get("name", "")
-                        extracted_results.append(
-                            {
-                                "book_id": b_id,
-                                "title": item.get("name", ""),
-                                "author": author_name,
-                                "intro": item.get("intro", ""),
-                                "words_total": item.get("words_total", 0),
-                                "publish_status": item.get("publish_status", ""),
-                                "tags": item.get("tags", []),
-                                "rank": rank + 1,
-                            }
-                        )
-
-                    run_data.append(
-                        {
-                            "query_id": q_id,
-                            "query": query,
-                            "model_id": normalize_model_id(self.model_id),
-                            "parser_variant": DEFAULT_PARSER_VARIANT,
-                            "execution_metadata": execution_metadata,
-                            "parse_metadata": parse_metadata,
-                            "parsed_criteria": parsed_criteria,
-                            "results": extracted_results,
-                        }
-                    )
-                except Exception as query_err:
-                    print(f"     ?? Error processing query {q_id}: {query_err}")
-                    run_data.append(
-                        {
-                            "query_id": q_id,
-                            "query": query,
-                            "model_id": normalize_model_id(self.model_id),
-                            "parser_variant": DEFAULT_PARSER_VARIANT,
-                            "execution_metadata": getattr(query_err, "query_execution_metadata", {}),
-                            "parsed_criteria": [],
-                            "parse_metadata": getattr(query_err, "parser_metadata", {}),
-                            "results": [],
-                            "error": str(query_err),
-                        }
-                    )
+            pending_queries = [q for q in queries_config if q["id"] not in processed_query_ids]
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {
+                    executor.submit(self._process_single_query, q_conf, engine, engine_name, run_suffix): q_conf
+                    for q_conf in pending_queries
+                }
+                
+                for future in concurrent.futures.as_completed(futures):
+                    run_data.append(future.result())
 
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(run_data, f, ensure_ascii=False, indent=2)

@@ -486,12 +486,12 @@ def _build_tag_projection_compact_context(semantic_understanding: Dict[str, Any]
         str(term).strip()
         for term in semantic_understanding.get("positive_concepts", [])
         if str(term).strip()
-    ][:4]
+    ][:3]
     negative_concepts = [
         str(term).strip()
         for term in semantic_understanding.get("negative_concepts", [])
         if str(term).strip()
-    ][:3]
+    ][:6]
 
     lines = [
         "SEMANTIC UNDERSTANDING OUTPUT (COMPACT):",
@@ -1196,9 +1196,16 @@ Rules:
 - Make it tag-heavy only when the tags are explicit or strongly supported by the user query itself.
 - `positive_concepts` and `negative_concepts` should be short concept phrases, not full sentences.
 - `positive_concepts` should contain at most 6 items.
-- `negative_concepts` should contain at most 5 items.
+- `negative_concepts` should contain at most 8 items.
 - Include only explicit or high-confidence retrieval anchors in `positive_concepts`.
 - Put directly rejected ideas into `negative_concepts`.
+- CRITICAL: `negative_concepts` must capture EVERY genre, type, tag, or element the user explicitly rejects or says they dislike. Pay close attention to these Chinese patterns:
+  - 「不要」「不喜歡」「不想看」「不接受」「不要有」「不要太」「沒興趣」「對....沒興趣」 = explicit rejection
+  - 「别」「不要....這種」「排除」「非....不可」 = explicit rejection
+  - 「氾濫」「太過氾濫」「看膩了」「不可以」「不行」 = explicit rejection
+  For example: 「對武俠/奇幻沒興趣」 → 武俠 and 奇幻 are negative_concepts
+  For example: 「不要有奇幻元素」 → 奇幻 is a negative_concept
+  For example: 「後宮戰鬥有點膩了」 → 後宮 and 戰鬥 are negative_concepts
 - If the user says a concept is optional, acceptable-but-not-required, or "not necessary", do not place it in `positive_concepts` unless it is also clearly core to the request.
 - Use related books only as soft calibration. Do not import extra traits from example titles unless the user explicitly asks for those traits.
 - Do not let example works override the user's literal constraints.
@@ -1271,9 +1278,15 @@ You are the tag projection pass.
     - The input includes the original query and a compact semantic understanding summary.
     - Project only the strongest retrieval anchors into short tag-like terms.
     - Prefer exact tag names from AVAILABLE TAGS whenever possible.
-    - Be conservative. Omit weak, optional, or example-derived concepts.
+    - Be conservative for positive_terms. Omit weak, optional, or example-derived concepts.
     - `positive_terms` should contain 3-6 high-confidence terms only.
-    - `negative_terms` should contain 0-4 explicit exclusions only.
+    - `negative_terms` should contain 0-8 explicit exclusions.
+    - CRITICAL for `negative_terms`: You MUST capture ALL genres, types, themes, or elements the user explicitly rejects or expresses dislike for. Check the original query carefully for:
+      - Direct rejections: 「不要」「不喜歡」「不接受」「沒興趣」「排除」「不想看」「不行」「看膩了」
+      - Conditional rejections: 「不要有....元素」「不要太....」「别....」
+      - Implicit rejections: 「純現實的」 implies rejecting 奇幻/科幻/異世界
+      - Overused tropes: 「氾濫」「太過氾濫」
+    - Each rejected concept should map to the closest AVAILABLE TAG name.
     - Avoid near-duplicates, synonyms, and broad filler terms.
     - If a concept belongs only in semantic retrieval text and not in tags, omit it.
     - Return only these two keys. Do not emit helper fields, explanations, or notes.

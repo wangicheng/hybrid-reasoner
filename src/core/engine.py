@@ -601,6 +601,16 @@ class HybridEngine:
             parse_result.criteria, negative_tag_terms
         )
 
+        # ── Build Qdrant metadata pre-filter from hard constraints ──
+        metadata_filter = VectorStore.build_metadata_filter(hard_constraints)
+        if metadata_filter:
+            print(
+                f"[Engine] Metadata pre-filter active: "
+                f"status={hard_constraints.get('status_filter')}, "
+                f"words=[{hard_constraints.get('words_min')}, {hard_constraints.get('words_max')}], "
+                f"neg_tags={hard_constraints.get('negative_tag_terms', [])}"
+            )
+
         retrieval_limit = 10000
         candidates_map: Dict[str, Dict[str, Any]] = {}
         vector_score_map: Dict[str, float] = {}
@@ -609,7 +619,7 @@ class HybridEngine:
         vector_results, query_vector = self.vs.search(
             expanded_terms,
             limit=retrieval_limit,
-            query_filter=None,
+            query_filter=metadata_filter,
             with_payload=True,
         )
         for hit in vector_results:

@@ -27,6 +27,7 @@ class VectorStore:
         self.genai_client = genai.Client(api_key=self._current_api_key)
         self.embedding_model = "gemini-embedding-001"
         self._ensure_collection()
+        self._ensure_payload_indexes()
 
     def _update_api_key_on_rate_limit(self) -> None:
         from src.core.api_utils import get_api_key_rotator
@@ -51,6 +52,102 @@ class VectorStore:
                 size=3072,
                 distance=rest.Distance.COSINE,
             ),
+        )
+
+    def _ensure_payload_indexes(self) -> None:
+        """Create payload indexes on the main collection for metadata pre-filtering.
+
+        Indexes are idempotent — re-creating an existing index is a no-op in Qdrant.
+        Only applies to the primary collection (self.collection_name), not tag
+        collections.
+        """
+        index_specs = [
+            ("publish_status", rest.PayloadSchemaType.KEYWORD),
+            ("words_total", rest.PayloadSchemaType.INTEGER),
+            ("tags", rest.PayloadSchemaType.KEYWORD),
+        ]
+        for field_name, field_schema in index_specs:
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field_name,
+                    field_schema=field_schema,
+                )
+            except Exception:
+                # Index may already exist or collection may not support it;
+                # either way this is non-fatal.
+                pass
+
+    @staticmethod
+    def build_metadata_filter(
+        hard_constraints: Dict[str, Any],
+    ) -> Optional[rest.Filter]:
+        """Build a Qdrant metadata filter from extracted hard constraints.
+
+        Translates the dict produced by ``HybridEngine._extract_hard_constraints()``
+        into a ``rest.Filter`` that Qdrant can apply server-side during ANN search.
+
+        Returns ``None`` when no filterable constraints are present, so the
+        caller can safely pass the result straight to ``query_filter``.
+        """
+        must_conditions: List[rest.Condition] = []
+        must_not_conditions: List[rest.Condition] = []
+
+        # 1. Status filter ───────────────────────────────────────────────
+        status_filter = hard_constraints.get("status_filter")
+        if status_filter:
+            if status_filter == "completed":
+                must_conditions.append(
+                    rest.FieldCondition(
+                        key="publish_status",
+                        match=rest.MatchAny(any=["completed", "已完結", "完結"]),
+                    )
+                )
+            elif status_filter == "ongoing":
+                must_conditions.append(
+                    rest.FieldCondition(
+                        key="publish_status",
+                        match=rest.MatchAny(any=["ongoing", "連載中", "連載"]),
+                    )
+                )
+
+        # 2. Word-count range ────────────────────────────────────────────
+        words_min = hard_constraints.get("words_min")
+        words_max = hard_constraints.get("words_max")
+        if words_min is not None or words_max is not None:
+            range_kwargs: Dict[str, Any] = {}
+            if words_min is not None:
+                range_kwargs["gte"] = int(words_min)
+            if words_max is not None:
+                range_kwargs["lte"] = int(words_max)
+            must_conditions.append(
+                rest.FieldCondition(
+                    key="words_total",
+                    range=rest.Range(**range_kwargs),
+                )
+            )
+
+        # 3. Negative tags (must NOT contain) ────────────────────────────
+        negative_tags = hard_constraints.get("negative_tag_terms", [])
+        for neg_tag in negative_tags:
+            if not neg_tag:
+                continue
+            must_not_conditions.append(
+                rest.FieldCondition(
+                    key="tags",
+                    match=rest.MatchValue(value=neg_tag),
+                )
+            )
+
+        # 4. Author filter — Qdrant substring match needs a full-text index
+        #    which we don't have yet; kept as post-filter in engine.py.
+
+        if not must_conditions and not must_not_conditions:
+            return None
+
+        return rest.Filter(
+            must=must_conditions if must_conditions else None,
+            must_not=must_not_conditions if must_not_conditions else None,
         )
 
     def collection_exists(self, collection_name: str) -> bool:
