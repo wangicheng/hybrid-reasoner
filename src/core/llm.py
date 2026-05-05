@@ -1,4 +1,4 @@
-﻿import json
+import json
 import functools
 import os
 import time
@@ -994,6 +994,10 @@ def _generate_json_from_contents(
             }
             _augment_exception_with_call_metadata(exc, call_metadata)
             if _is_retryable(exc):
+                # Rotate key on rate limits or permission issues to try another key
+                if is_rate_limit_error(exc):
+                    rotator.on_rate_limit_error()
+                
                 print(
                     f"[llm:{task_label}] retryable error; sleeping "
                     f"{LLM_RETRY_DELAY_SECONDS:.1f}s before next attempt."
@@ -1001,9 +1005,6 @@ def _generate_json_from_contents(
                 time.sleep(LLM_RETRY_DELAY_SECONDS)
                 continue
             raise
-        finally:
-            if total_api_keys > 1:
-                rotator.rotate()
 
 
 def _generate_text_from_contents(
@@ -1091,6 +1092,10 @@ def _generate_text_from_contents(
             }
             _augment_exception_with_call_metadata(exc, call_metadata)
             if _is_retryable(exc):
+                # Rotate key on rate limits or permission issues to try another key
+                if is_rate_limit_error(exc):
+                    rotator.on_rate_limit_error()
+                
                 print(
                     f"[llm:{task_label}] retryable error; sleeping "
                     f"{LLM_RETRY_DELAY_SECONDS:.1f}s before next attempt."
@@ -1098,9 +1103,6 @@ def _generate_text_from_contents(
                 time.sleep(LLM_RETRY_DELAY_SECONDS)
                 continue
             raise
-        finally:
-            if total_api_keys > 1:
-                rotator.rotate()
 
 
 def _generate_json_task(

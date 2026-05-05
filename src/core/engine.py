@@ -1,4 +1,5 @@
 import json
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import settings
@@ -13,6 +14,13 @@ from src.core.lexical_store import LexicalStore
 class HybridEngine:
     """Production search engine using the fixed production tag-processing path."""
 
+    # Supported BM25 fusion modes:
+    #   "multiplicative" : total = base × (1 + bonus_max × bm25_metric)  [original]
+    #   "additive"       : total = base + bonus_max × bm25_metric
+    #   "log_dampened"   : total = base + bonus_max × log(1 + bm25_metric)
+    #   "tiebreaker"     : total = base + bonus_max × bm25_metric  (bonus_max should be ~0.001)
+    VALID_FUSION_MODES = {"multiplicative", "additive", "log_dampened", "tiebreaker"}
+
     def __init__(
         self,
         db: Optional[Database] = None,
@@ -22,12 +30,21 @@ class HybridEngine:
         attribute_weight: Optional[float] = None,
         bm25_weight: Optional[float] = None,
         enable_bm25: Optional[bool] = None,
+        bm25_bonus_max: Optional[float] = None,
+        bm25_fusion_mode: Optional[str] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
         
         self.enable_bm25 = enable_bm25 if enable_bm25 is not None else settings.ENABLE_BM25
         self.bm25_weight = bm25_weight if bm25_weight is not None else settings.BM25_WEIGHT
+        self.bm25_bonus_max = bm25_bonus_max if bm25_bonus_max is not None else settings.BM25_BONUS_MAX
+        self.bm25_fusion_mode = bm25_fusion_mode or settings.BM25_FUSION_MODE
+        if self.bm25_fusion_mode not in self.VALID_FUSION_MODES:
+            raise ValueError(
+                f"Invalid bm25_fusion_mode '{self.bm25_fusion_mode}'. "
+                f"Must be one of: {self.VALID_FUSION_MODES}"
+            )
         if self.enable_bm25:
             self.lexical_store = lexical_store if lexical_store is not None else LexicalStore(self.db)
         else:
@@ -141,6 +158,54 @@ class HybridEngine:
 
         return recall_tags
 
+    @staticmethod
+    def _normalize_bm25_scores(bm25_score_map: Dict[str, float]) -> Dict[str, float]:
+        """Normalize positive BM25 scores into [0, 1] using percentile-robust scaling.
+
+        Uses 5th and 95th percentile as boundaries instead of raw min/max to
+        prevent a single extreme outlier from compressing all other scores
+        towards zero.
+        """
+        positive_scores = sorted(
+            [score for score in bm25_score_map.values() if score > 0]
+        )
+        if not positive_scores:
+            return {}
+
+        if len(positive_scores) == 1:
+            return {
+                book_id: 1.0 if score > 0 else 0.0
+                for book_id, score in bm25_score_map.items()
+            }
+
+        # Percentile-robust boundaries (P5 / P95)
+        def _percentile(sorted_vals: List[float], pct: float) -> float:
+            idx = (len(sorted_vals) - 1) * pct
+            lo = int(idx)
+            hi = min(lo + 1, len(sorted_vals) - 1)
+            frac = idx - lo
+            return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+        p5 = _percentile(positive_scores, 0.05)
+        p95 = _percentile(positive_scores, 0.95)
+
+        if p95 <= p5:
+            # All positive scores are effectively the same
+            return {
+                book_id: 1.0 if score > 0 else 0.0
+                for book_id, score in bm25_score_map.items()
+            }
+
+        scale = p95 - p5
+        normalized: Dict[str, float] = {}
+        for book_id, score in bm25_score_map.items():
+            if score <= 0:
+                normalized[book_id] = 0.0
+                continue
+            metric = (score - p5) / scale
+            normalized[book_id] = max(0.0, min(1.0, float(metric)))
+        return normalized
+
     def _build_tag_terms_list(
         self,
         generated_keywords: List[str],
@@ -192,14 +257,104 @@ class HybridEngine:
             return "ongoing"
         return None
 
+    def _extract_hard_constraints(
+        self,
+        criteria_list: List[Any],
+        negative_tag_terms: List[str],
+    ) -> Dict[str, Any]:
+        """Extract hard constraint filters from parsed criteria.
+
+        Returns a dict with keys:
+          - status_filter: Optional[str] ("completed" / "ongoing")
+          - author_filter: Optional[str]
+          - words_min: Optional[int]
+          - words_max: Optional[int]
+          - negative_tag_terms: List[str]
+        """
+        constraints: Dict[str, Any] = {
+            "status_filter": None,
+            "author_filter": None,
+            "words_min": None,
+            "words_max": None,
+            "negative_tag_terms": list(negative_tag_terms),
+        }
+
+        for criteria in criteria_list:
+            params = self._criteria_params(criteria)
+            if criteria.name == "status_check":
+                constraints["status_filter"] = self._normalize_status(
+                    params.get("target_status", "")
+                )
+            elif criteria.name == "author_match":
+                val = params.get("author_name", "").strip()
+                if val:
+                    constraints["author_filter"] = val
+            elif criteria.name == "numeric_range" and params.get("field") == "words_total":
+                constraints["words_min"] = params.get("min_val")
+                constraints["words_max"] = params.get("max_val")
+
+        return constraints
+
+    def _item_violates_hard_constraints(
+        self,
+        item: Dict[str, Any],
+        constraints: Dict[str, Any],
+    ) -> bool:
+        """Check if a single item violates any hard constraint.
+
+        Returns True if the item should be EXCLUDED.
+        If metadata is missing, returns False (benefit of the doubt;
+        the post-filter safety net will catch it after DB enrichment).
+        """
+        # 1. Negative tag check
+        negative_terms = constraints.get("negative_tag_terms", [])
+        if negative_terms:
+            book_tags = self._normalize_tags(item.get("tags", []))
+            for neg_term in negative_terms:
+                if any(
+                    neg_term in tag or tag in neg_term
+                    for tag in book_tags
+                ):
+                    return True
+
+        # 2. Status check
+        status_filter = constraints.get("status_filter")
+        if status_filter:
+            item_status_raw = item.get("publish_status", "")
+            if item_status_raw:  # Only filter if metadata is present
+                item_status = self._normalize_status(item_status_raw)
+                if item_status and item_status != status_filter:
+                    return True
+
+        # 3. Word count check
+        words_min = constraints.get("words_min")
+        words_max = constraints.get("words_max")
+        if words_min is not None or words_max is not None:
+            actual_words = item.get("words_total", 0) or 0
+            if actual_words > 0:  # Only filter if metadata is present
+                if words_min is not None and actual_words < words_min:
+                    return True
+                if words_max is not None and actual_words > words_max:
+                    return True
+
+        # 4. Author check
+        author_filter = constraints.get("author_filter")
+        if author_filter:
+            author = item.get("author", "")
+            if author:  # Only filter if metadata is present
+                if not (author_filter in author or author in author_filter):
+                    return True
+
+        return False
+
 
     def calculate_score(
         self,
         item: Dict[str, Any],
         vector_score: float,
-        norm_bm25_score: float,
         tag_terms_list: List[str],
         tag_mapping_weights: List[Dict[str, float]],
+        bm25_metric: float = 0.0,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         breakdown: List[Dict[str, Any]] = []
 
@@ -214,23 +369,6 @@ class HybridEngine:
                 "reason": f"semantic score {semantic_score:.4f}",
             }
         )
-
-        if self.enable_bm25:
-            # BM25 is purely lexical tracking. We assume lexical_score scales from 0 to 1
-            lexical_score = norm_bm25_score
-            breakdown.append(
-                {
-                    "criteria": "lexical_track",
-                    "label": "BM25 Lexical Track",
-                    "raw_score": norm_bm25_score,
-                    "weighted_score": lexical_score,
-                    "is_filter": False,
-                    "reason": f"bm25 score {lexical_score:.4f}",
-                }
-            )
-            # Additive boosting prevents penalizing purely semantic matches that lacked keywords
-            boost = lexical_score * self.bm25_weight
-            semantic_score = min(1.0, semantic_score + boost)
 
         attribute_score = 1.0
         has_tag_scoring = False
@@ -273,17 +411,57 @@ class HybridEngine:
             )
 
         if has_tag_scoring:
-            total_score = (
+            base_score = (
                 semantic_score * self.semantic_weight
                 + attribute_score * self.attribute_weight
             )
-            fusion_reason = (
+            base_fusion_reason = (
                 f"({semantic_score:.4f} * {self.semantic_weight}) + "
                 f"({attribute_score:.4f} * {self.attribute_weight})"
             )
         else:
-            total_score = semantic_score
-            fusion_reason = f"semantic only: {semantic_score:.4f}"
+            base_score = semantic_score
+            base_fusion_reason = f"semantic only: {semantic_score:.4f}"
+
+        safe_bm25_metric = max(0.0, min(1.0, float(bm25_metric)))
+        bonus_max = self.bm25_bonus_max
+        mode = self.bm25_fusion_mode
+
+        if semantic_score <= 0 or bonus_max <= 0 or safe_bm25_metric <= 0:
+            # No BM25 influence: gate on semantic presence
+            total_score = base_score
+            fusion_reason = (
+                f"base={base_fusion_reason}; "
+                f"bm25: no boost (mode={mode}, sem={semantic_score:.4f}, "
+                f"β={bonus_max:.4f}, metric={safe_bm25_metric:.4f})"
+            )
+        elif mode == "multiplicative":
+            bm25_multiplier = 1.0 + bonus_max * safe_bm25_metric
+            total_score = base_score * bm25_multiplier
+            fusion_reason = (
+                f"base={base_fusion_reason}; "
+                f"bm25[mult]=(1+{bonus_max:.4f}*{safe_bm25_metric:.4f})="
+                f"{bm25_multiplier:.4f}; final={base_score:.4f}*{bm25_multiplier:.4f}"
+            )
+        elif mode in ("additive", "tiebreaker"):
+            bm25_addend = bonus_max * safe_bm25_metric
+            total_score = base_score + bm25_addend
+            fusion_reason = (
+                f"base={base_fusion_reason}; "
+                f"bm25[{mode}]=+{bonus_max:.4f}*{safe_bm25_metric:.4f}="
+                f"+{bm25_addend:.6f}; final={total_score:.6f}"
+            )
+        elif mode == "log_dampened":
+            bm25_addend = bonus_max * math.log(1.0 + safe_bm25_metric)
+            total_score = base_score + bm25_addend
+            fusion_reason = (
+                f"base={base_fusion_reason}; "
+                f"bm25[log]=+{bonus_max:.4f}*log(1+{safe_bm25_metric:.4f})="
+                f"+{bm25_addend:.6f}; final={total_score:.6f}"
+            )
+        else:
+            total_score = base_score
+            fusion_reason = f"base={base_fusion_reason}; bm25: unknown mode '{mode}'"
 
         breakdown.append(
             {
@@ -414,6 +592,15 @@ class HybridEngine:
             semantic_expansion = " ".join(semantic_texts)
             expanded_terms = f"{expanded_terms} {semantic_expansion}".strip()
 
+        # ── Extract hard constraints early for BM25 pre-filtering ──
+        negative_tag_terms = self._dedupe_terms(
+            list(parse_result.tag_intent.negative_terms)
+        ) or self._resolve_negative_tag_terms(parse_result.criteria)
+
+        hard_constraints = self._extract_hard_constraints(
+            parse_result.criteria, negative_tag_terms
+        )
+
         retrieval_limit = 10000
         candidates_map: Dict[str, Dict[str, Any]] = {}
         vector_score_map: Dict[str, float] = {}
@@ -436,6 +623,9 @@ class HybridEngine:
             vector_score_map[book_id] = float(hit["score"])
 
         bm25_score_map: Dict[str, float] = {}
+        bm25_metric_map: Dict[str, float] = {}
+        bm25_new_count = 0
+        bm25_prefiltered_count = 0
         if self.enable_bm25 and self.lexical_store:
             bm25_results = self.lexical_store.search(expanded_terms, limit=getattr(settings, "TOP_K_BM25", 1000))
             for res in bm25_results:
@@ -445,9 +635,22 @@ class HybridEngine:
                     continue
                 bm25_score_map[book_id] = float(res["score"])
                 if book_id not in candidates_map:
+                    # Pre-filter: skip BM25-only candidates that violate hard constraints
+                    if self._item_violates_hard_constraints(item, hard_constraints):
+                        bm25_prefiltered_count += 1
+                        continue
                     candidates_map[book_id] = item
                     payload_map[book_id] = item
                     vector_score_map[book_id] = 0.0
+                    bm25_new_count += 1
+            # Normalize once after collecting all BM25 scores
+            bm25_metric_map = self._normalize_bm25_scores(bm25_score_map)
+            print(
+                f"[Engine] BM25: {len(bm25_results)} results, "
+                f"{bm25_new_count} new candidates added, "
+                f"{bm25_prefiltered_count} pre-filtered by hard constraints "
+                f"(already {len(bm25_score_map) - bm25_new_count - bm25_prefiltered_count} were in pool)"
+            )
 
         if tag_terms_list and tag_mapping_weights:
             recall_tags = self._extract_recall_tags(tag_mapping_weights)
@@ -485,38 +688,22 @@ class HybridEngine:
 
         print(f"[Engine] Candidate pool size: {len(candidates)}")
 
-        negative_tag_terms = self._dedupe_terms(
-            list(parse_result.tag_intent.negative_terms)
-        ) or self._resolve_negative_tag_terms(parse_result.criteria)
+        # negative_tag_terms already extracted above (before BM25 search)
         scored_items = []
-        max_bm25 = 1.0
-        min_bm25 = 0.0
-        if self.enable_bm25 and bm25_score_map:
-            max_bm25 = max(bm25_score_map.values())
-            min_bm25 = min(bm25_score_map.values())
-            if max_bm25 <= min_bm25: 
-                max_bm25 = min_bm25 + 1.0
-            
         for item in candidates:
             book_id = str(item.get("id"))
             if not book_id or book_id == "None":
                 continue
             vector_score = vector_score_map.get(book_id, 0.0)
             raw_bm25_score = bm25_score_map.get(book_id, 0.0) if self.enable_bm25 else 0.0
-            
-            if self.enable_bm25 and raw_bm25_score > 0:
-                # Min-Max normalization
-                norm_bm25_score = (raw_bm25_score - min_bm25) / (max_bm25 - min_bm25)
-            else:
-                norm_bm25_score = 0.0
-
+            bm25_metric = bm25_metric_map.get(book_id, 0.0) if self.enable_bm25 else 0.0
             
             final_score, breakdown = self.calculate_score(
                 item,
                 vector_score,
-                norm_bm25_score,
                 tag_terms_list,
                 tag_mapping_weights,
+                bm25_metric=bm25_metric,
             )
             scored_items.append(
                 {
@@ -524,6 +711,7 @@ class HybridEngine:
                     "score": float(final_score),
                     "vector_score": vector_score,
                     "bm25_score": raw_bm25_score,
+                    "bm25_metric": bm25_metric,
                     "breakdown": breakdown,
                     "payload": payload_map.get(book_id, {}),
                 }

@@ -74,6 +74,9 @@ def _is_retryable(exc: Exception) -> bool:
         return True
     if "Connection aborted" in error_str:
         return True
+    # Add 403/PERMISSION_DENIED as retryable (especially for leaked keys when rotating)
+    if "403" in error_str or "PERMISSION_DENIED" in error_str:
+        return True
     return False
 
 
@@ -87,9 +90,15 @@ def _extract_retry_delay(exc: Exception) -> float | None:
 
 
 def is_rate_limit_error(exc: Exception) -> bool:
-    """Check if an exception indicates quota exhaustion or provider throttling."""
+    """Check if an exception indicates quota exhaustion or provider throttling (or key issues)."""
     error_str = str(exc)
-    return "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+    # Include 403/PERMISSION_DENIED so callers trigger key rotation
+    return (
+        "429" in error_str or 
+        "RESOURCE_EXHAUSTED" in error_str or 
+        "403" in error_str or 
+        "PERMISSION_DENIED" in error_str
+    )
 
 
 def retry_on_rate_limit(max_retries: int = 5, base_delay: float = 5.0, max_delay: float = 120.0):

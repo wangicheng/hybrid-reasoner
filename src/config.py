@@ -27,15 +27,18 @@ class Settings(BaseSettings):
     
     # Dual-Track Fusion Weights (語意-屬性雙軌融合權重)
     # w1 = SEMANTIC_WEIGHT, w2 = ATTRIBUTE_WEIGHT
-    SEMANTIC_WEIGHT: float = 0.3
-    ATTRIBUTE_WEIGHT: float = 0.7
+    # Set to 0.4 / 0.6 based on 3-phase sweep optimization (best balance of semantic relevance & strict constraints)
+    SEMANTIC_WEIGHT: float = 0.4
+    ATTRIBUTE_WEIGHT: float = 0.6
     
-    # BM25 Experimental settings
-    ENABLE_BM25: bool = False
-    BM25_WEIGHT: float = 0.3
+    # BM25 recall & fusion settings
+    ENABLE_BM25: bool = True
+    BM25_FUSION_MODE: str = "log_dampened"  # Options: multiplicative, additive, log_dampened, tiebreaker
+    BM25_BONUS_MAX: float = 0.005           # Optimal alpha/epsilon found in fusion sweep for micro-boosting
     BM25_K1: float = 1.2
     BM25_B: float = 0.75
     TOP_K_BM25: int = 1000  # Default to fetching many to merge
+    BM25_WEIGHT: float = 0.3  # Legacy setting retained for compatibility
 
     class Config:
         env_file = ".env"

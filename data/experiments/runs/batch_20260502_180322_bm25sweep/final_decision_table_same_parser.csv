@@ -1,0 +1,4 @@
+rank,config,run_file,n_queries,mean_ndcg_at_10,mean_avg_at_10,mean_strict_at_10,delta_ndcg_vs_best,delta_strict_vs_best
+1,conservative,gemma4_default_parser_bm25_conservative.json,24,0.659170308839272,2.158333333333333,4.833333333333333,0.0,0.0
+2,balanced,gemma4_default_parser_bm25_balanced.json,24,0.6452620900786251,2.129166666666667,4.5,-0.013908218760646851,-0.33333333333333304
+3,aggressive,gemma4_default_parser_bm25_aggressive.json,24,0.5889366940301597,1.9208333333333334,4,-0.07023361480911228,-0.833333333333333

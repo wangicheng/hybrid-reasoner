@@ -1,0 +1,6 @@
+run,n_queries,mean_ndcg_at_10,mean_avg_at_10,mean_strict_at_10
+baseline_on_0.40_0.60,24,0.7113,2.320833,5.125
+baseline_off_0.40_0.60,24,0.707315,2.316667,5.416667
+sweep_conservative,24,0.65917,2.158333,4.833333
+sweep_balanced,24,0.645262,2.129167,4.5
+sweep_aggressive,24,0.588937,1.920833,4

@@ -171,9 +171,12 @@ class VectorStore:
         import time
 
         attempt = 0
-        max_attempts = 5
+        rotator = get_api_key_rotator()
+        num_keys = len(rotator.api_keys)
+        # We want to try all keys, plus some retries for transient errors.
+        # At minimum, we should attempt num_keys times if it's a rate limit.
+        max_attempts = max(10, num_keys + 2)
         is_list = isinstance(text, list)
-        max_api_key_attempts = len(get_api_key_rotator().api_keys)
 
         while attempt < max_attempts:
             try:
@@ -190,14 +193,26 @@ class VectorStore:
                 attempt += 1
                 error_text = str(exc)
                 is_quota_error = is_rate_limit_error(exc)
-                if is_quota_error and attempt < max_attempts and max_api_key_attempts > 1:
-                    print(
-                        f"[VectorStore] Embedding failed ({error_text[:80]}). "
-                        f"Retrying with rotated key, attempt {attempt}."
-                    )
-                    self._update_api_key_on_rate_limit()
-                    continue
-                if (is_quota_error or _is_retryable(exc)) and attempt < max_attempts:
+                if is_quota_error and attempt < max_attempts:
+                    # If we have multiple keys, try to rotate. 
+                    # We should rotate at least until we've tried every key once.
+                    if num_keys > 1:
+                        print(
+                            f"[VectorStore] Embedding failed (Quota). "
+                            f"Rotating API key (attempt {attempt}/{max_attempts})."
+                        )
+                        self._update_api_key_on_rate_limit()
+                        # Optional: small sleep to avoid immediate back-to-back 429s if keys are related
+                        time.sleep(1)
+                        continue
+                    else:
+                        # Single key: must wait.
+                        delay = 10 * attempt
+                        print(f"[VectorStore] Quota reached for single key. Waiting {delay}s...")
+                        time.sleep(delay)
+                        continue
+
+                if _is_retryable(exc) and attempt < max_attempts:
                     backoff_seconds = 2 * attempt
                     print(
                         f"[VectorStore] Embedding failed ({error_text[:80]}). "
@@ -397,7 +412,8 @@ class VectorStore:
 
             response = None
             attempt = 0
-            max_attempts = 3
+            num_keys = len(get_api_key_rotator().api_keys)
+            max_attempts = max(10, num_keys + 2)
             while attempt < max_attempts:
                 try:
                     response = self.genai_client.models.embed_content(
@@ -407,16 +423,22 @@ class VectorStore:
                     )
                     break
                 except Exception as exc:
+                    attempt += 1
                     error_text = str(exc)
-                    is_rate_limit = (
-                        "429" in error_text or "RESOURCE_EXHAUSTED" in error_text
-                    )
-                    if is_rate_limit and attempt < max_attempts - 1:
-                        print("[VectorStore] Rate limit detected. Rotating API key.")
+                    from src.core.api_utils import is_rate_limit_error, _is_retryable
+                    
+                    if is_rate_limit_error(exc) and attempt < max_attempts:
+                        print(f"[VectorStore] Rate limit detected (attempt {attempt}). Rotating API key.")
                         self._update_api_key_on_rate_limit()
-                        attempt += 1
-                        time.sleep(5)
+                        time.sleep(2)
                         continue
+                    
+                    if _is_retryable(exc) and attempt < max_attempts:
+                        delay = 2 * attempt
+                        print(f"[VectorStore] Transient error. Retrying in {delay}s...")
+                        time.sleep(delay)
+                        continue
+                        
                     raise
 
             if response is None:

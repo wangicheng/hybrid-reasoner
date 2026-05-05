@@ -108,11 +108,14 @@ class RunGenerator:
         run_suffix: str = "",
         enable_bm25: bool = False,
         bm25_weight: float = 0.3,
+        bm25_bonus_max: Optional[float] = None,
+        bm25_fusion_mode: Optional[str] = None,
     ) -> None:
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
-            f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight}, "
+            f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight} (recall-only), "
+            f"BM25 Bonus Max: {bm25_bonus_max}, "
             "fixed retrieval path, "
             f"model={normalize_model_id(self.model_id)}, "
             f"parser_variant={DEFAULT_PARSER_VARIANT}, "
@@ -127,6 +130,8 @@ class RunGenerator:
             attribute_weight=attribute_weight,
             enable_bm25=enable_bm25,
             bm25_weight=bm25_weight,
+            bm25_bonus_max=bm25_bonus_max,
+            bm25_fusion_mode=bm25_fusion_mode,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -256,10 +261,17 @@ if __name__ == "__main__":
         help="Disable BM25 retrieval in HybridEngine",
     )
     parser.add_argument(
+        "--bm25-mode",
+        type=str,
+        choices=["compare", "on", "off"],
+        default="compare",
+        help="Run both BM25 OFF/ON in one batch, or force a single variant",
+    )
+    parser.add_argument(
         "--bm25-weight",
         type=float,
         default=0.3,
-        help="Weight for BM25 score fusion",
+        help="Legacy BM25 recall setting retained for compatibility",
     )
     args = parser.parse_args()
 
@@ -271,20 +283,31 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
-    # Allow experiments to toggle BM25 for comparison
-    experiments = [
-        {
-            "name": "gemma4_default_parser_bm25_off",
-            "model_id": "gemma-4-31b-it",
-            "enable_bm25": False,
-        },
-        {
-            "name": "gemma4_default_parser_bm25_on",
-            "model_id": "gemma-4-31b-it",
-            "enable_bm25": True,
-            "bm25_weight": 0.1,
-        },
-    ]
+    # Allow experiments to run BM25 ON/OFF in a single batch.
+    if args.bm25_mode == "compare":
+        experiments = [
+            {
+                "name": "gemma4_default_parser_bm25_off",
+                "model_id": "gemma-4-31b-it",
+                "enable_bm25": False,
+            },
+            {
+                "name": "gemma4_default_parser_bm25_on",
+                "model_id": "gemma-4-31b-it",
+                "enable_bm25": True,
+                "bm25_weight": 0.1,
+            },
+        ]
+    else:
+        enable_bm25 = args.bm25_mode == "on"
+        experiments = [
+            {
+                "name": f"gemma4_default_parser_bm25_{args.bm25_mode}",
+                "model_id": "gemma-4-31b-it",
+                "enable_bm25": enable_bm25,
+                "bm25_weight": 0.1 if enable_bm25 else args.bm25_weight,
+            }
+        ]
 
     repeats = max(1, args.repeats)
     output_root = Path(args.experiment_dir)

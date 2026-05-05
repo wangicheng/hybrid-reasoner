@@ -152,7 +152,7 @@ class LLMJudge:
 
     def _call_llm(self, model_id: str, user_prompt: str) -> Dict[str, Any]:
         attempt = 0
-        _is_retryable, _, _, get_rate_limiter = _load_api_utils()
+        _is_retryable, _, is_rate_limit_error, get_rate_limiter = _load_api_utils()
 
         while True:
             try:
@@ -200,7 +200,7 @@ class LLMJudge:
 
                 attempt += 1
                 error_text = str(exc)
-                if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+                if is_rate_limit_error(exc):
                     self._rotate_api_key()
 
                 delay = self._retry_delay_seconds(attempt)

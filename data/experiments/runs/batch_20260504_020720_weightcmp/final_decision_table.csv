@@ -1,0 +1,4 @@
+run_file,semantic_weight,attribute_weight,n_queries,mean_ndcg_at_10,mean_avg_at_10,mean_strict_at_10,delta_ndcg_vs_attr60,delta_strict_vs_attr60
+gemma4_default_parser_attr60_sameparse.json,0.4,0.6,24,0.6851370483752873,2.2541666666666664,5.25,0.0,0.0
+gemma4_default_parser_attr65_sameparse.json,0.35,0.65,24,0.6832884158205615,2.25,5.208333333333333,-0.001848632554725782,-0.04166666666666696
+gemma4_default_parser_attr70_sameparse.json,0.3,0.7,24,0.6823667297316091,2.2333333333333334,5.208333333333333,-0.002770318643678271,-0.04166666666666696
