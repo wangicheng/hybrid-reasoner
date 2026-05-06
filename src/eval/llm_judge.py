@@ -31,7 +31,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 load_dotenv()
 
-JUDGE_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
+JUDGE_MODELS = ["gemma-4-31b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
 ANNOTATION_COLUMNS = [
     "Query ID",
     "Query",
@@ -77,9 +77,10 @@ def _load_api_utils():
         get_api_key_rotator,
         get_current_api_key,
         get_rate_limiter,
+        is_rate_limit_error,
     )
 
-    return _is_retryable, get_api_key_rotator, get_current_api_key, get_rate_limiter
+    return _is_retryable, get_api_key_rotator, get_current_api_key, get_rate_limiter, is_rate_limit_error
 
 
 def build_user_prompt(query: str, title: str, tags: str, intro: str) -> str:
@@ -101,7 +102,7 @@ class LLMJudge:
         if genai is None or types is None:
             raise ImportError("google-genai is required to run llm_judge.py")
 
-        _, _, get_current_api_key, _ = _load_api_utils()
+        _, _, get_current_api_key, _, _ = _load_api_utils()
         api_key = get_current_api_key()
         self.client = genai.Client(api_key=api_key)
         self.types = types
@@ -126,7 +127,7 @@ class LLMJudge:
         return base_delay
 
     def _rotate_api_key(self) -> None:
-        _, get_api_key_rotator, _, _ = _load_api_utils()
+        _, get_api_key_rotator, _, _, _ = _load_api_utils()
         rotator = get_api_key_rotator()
         new_key = rotator.on_rate_limit_error()
         self.client = genai.Client(api_key=new_key)
@@ -152,7 +153,7 @@ class LLMJudge:
 
     def _call_llm(self, model_id: str, user_prompt: str) -> Dict[str, Any]:
         attempt = 0
-        _is_retryable, _, is_rate_limit_error, get_rate_limiter = _load_api_utils()
+        _is_retryable, _, _, get_rate_limiter, is_rate_limit_error = _load_api_utils()
 
         while True:
             try:
@@ -174,11 +175,17 @@ class LLMJudge:
                     }
                     contents = user_prompt
 
-                response = self.client.models.generate_content(
-                    model=model_id,
-                    contents=contents,
-                    config=self.types.GenerateContentConfig(**config_args),
-                )
+                if is_gemma:
+                    response = self.client.models.generate_content(
+                        model=model_id,
+                        contents=contents,
+                    )
+                else:
+                    response = self.client.models.generate_content(
+                        model=model_id,
+                        contents=contents,
+                        config=self.types.GenerateContentConfig(**config_args),
+                    )
 
                 if not response.text:
                     raise ValueError("Empty response from LLM")
@@ -333,10 +340,24 @@ def run_judge(
     scored_count = already_done
     total = len(tasks)
 
-    for index, task in enumerate(tasks, start=1):
-        if _is_row_scored(task):
-            continue
+    # Gather tasks that need scoring
+    unscored_tasks = [ (i, t) for i, t in enumerate(tasks, start=1) if not _is_row_scored(t) ]
 
+    if not unscored_tasks:
+        print("\n" + "=" * 60)
+        print("Judging complete")
+        print(f"Total pooled candidates: {total}")
+        print(f"Annotated candidates: {scored_count}")
+        print(f"Saved to: {annotation_path}")
+        return
+
+    import concurrent.futures
+    import threading
+
+    lock = threading.Lock()
+
+    def _process_task(item):
+        index, task = item
         print(f"\n[{index}/{total}] Query ID: {task['Query ID']} | Book: {task['Title'][:40]}")
         result = judge.judge_single(
             query=task["Query"],
@@ -344,16 +365,19 @@ def run_judge(
             tags=task.get("Tags", ""),
             intro=task.get("Intro", ""),
         )
-
         task["Score (0-3)"] = str(result["score"])
         task["Comment"] = result["reasoning"]
-        scored_count += 1
+        print(f"  [{index}/{total}] Score: {task['Score (0-3)']}/3 | {task['Comment'][:80]}")
 
-        print(f"  Score: {task['Score (0-3)']}/3 | {task['Comment'][:80]}")
+        nonlocal scored_count
+        with lock:
+            scored_count += 1
+            if scored_count % batch_size == 0:
+                save_annotations(tasks, annotation_path)
+                print(f"  Saved progress ({scored_count}/{total})")
 
-        if scored_count % batch_size == 0:
-            save_annotations(tasks, annotation_path)
-            print(f"  Saved progress ({scored_count}/{total})")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        list(executor.map(_process_task, unscored_tasks))
 
     save_annotations(tasks, annotation_path)
 

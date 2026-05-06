@@ -14,12 +14,13 @@ from src.core.lexical_store import LexicalStore
 class HybridEngine:
     """Production search engine using the fixed production tag-processing path."""
 
-    # Supported BM25 fusion modes:
+    # Supported BM25 fusion modes (used when fusion_strategy='weighted'):
     #   "multiplicative" : total = base × (1 + bonus_max × bm25_metric)  [original]
     #   "additive"       : total = base + bonus_max × bm25_metric
     #   "log_dampened"   : total = base + bonus_max × log(1 + bm25_metric)
     #   "tiebreaker"     : total = base + bonus_max × bm25_metric  (bonus_max should be ~0.001)
     VALID_FUSION_MODES = {"multiplicative", "additive", "log_dampened", "tiebreaker"}
+    VALID_FUSION_STRATEGIES = {"weighted", "rrf", "auto"}
 
     def __init__(
         self,
@@ -32,20 +33,31 @@ class HybridEngine:
         enable_bm25: Optional[bool] = None,
         bm25_bonus_max: Optional[float] = None,
         bm25_fusion_mode: Optional[str] = None,
+        fusion_strategy: Optional[str] = None,
+        rrf_k: int = 60,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
         
+        self.fusion_strategy = fusion_strategy or getattr(settings, 'FUSION_STRATEGY', 'auto')
+        if self.fusion_strategy not in self.VALID_FUSION_STRATEGIES:
+            raise ValueError(
+                f"Invalid fusion_strategy '{self.fusion_strategy}'. "
+                f"Must be one of: {self.VALID_FUSION_STRATEGIES}"
+            )
+        self.rrf_k = rrf_k
+
         self.enable_bm25 = enable_bm25 if enable_bm25 is not None else settings.ENABLE_BM25
         self.bm25_weight = bm25_weight if bm25_weight is not None else settings.BM25_WEIGHT
         self.bm25_bonus_max = bm25_bonus_max if bm25_bonus_max is not None else settings.BM25_BONUS_MAX
         self.bm25_fusion_mode = bm25_fusion_mode or settings.BM25_FUSION_MODE
-        if self.bm25_fusion_mode not in self.VALID_FUSION_MODES:
+        if self.fusion_strategy in ('weighted', 'auto') and self.bm25_fusion_mode not in self.VALID_FUSION_MODES:
             raise ValueError(
                 f"Invalid bm25_fusion_mode '{self.bm25_fusion_mode}'. "
                 f"Must be one of: {self.VALID_FUSION_MODES}"
             )
-        if self.enable_bm25:
+        # Always initialize lexical_store so 'auto' mode can toggle BM25 per-query
+        if self.enable_bm25 or self.fusion_strategy == 'auto':
             self.lexical_store = lexical_store if lexical_store is not None else LexicalStore(self.db)
         else:
             self.lexical_store = None
@@ -476,6 +488,132 @@ class HybridEngine:
 
         return total_score, breakdown
 
+    def _compute_attribute_score_for_item(
+        self,
+        item: Dict[str, Any],
+        tag_terms_list: List[str],
+        tag_mapping_weights: List[Dict[str, float]],
+    ) -> float:
+        """Compute attribute (tag-matching) score for a single item."""
+        if not tag_terms_list or not tag_mapping_weights:
+            return 0.0
+        book_tags = self._normalize_tags(item.get("tags", []))
+        if not book_tags:
+            return 0.0
+        total_facet_score = 0.0
+        for facet_map in tag_mapping_weights:
+            best_score = 0.0
+            for book_tag in book_tags:
+                similarity = facet_map.get(book_tag, 0.0)
+                if similarity > best_score:
+                    best_score = similarity
+            total_facet_score += best_score
+        return total_facet_score / len(tag_mapping_weights)
+
+    def _rrf_fuse(
+        self,
+        candidates: List[Dict[str, Any]],
+        vector_score_map: Dict[str, float],
+        bm25_score_map: Dict[str, float],
+        tag_terms_list: List[str],
+        tag_mapping_weights: List[Dict[str, float]],
+        payload_map: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Reciprocal Rank Fusion across semantic, attribute, and BM25 channels.
+
+        RRF score = sum_channel( 1 / (k + rank_in_channel) )
+        where k is self.rrf_k (default 60).
+        """
+        k = self.rrf_k
+
+        # 1. Compute per-item raw scores for each channel
+        book_ids = []
+        sem_scores: Dict[str, float] = {}
+        attr_scores: Dict[str, float] = {}
+        bm25_scores: Dict[str, float] = {}
+
+        for item in candidates:
+            book_id = str(item.get("id", ""))
+            if not book_id or book_id == "None":
+                continue
+            book_ids.append(book_id)
+            sem_scores[book_id] = vector_score_map.get(book_id, 0.0)
+            attr_scores[book_id] = self._compute_attribute_score_for_item(
+                item, tag_terms_list, tag_mapping_weights
+            )
+            bm25_scores[book_id] = bm25_score_map.get(book_id, 0.0)
+
+        # 2. Build per-channel rank maps (1-indexed, ties get same rank)
+        def _build_rank_map(scores: Dict[str, float]) -> Dict[str, int]:
+            sorted_ids = sorted(scores.keys(), key=lambda bid: scores[bid], reverse=True)
+            rank_map: Dict[str, int] = {}
+            for rank_idx, bid in enumerate(sorted_ids):
+                rank_map[bid] = rank_idx + 1
+            return rank_map
+
+        sem_rank = _build_rank_map(sem_scores)
+        attr_rank = _build_rank_map(attr_scores)
+        bm25_rank = _build_rank_map(bm25_scores)
+
+        absent_rank = len(book_ids) + 1  # For items missing from a channel
+
+        # 3. Compute RRF score
+        rrf_scores: Dict[str, float] = {}
+        for book_id in book_ids:
+            r_sem = sem_rank.get(book_id, absent_rank)
+            r_attr = attr_rank.get(book_id, absent_rank)
+            r_bm25 = bm25_rank.get(book_id, absent_rank)
+            rrf_scores[book_id] = (
+                1.0 / (k + r_sem)
+                + 1.0 / (k + r_attr)
+                + 1.0 / (k + r_bm25)
+            )
+
+        # 4. Build scored_items in the same format as the weighted path
+        item_map = {str(item.get("id", "")): item for item in candidates}
+        scored_items = []
+        for book_id in book_ids:
+            item = item_map.get(book_id)
+            if not item:
+                continue
+            rrf_score = rrf_scores[book_id]
+            r_sem = sem_rank.get(book_id, absent_rank)
+            r_attr = attr_rank.get(book_id, absent_rank)
+            r_bm25 = bm25_rank.get(book_id, absent_rank)
+
+            breakdown = [
+                {
+                    "criteria": "rrf_fusion",
+                    "label": "RRF Fusion",
+                    "raw_score": rrf_score,
+                    "weighted_score": rrf_score,
+                    "is_filter": False,
+                    "reason": (
+                        f"RRF(k={k}): sem_rank={r_sem} attr_rank={r_attr} bm25_rank={r_bm25} | "
+                        f"sem={sem_scores.get(book_id, 0):.4f} "
+                        f"attr={attr_scores.get(book_id, 0):.4f} "
+                        f"bm25={bm25_scores.get(book_id, 0):.2f}"
+                    ),
+                }
+            ]
+            scored_items.append({
+                "item": item,
+                "score": rrf_score,
+                "vector_score": sem_scores.get(book_id, 0.0),
+                "bm25_score": bm25_scores.get(book_id, 0.0),
+                "bm25_metric": 0.0,
+                "breakdown": breakdown,
+                "payload": payload_map.get(book_id, {}),
+            })
+
+        scored_items.sort(key=lambda r: r["score"], reverse=True)
+        print(
+            f"[Engine] RRF fusion complete: {len(scored_items)} candidates, "
+            f"k={k}, top score={scored_items[0]['score']:.6f}" if scored_items else
+            f"[Engine] RRF fusion: no candidates"
+        )
+        return scored_items
+
     def _post_filter(
         self,
         scored_items: List[Dict[str, Any]],
@@ -537,6 +675,60 @@ class HybridEngine:
             f"(removed {len(scored_items) - len(filtered)})"
         )
         return filtered
+
+    def _determine_routing_strategy(
+        self,
+        parse_result: Any,
+        hard_constraints: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Intent-Aware Dynamic Routing.
+
+        Inspects the LLM parse result to decide the optimal fusion strategy:
+        - Constraint-heavy queries -> Weighted (倚天劍模式)
+        - Atmosphere/semantic queries -> RRF (屠龍刀模式)
+
+        Returns a config dict consumed by the scoring pipeline.
+        """
+        pos_tags_count = len(parse_result.tag_intent.positive_terms)
+        neg_tags_count = len(parse_result.tag_intent.negative_terms)
+        has_status = bool(hard_constraints.get("status_filter"))
+        has_words = (
+            hard_constraints.get("words_min") is not None
+            or hard_constraints.get("words_max") is not None
+        )
+        has_author = bool(hard_constraints.get("author_filter"))
+        has_hard_constraints = has_status or has_words or has_author
+
+        is_constraint_heavy = (
+            pos_tags_count >= 2
+            or neg_tags_count > 0
+            or has_hard_constraints
+        )
+
+        if is_constraint_heavy:
+            strategy = {
+                "fusion": "weighted",
+                "ws": 0.35,
+                "wa": 0.65,
+                "enable_bm25": True,
+                "reason": (
+                    f"倚天劍 (Weighted): pos_tags={pos_tags_count}, "
+                    f"neg_tags={neg_tags_count}, hard_constraints={has_hard_constraints}"
+                ),
+            }
+        else:
+            strategy = {
+                "fusion": "rrf",
+                "rrf_k": self.rrf_k,
+                "enable_bm25": False,
+                "reason": (
+                    f"屠龍刀 (RRF k={self.rrf_k}): pos_tags={pos_tags_count}, "
+                    f"neg_tags={neg_tags_count}, semantic-dominant query"
+                ),
+            }
+
+        print(f"[Router] {strategy['reason']}")
+        return strategy
 
     async def search(
         self,
@@ -601,6 +793,21 @@ class HybridEngine:
             parse_result.criteria, negative_tag_terms
         )
 
+        # ── Dynamic Routing: decide fusion strategy per-query ──
+        if self.fusion_strategy == "auto":
+            routing = self._determine_routing_strategy(parse_result, hard_constraints)
+            active_fusion = routing["fusion"]
+            active_ws = routing.get("ws", self.semantic_weight)
+            active_wa = routing.get("wa", self.attribute_weight)
+            active_rrf_k = routing.get("rrf_k", self.rrf_k)
+            active_bm25 = routing.get("enable_bm25", self.enable_bm25)
+        else:
+            active_fusion = self.fusion_strategy
+            active_ws = self.semantic_weight
+            active_wa = self.attribute_weight
+            active_rrf_k = self.rrf_k
+            active_bm25 = self.enable_bm25
+
         # ── Build Qdrant metadata pre-filter from hard constraints ──
         metadata_filter = VectorStore.build_metadata_filter(hard_constraints)
         if metadata_filter:
@@ -636,7 +843,7 @@ class HybridEngine:
         bm25_metric_map: Dict[str, float] = {}
         bm25_new_count = 0
         bm25_prefiltered_count = 0
-        if self.enable_bm25 and self.lexical_store:
+        if active_bm25 and self.lexical_store:
             bm25_results = self.lexical_store.search(expanded_terms, limit=getattr(settings, "TOP_K_BM25", 1000))
             for res in bm25_results:
                 item = res["item"]
@@ -699,33 +906,52 @@ class HybridEngine:
         print(f"[Engine] Candidate pool size: {len(candidates)}")
 
         # negative_tag_terms already extracted above (before BM25 search)
-        scored_items = []
-        for item in candidates:
-            book_id = str(item.get("id"))
-            if not book_id or book_id == "None":
-                continue
-            vector_score = vector_score_map.get(book_id, 0.0)
-            raw_bm25_score = bm25_score_map.get(book_id, 0.0) if self.enable_bm25 else 0.0
-            bm25_metric = bm25_metric_map.get(book_id, 0.0) if self.enable_bm25 else 0.0
-            
-            final_score, breakdown = self.calculate_score(
-                item,
-                vector_score,
+        if active_fusion == "rrf":
+            # ── RRF Fusion Path (屠龍刀) ──
+            scored_items = self._rrf_fuse(
+                candidates,
+                vector_score_map,
+                bm25_score_map,
                 tag_terms_list,
                 tag_mapping_weights,
-                bm25_metric=bm25_metric,
+                payload_map,
             )
-            scored_items.append(
-                {
-                    "item": item,
-                    "score": float(final_score),
-                    "vector_score": vector_score,
-                    "bm25_score": raw_bm25_score,
-                    "bm25_metric": bm25_metric,
-                    "breakdown": breakdown,
-                    "payload": payload_map.get(book_id, {}),
-                }
-            )
+        else:
+            # ── Weighted Linear Combination Path (倚天劍) ──
+            # Apply per-query weights from routing (or static defaults)
+            orig_ws, orig_wa = self.semantic_weight, self.attribute_weight
+            self.semantic_weight, self.attribute_weight = active_ws, active_wa
+
+            scored_items = []
+            for item in candidates:
+                book_id = str(item.get("id"))
+                if not book_id or book_id == "None":
+                    continue
+                vector_score = vector_score_map.get(book_id, 0.0)
+                raw_bm25_score = bm25_score_map.get(book_id, 0.0) if active_bm25 else 0.0
+                bm25_metric = bm25_metric_map.get(book_id, 0.0) if active_bm25 else 0.0
+                
+                final_score, breakdown = self.calculate_score(
+                    item,
+                    vector_score,
+                    tag_terms_list,
+                    tag_mapping_weights,
+                    bm25_metric=bm25_metric,
+                )
+                scored_items.append(
+                    {
+                        "item": item,
+                        "score": float(final_score),
+                        "vector_score": vector_score,
+                        "bm25_score": raw_bm25_score,
+                        "bm25_metric": bm25_metric,
+                        "breakdown": breakdown,
+                        "payload": payload_map.get(book_id, {}),
+                    }
+                )
+
+            # Restore original weights
+            self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
 
         scored_items.sort(key=lambda result: result["score"], reverse=True)
         scored_items = self._post_filter(
