@@ -59,6 +59,16 @@ def render_desc_text(template_text: str, label: str, description: str = "") -> s
     # Handle cases where description might be missing
     return template_text.format(label=label, description=description).strip("： ")
 
+def compute_cmc(examples_results: List[Dict[str, object]], max_k: int = 10) -> List[float]:
+    cmc = []
+    total = len(examples_results)
+    if total == 0:
+        return [0.0] * max_k
+    for k in range(1, max_k + 1):
+        hits = sum(1 for res in examples_results if res["rank"] <= k)
+        cmc.append(hits / total)
+    return cmc
+
 def evaluate_with_desc(
     candidate_labels: Sequence[str],
     tag_descriptions: Dict[str, str],
@@ -96,7 +106,6 @@ def evaluate_with_desc(
         ranked_labels = [label for label, _ in ranked]
         target_rank = ranked_labels.index(example.target_label) + 1
         top1_label = ranked_labels[0]
-        top5_labels = ranked_labels[:5]
 
         top1_predictions.append(top1_label)
         true_labels.append(example.target_label)
@@ -107,19 +116,15 @@ def evaluate_with_desc(
                 "target_label": example.target_label,
                 "group_id": example.group_id,
                 "source_type": example.source_type,
-                "top1_prediction": top1_label,
-                "top1_hit": top1_label == example.target_label,
-                "top5_hit": example.target_label in top5_labels,
                 "rank": target_rank,
                 "reciprocal_rank": 1.0 / target_rank,
-                "top5_predictions": [
-                    {"label": label, "score": score}
-                    for label, score in ranked[:5]
-                ],
+                "top1_prediction": top1_label,
+                "top1_hit": target_rank == 1,
             }
         )
 
     f1_metrics = compute_f1_metrics(true_labels, top1_predictions)
+    cmc = compute_cmc(example_results, 10)
 
     per_label_results: List[Dict[str, object]] = []
     grouped_examples: Dict[str, List[Dict[str, object]]] = {}
@@ -138,8 +143,6 @@ def evaluate_with_desc(
                 "group_id": int(label_results[0]["group_id"]),
                 "query_count": len(label_results),
                 "top1_accuracy": safe_mean(1.0 if result["top1_hit"] else 0.0 for result in label_results),
-                "top5_accuracy": safe_mean(1.0 if result["top5_hit"] else 0.0 for result in label_results),
-                "mean_rank": safe_mean(float(result["rank"]) for result in label_results),
                 "mrr": safe_mean(float(result["reciprocal_rank"]) for result in label_results),
                 "top_confusions": [
                     {"label": wrong_label, "count": count}
@@ -149,11 +152,14 @@ def evaluate_with_desc(
         )
 
     return {
-        "top1_accuracy": safe_mean(1.0 if result["top1_hit"] else 0.0 for result in example_results),
-        "top5_accuracy": safe_mean(1.0 if result["top5_hit"] else 0.0 for result in example_results),
+        "top1": cmc[0],
+        "top3": cmc[2],
+        "top5": cmc[4],
+        "top10": cmc[9],
         "mrr": safe_mean(float(result["reciprocal_rank"]) for result in example_results),
         "micro_f1": f1_metrics["micro_f1"],
         "macro_f1": f1_metrics["macro_f1"],
+        "cmc": cmc,
         "per_label": per_label_results,
         "examples": example_results,
     }
@@ -233,10 +239,13 @@ def run_experiment(
         "candidate_template": candidate_template,
         "use_description": use_desc,
         "metrics": {
-            "top1": result["top1_accuracy"],
-            "top5": result["top5_accuracy"],
+            "top1": result["top1"],
+            "top3": result["top3"],
+            "top5": result["top5"],
+            "top10": result["top10"],
             "mrr": result["mrr"],
             "macro_f1": result["macro_f1"],
+            "cmc": result["cmc"]
         },
         "per_label": result["per_label"]
     }
@@ -303,13 +312,17 @@ def evaluate_hybrid(
         )
 
     f1_metrics = compute_f1_metrics(true_labels, top1_predictions)
+    cmc = compute_cmc(example_results, 10)
 
     return {
-        "top1": safe_mean(1.0 if result["top1_hit"] else 0.0 for result in example_results),
-        "top5": safe_mean(1.0 if result["top5_hit"] else 0.0 for result in example_results),
+        "top1": cmc[0],
+        "top3": cmc[2],
+        "top5": cmc[4],
+        "top10": cmc[9],
         "mrr": safe_mean(float(result["reciprocal_rank"]) for result in example_results),
         "micro_f1": f1_metrics["micro_f1"],
         "macro_f1": f1_metrics["macro_f1"],
+        "cmc": cmc
     }
 
 def main():
@@ -322,10 +335,20 @@ def main():
 
     # Common Templates
     QUERY_TPL = "這部作品的類型偏向{label}"
+    CAND_TPL_RAW = "{label}"
     CAND_TPL_SYM = "這部作品的類型偏向{label}"
     CAND_TPL_DESC = "{label}：{description}"
 
-    # 1. Baseline: Symmetric novel_genre (No description)
+    # 0. Raw Label (Baseline)
+    raw_baseline = run_experiment(
+        name="baseline_raw",
+        query_template="{label}",
+        candidate_template="{label}",
+        use_desc=False,
+        config=config
+    )
+
+    # 1. Symmetric novel_genre
     baseline = run_experiment(
         name="baseline_symmetric",
         query_template=QUERY_TPL,
@@ -343,9 +366,9 @@ def main():
         config=config
     )
 
-    # 3. Hybrid: Weighted (0.7 symmetric + 0.3 desc) - Testing a balance
+    # 3. Hybrid: Weighted (0.7 symmetric + 0.3 desc)
     print("\n[Run: Hybrid 0.7/0.3]")
-    # We need to reload data for hybrid manual eval
+    # Reload data
     source = Path(config["source"])
     candidate_tags_source = Path(config["candidate_tags_source"])
     tag_descriptions_source = Path(config["tag_descriptions_source"])
@@ -358,7 +381,7 @@ def main():
     # Get cached vectors
     query_vectors = get_rendered_vectors(
         rendered_texts=[QUERY_TPL.format(label=e.query_text) for e in examples],
-        output_dir=base_output_dir / "baseline_symmetric", # reuse symmetric run's cache
+        output_dir=base_output_dir / "baseline_symmetric",
         cache_name="queries",
         template_text=QUERY_TPL,
         role="query",
@@ -399,23 +422,31 @@ def main():
         candidate_template_base=CAND_TPL_SYM,
         candidate_template_desc=CAND_TPL_DESC,
         examples=examples,
-        weight_base=0.7 # Giving more weight to the stable symmetric template
+        weight_base=0.7
     )
 
     # Final Comparison
-    print("\n" + "="*80)
+    print("\n" + "="*90)
     print(f"Comparison for {model}")
-    print("="*80)
-    print(f"{'Metric':<10} | {'Symmetric':<12} | {'With Desc':<12} | {'Hybrid (0.7)':<12} | {'Delta (H-S)':<10}")
-    print("-" * 85)
+    print("="*90)
+    print(f"{'Metric':<10} | {'Raw':<12} | {'Symmetric':<12} | {'With Desc':<12} | {'Hybrid (0.7)':<12}")
+    print("-" * 95)
     
-    for key in ["top1", "top5", "mrr", "macro_f1"]:
-        v_base = baseline["metrics"][key]
-        v_exp = experiment["metrics"][key]
-        v_hybrid = hybrid[key]
-        delta = v_hybrid - v_base
-        print(f"{key:<10} | {v_base:<12.4f} | {v_exp:<12.4f} | {v_hybrid:<12.4f} | {delta:+.4f}")
-    print("="*85)
+    for key in ["top1", "top3", "top5", "top10", "mrr", "macro_f1"]:
+        v_raw = raw_baseline["metrics"].get(key, 0)
+        v_base = baseline["metrics"].get(key, 0)
+        v_exp = experiment["metrics"].get(key, 0)
+        v_hybrid = hybrid.get(key, 0)
+        print(f"{key:<10} | {v_raw:<12.4f} | {v_base:<12.4f} | {v_exp:<12.4f} | {v_hybrid:<12.4f}")
+    print("="*95)
+
+    print("\nCMC Data (1-10):")
+    def format_cmc(cmc):
+        return "[" + ", ".join([f"{x*100:.2f}" for x in cmc]) + "]"
+
+    print(f"Raw:       {format_cmc(raw_baseline['metrics']['cmc'])}")
+    print(f"Symmetric: {format_cmc(baseline['metrics']['cmc'])}")
+    print(f"Hybrid:    {format_cmc(hybrid['cmc'])}")
 
 if __name__ == "__main__":
     main()
