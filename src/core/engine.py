@@ -6,7 +6,7 @@ from src.config import settings
 from src.core.book_matcher import BookMatcher
 from src.core.database import Database
 from src.core.explainer import generate_explanation
-from src.core.llm import parse_query
+from src.core.llm import parse_query, route_query_with_llm
 from src.core.vector_store import VectorStore
 from src.core.lexical_store import LexicalStore
 
@@ -20,7 +20,7 @@ class HybridEngine:
     #   "log_dampened"   : total = base + bonus_max × log(1 + bm25_metric)
     #   "tiebreaker"     : total = base + bonus_max × bm25_metric  (bonus_max should be ~0.001)
     VALID_FUSION_MODES = {"multiplicative", "additive", "log_dampened", "tiebreaker"}
-    VALID_FUSION_STRATEGIES = {"weighted", "rrf", "auto"}
+    VALID_FUSION_STRATEGIES = {"weighted", "rrf", "auto", "auto_llm"}
 
     def __init__(
         self,
@@ -35,6 +35,12 @@ class HybridEngine:
         bm25_fusion_mode: Optional[str] = None,
         fusion_strategy: Optional[str] = None,
         rrf_k: int = 60,
+        # ── Dynamic routing parameters (only used when fusion_strategy='auto') ──
+        routing_tag_threshold: int = 1,
+        routing_weighted_ws: float = 0.35,
+        routing_weighted_wa: float = 0.65,
+        routing_weighted_bm25: bool = True,
+        routing_rrf_bm25: bool = False,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
@@ -47,17 +53,24 @@ class HybridEngine:
             )
         self.rrf_k = rrf_k
 
+        # Dynamic routing knobs
+        self.routing_tag_threshold = routing_tag_threshold
+        self.routing_weighted_ws = routing_weighted_ws
+        self.routing_weighted_wa = routing_weighted_wa
+        self.routing_weighted_bm25 = routing_weighted_bm25
+        self.routing_rrf_bm25 = routing_rrf_bm25
+
         self.enable_bm25 = enable_bm25 if enable_bm25 is not None else settings.ENABLE_BM25
         self.bm25_weight = bm25_weight if bm25_weight is not None else settings.BM25_WEIGHT
         self.bm25_bonus_max = bm25_bonus_max if bm25_bonus_max is not None else settings.BM25_BONUS_MAX
         self.bm25_fusion_mode = bm25_fusion_mode or settings.BM25_FUSION_MODE
-        if self.fusion_strategy in ('weighted', 'auto') and self.bm25_fusion_mode not in self.VALID_FUSION_MODES:
+        if self.fusion_strategy in ('weighted', 'auto', 'auto_llm') and self.bm25_fusion_mode not in self.VALID_FUSION_MODES:
             raise ValueError(
                 f"Invalid bm25_fusion_mode '{self.bm25_fusion_mode}'. "
                 f"Must be one of: {self.VALID_FUSION_MODES}"
             )
-        # Always initialize lexical_store so 'auto' mode can toggle BM25 per-query
-        if self.enable_bm25 or self.fusion_strategy == 'auto':
+        # Always initialize lexical_store so 'auto'/'auto_llm' mode can toggle BM25 per-query
+        if self.enable_bm25 or self.fusion_strategy in ('auto', 'auto_llm'):
             self.lexical_store = lexical_store if lexical_store is not None else LexicalStore(self.db)
         else:
             self.lexical_store = None
@@ -358,6 +371,52 @@ class HybridEngine:
                     return True
 
         return False
+
+    def _apply_degradation_step(
+        self,
+        original_constraints: Dict[str, Any],
+        attempt: int,
+    ) -> Tuple[Dict[str, Any], float]:
+        """Apply graceful degradation strategy based on attempt number.
+        
+        Returns: (adjusted_constraints, similarity_threshold)
+        
+        Degradation strategy:
+        - Attempt 1 (嚴格模式): All constraints active, similarity_threshold=0.6
+        - Attempt 2 (一階放寬): Remove word constraints, similarity_threshold=0.4
+        - Attempt 3 (終極放寬): Remove author & status filters, keep only semantic + negative tags
+        """
+        constraints = dict(original_constraints)  # Make a copy
+        
+        if attempt == 1:
+            # ── Attempt 1: Strict mode ──
+            # All constraints: words, status, author, negative tags
+            similarity_threshold = 0.6
+            print(f"[Engine] Degradation Attempt 1 (嚴格模式): All constraints active, threshold=0.6")
+            
+        elif attempt == 2:
+            # ── Attempt 2: First relaxation ──
+            # Remove word count constraints (words_min/words_max)
+            constraints["words_min"] = None
+            constraints["words_max"] = None
+            similarity_threshold = 0.4
+            print(f"[Engine] Degradation Attempt 2 (一階放寬): Word constraints removed, threshold=0.4")
+            
+        elif attempt == 3:
+            # ── Attempt 3: Ultimate relaxation ──
+            # Remove author & status filters (keep only semantic + negative tags)
+            constraints["author_filter"] = None
+            constraints["status_filter"] = None
+            constraints["words_min"] = None
+            constraints["words_max"] = None
+            similarity_threshold = 0.4
+            print(f"[Engine] Degradation Attempt 3 (終極放寬): Author/Status removed, threshold=0.4")
+            
+        else:
+            # Fallback
+            similarity_threshold = 0.4
+            
+        return constraints, similarity_threshold
 
 
     def calculate_score(
@@ -700,7 +759,7 @@ class HybridEngine:
         has_hard_constraints = has_status or has_words or has_author
 
         is_constraint_heavy = (
-            pos_tags_count >= 2
+            pos_tags_count >= self.routing_tag_threshold
             or neg_tags_count > 0
             or has_hard_constraints
         )
@@ -708,11 +767,12 @@ class HybridEngine:
         if is_constraint_heavy:
             strategy = {
                 "fusion": "weighted",
-                "ws": 0.35,
-                "wa": 0.65,
-                "enable_bm25": True,
+                "ws": self.routing_weighted_ws,
+                "wa": self.routing_weighted_wa,
+                "enable_bm25": self.routing_weighted_bm25,
                 "reason": (
-                    f"倚天劍 (Weighted): pos_tags={pos_tags_count}, "
+                    f"倚天劍 (Weighted ws={self.routing_weighted_ws} wa={self.routing_weighted_wa}): "
+                    f"pos_tags={pos_tags_count}, "
                     f"neg_tags={neg_tags_count}, hard_constraints={has_hard_constraints}"
                 ),
             }
@@ -720,14 +780,67 @@ class HybridEngine:
             strategy = {
                 "fusion": "rrf",
                 "rrf_k": self.rrf_k,
-                "enable_bm25": False,
+                "enable_bm25": self.routing_rrf_bm25,
                 "reason": (
-                    f"屠龍刀 (RRF k={self.rrf_k}): pos_tags={pos_tags_count}, "
+                    f"屠龍刀 (RRF k={self.rrf_k} bm25={self.routing_rrf_bm25}): "
+                    f"pos_tags={pos_tags_count}, "
                     f"neg_tags={neg_tags_count}, semantic-dominant query"
                 ),
             }
 
         print(f"[Router] {strategy['reason']}")
+        return strategy
+
+    def _determine_routing_strategy_llm(
+        self,
+        user_query: str,
+        parse_result: Any,
+        hard_constraints: Dict[str, Any],
+        model_id: Optional[str] = None,
+        cache_namespace: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """LLM-as-Router: let the LLM decide the fusion strategy.
+
+        Calls `route_query_with_llm` for an independent routing judgment,
+        then maps the result to the engine config format.
+        """
+        llm_decision = route_query_with_llm(
+            user_query,
+            model_id=model_id,
+            cache_namespace=cache_namespace,
+        )
+
+        chosen_strategy = llm_decision["strategy"]
+        confidence = llm_decision.get("confidence", 0.5)
+        reasoning = llm_decision.get("reasoning", "")
+
+        if chosen_strategy == "weighted":
+            strategy = {
+                "fusion": "weighted",
+                "ws": self.routing_weighted_ws,
+                "wa": self.routing_weighted_wa,
+                "enable_bm25": self.routing_weighted_bm25,
+                "reason": (
+                    f"倚天劍 (LLM Router → Weighted ws={self.routing_weighted_ws} "
+                    f"wa={self.routing_weighted_wa}): "
+                    f"confidence={confidence:.2f}, {reasoning[:60]}"
+                ),
+                "llm_routing": llm_decision,
+            }
+        else:
+            strategy = {
+                "fusion": "rrf",
+                "rrf_k": self.rrf_k,
+                "enable_bm25": self.routing_rrf_bm25,
+                "reason": (
+                    f"屠龍刀 (LLM Router → RRF k={self.rrf_k} "
+                    f"bm25={self.routing_rrf_bm25}): "
+                    f"confidence={confidence:.2f}, {reasoning[:60]}"
+                ),
+                "llm_routing": llm_decision,
+            }
+
+        print(f"[Router:LLM] {strategy['reason']}")
         return strategy
 
     async def search(
@@ -759,11 +872,8 @@ class HybridEngine:
         )
         tag_terms_list = self._build_tag_terms_list(positive_tag_terms)
 
-        tag_mapping_weights: List[Dict[str, float]] = []
-        if tag_terms_list:
-            print(f"[Engine] Pre-mapping {len(tag_terms_list)} tag facets.")
-            tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list)
-
+        # Note: We don't pre-compute tag_mapping_weights here anymore;
+        # it will be computed inside the degradation loop with the appropriate threshold
         base_terms = parse_result.search_terms or parse_result.original_query
         expanded_terms = base_terms
 
@@ -801,6 +911,16 @@ class HybridEngine:
             active_wa = routing.get("wa", self.attribute_weight)
             active_rrf_k = routing.get("rrf_k", self.rrf_k)
             active_bm25 = routing.get("enable_bm25", self.enable_bm25)
+        elif self.fusion_strategy == "auto_llm":
+            routing = self._determine_routing_strategy_llm(
+                user_query, parse_result, hard_constraints, model_id=model_id,
+                cache_namespace=cache_namespace,
+            )
+            active_fusion = routing["fusion"]
+            active_ws = routing.get("ws", self.semantic_weight)
+            active_wa = routing.get("wa", self.attribute_weight)
+            active_rrf_k = routing.get("rrf_k", self.rrf_k)
+            active_bm25 = routing.get("enable_bm25", self.enable_bm25)
         else:
             active_fusion = self.fusion_strategy
             active_ws = self.semantic_weight
@@ -808,159 +928,204 @@ class HybridEngine:
             active_rrf_k = self.rrf_k
             active_bm25 = self.enable_bm25
 
-        # ── Build Qdrant metadata pre-filter from hard constraints ──
-        metadata_filter = VectorStore.build_metadata_filter(hard_constraints)
-        if metadata_filter:
-            print(
-                f"[Engine] Metadata pre-filter active: "
-                f"status={hard_constraints.get('status_filter')}, "
-                f"words=[{hard_constraints.get('words_min')}, {hard_constraints.get('words_max')}], "
-                f"neg_tags={hard_constraints.get('negative_tag_terms', [])}"
+        # ════════════════════════════════════════════════════════════════
+        # ── GRACEFUL DEGRADATION: Multi-attempt search with relaxation ──
+        # ════════════════════════════════════════════════════════════════
+        final_results = []
+        final_query_vector = None
+        degradation_attempt = 0
+        
+        for attempt in range(1, 4):  # Maximum 3 attempts
+            degradation_attempt = attempt
+            
+            # Apply degradation strategy based on attempt number
+            iteration_constraints, tag_similarity_threshold = self._apply_degradation_step(
+                hard_constraints, attempt
             )
+            
+            # ── Compute tag mappings with degradation-aware threshold ──
+            tag_mapping_weights: List[Dict[str, float]] = []
+            if tag_terms_list:
+                print(f"[Engine] Computing tag mappings (attempt {attempt}) with threshold={tag_similarity_threshold}")
+                tag_mapping_weights = self.vs.batch_map_tags(
+                    tag_terms_list,
+                    similarity_threshold=tag_similarity_threshold,
+                )
+            
+            # ── Build Qdrant metadata pre-filter from (possibly adjusted) hard constraints ──
+            metadata_filter = VectorStore.build_metadata_filter(iteration_constraints)
+            if metadata_filter:
+                print(
+                    f"[Engine] Metadata pre-filter active: "
+                    f"status={iteration_constraints.get('status_filter')}, "
+                    f"words=[{iteration_constraints.get('words_min')}, {iteration_constraints.get('words_max')}], "
+                    f"neg_tags={iteration_constraints.get('negative_tag_terms', [])}"
+                )
 
-        retrieval_limit = 10000
-        candidates_map: Dict[str, Dict[str, Any]] = {}
-        vector_score_map: Dict[str, float] = {}
-        payload_map: Dict[str, Dict[str, Any]] = {}
+            retrieval_limit = 10000
+            candidates_map: Dict[str, Dict[str, Any]] = {}
+            vector_score_map: Dict[str, float] = {}
+            payload_map: Dict[str, Dict[str, Any]] = {}
 
-        vector_results, query_vector = self.vs.search(
-            expanded_terms,
-            limit=retrieval_limit,
-            query_filter=metadata_filter,
-            with_payload=True,
-        )
-        for hit in vector_results:
-            payload = hit.get("payload") or {}
-            book_id = payload.get("id")
-            if not book_id:
-                continue
-            book_id = str(book_id)
-            candidates_map[book_id] = payload
-            payload_map[book_id] = payload
-            vector_score_map[book_id] = float(hit["score"])
-
-        bm25_score_map: Dict[str, float] = {}
-        bm25_metric_map: Dict[str, float] = {}
-        bm25_new_count = 0
-        bm25_prefiltered_count = 0
-        if active_bm25 and self.lexical_store:
-            bm25_results = self.lexical_store.search(expanded_terms, limit=getattr(settings, "TOP_K_BM25", 1000))
-            for res in bm25_results:
-                item = res["item"]
-                book_id = str(item.get("id"))
+            vector_results, query_vector = self.vs.search(
+                expanded_terms,
+                limit=retrieval_limit,
+                query_filter=metadata_filter,
+                with_payload=True,
+            )
+            final_query_vector = query_vector  # Store for return value
+            
+            for hit in vector_results:
+                payload = hit.get("payload") or {}
+                book_id = payload.get("id")
                 if not book_id:
                     continue
-                bm25_score_map[book_id] = float(res["score"])
-                if book_id not in candidates_map:
-                    # Pre-filter: skip BM25-only candidates that violate hard constraints
-                    if self._item_violates_hard_constraints(item, hard_constraints):
-                        bm25_prefiltered_count += 1
-                        continue
-                    candidates_map[book_id] = item
-                    payload_map[book_id] = item
-                    vector_score_map[book_id] = 0.0
-                    bm25_new_count += 1
-            # Normalize once after collecting all BM25 scores
-            bm25_metric_map = self._normalize_bm25_scores(bm25_score_map)
-            print(
-                f"[Engine] BM25: {len(bm25_results)} results, "
-                f"{bm25_new_count} new candidates added, "
-                f"{bm25_prefiltered_count} pre-filtered by hard constraints "
-                f"(already {len(bm25_score_map) - bm25_new_count - bm25_prefiltered_count} were in pool)"
-            )
+                book_id = str(book_id)
+                candidates_map[book_id] = payload
+                payload_map[book_id] = payload
+                vector_score_map[book_id] = float(hit["score"])
 
-        if tag_terms_list and tag_mapping_weights:
-            recall_tags = self._extract_recall_tags(tag_mapping_weights)
-            if recall_tags:
-                print(f"[Engine] Triggering mapped-tag recall for {len(recall_tags)} resolved tags.")
-                tag_recall_items = self.db.search_by_tags_any(recall_tags, limit=retrieval_limit)
-                for item in tag_recall_items:
-                    book_id = str(item.get("id", "")).strip()
+            bm25_score_map: Dict[str, float] = {}
+            bm25_metric_map: Dict[str, float] = {}
+            bm25_new_count = 0
+            bm25_prefiltered_count = 0
+            if active_bm25 and self.lexical_store:
+                bm25_results = self.lexical_store.search(expanded_terms, limit=getattr(settings, "TOP_K_BM25", 1000))
+                for res in bm25_results:
+                    item = res["item"]
+                    book_id = str(item.get("id"))
                     if not book_id:
                         continue
+                    bm25_score_map[book_id] = float(res["score"])
                     if book_id not in candidates_map:
+                        # Pre-filter: skip BM25-only candidates that violate hard constraints
+                        if self._item_violates_hard_constraints(item, iteration_constraints):
+                            bm25_prefiltered_count += 1
+                            continue
                         candidates_map[book_id] = item
                         payload_map[book_id] = item
                         vector_score_map[book_id] = 0.0
+                        bm25_new_count += 1
+                # Normalize once after collecting all BM25 scores
+                bm25_metric_map = self._normalize_bm25_scores(bm25_score_map)
+                print(
+                    f"[Engine] BM25: {len(bm25_results)} results, "
+                    f"{bm25_new_count} new candidates added, "
+                    f"{bm25_prefiltered_count} pre-filtered by hard constraints "
+                    f"(already {len(bm25_score_map) - bm25_new_count - bm25_prefiltered_count} were in pool)"
+                )
 
-        candidates: List[Dict[str, Any]] = []
-        for book_id, item in candidates_map.items():
-            if not item.get("classification") or not item.get("words_total"):
-                db_item = self.db.get_item(book_id)
-                if db_item:
-                    item = {**db_item, **item}
-                    candidates_map[book_id] = item
-            if "id" not in item or not item["id"]:
-                item["id"] = book_id
-            has_minimum_metadata = bool(
-                str(item.get("name", "")).strip()
-                or str(item.get("intro", "")).strip()
-                or item.get("words_total")
-                or item.get("tags")
-                or str(item.get("classification", "")).strip()
-            )
-            if not has_minimum_metadata:
-                continue
-            candidates.append(item)
+            if tag_terms_list and tag_mapping_weights:
+                recall_tags = self._extract_recall_tags(tag_mapping_weights)
+                if recall_tags:
+                    print(f"[Engine] Triggering mapped-tag recall for {len(recall_tags)} resolved tags.")
+                    tag_recall_items = self.db.search_by_tags_any(recall_tags, limit=retrieval_limit)
+                    for item in tag_recall_items:
+                        book_id = str(item.get("id", "")).strip()
+                        if not book_id:
+                            continue
+                        if book_id not in candidates_map:
+                            # Pre-filter: skip tag-recall candidates that violate hard constraints
+                            if self._item_violates_hard_constraints(item, iteration_constraints):
+                                continue
+                            candidates_map[book_id] = item
+                            payload_map[book_id] = item
+                            vector_score_map[book_id] = 0.0
 
-        print(f"[Engine] Candidate pool size: {len(candidates)}")
-
-        # negative_tag_terms already extracted above (before BM25 search)
-        if active_fusion == "rrf":
-            # ── RRF Fusion Path (屠龍刀) ──
-            scored_items = self._rrf_fuse(
-                candidates,
-                vector_score_map,
-                bm25_score_map,
-                tag_terms_list,
-                tag_mapping_weights,
-                payload_map,
-            )
-        else:
-            # ── Weighted Linear Combination Path (倚天劍) ──
-            # Apply per-query weights from routing (or static defaults)
-            orig_ws, orig_wa = self.semantic_weight, self.attribute_weight
-            self.semantic_weight, self.attribute_weight = active_ws, active_wa
-
-            scored_items = []
-            for item in candidates:
-                book_id = str(item.get("id"))
-                if not book_id or book_id == "None":
-                    continue
-                vector_score = vector_score_map.get(book_id, 0.0)
-                raw_bm25_score = bm25_score_map.get(book_id, 0.0) if active_bm25 else 0.0
-                bm25_metric = bm25_metric_map.get(book_id, 0.0) if active_bm25 else 0.0
+            candidates: List[Dict[str, Any]] = []
+            for book_id, item in candidates_map.items():
+                if not item.get("classification") or not item.get("words_total"):
+                    db_item = self.db.get_item(book_id)
+                    if db_item:
+                        item = {**db_item, **item}
+                        candidates_map[book_id] = item
                 
-                final_score, breakdown = self.calculate_score(
-                    item,
-                    vector_score,
+                # Final Pre-filter: now that we have full DB metadata, verify one last time
+                if self._item_violates_hard_constraints(item, iteration_constraints):
+                    continue
+                    
+                if "id" not in item or not item["id"]:
+                    item["id"] = book_id
+                has_minimum_metadata = bool(
+                    str(item.get("name", "")).strip()
+                    or str(item.get("intro", "")).strip()
+                    or item.get("words_total")
+                    or item.get("tags")
+                    or str(item.get("classification", "")).strip()
+                )
+                if not has_minimum_metadata:
+                    continue
+                candidates.append(item)
+
+            print(f"[Engine] Candidate pool size (attempt {attempt}): {len(candidates)}")
+
+            # negative_tag_terms already extracted above (before BM25 search)
+            if active_fusion == "rrf":
+                # ── RRF Fusion Path (屠龍刀) ──
+                scored_items = self._rrf_fuse(
+                    candidates,
+                    vector_score_map,
+                    bm25_score_map,
                     tag_terms_list,
                     tag_mapping_weights,
-                    bm25_metric=bm25_metric,
+                    payload_map,
                 )
-                scored_items.append(
-                    {
-                        "item": item,
-                        "score": float(final_score),
-                        "vector_score": vector_score,
-                        "bm25_score": raw_bm25_score,
-                        "bm25_metric": bm25_metric,
-                        "breakdown": breakdown,
-                        "payload": payload_map.get(book_id, {}),
-                    }
-                )
+            else:
+                # ── Weighted Linear Combination Path (倚天劍) ──
+                # Apply per-query weights from routing (or static defaults)
+                orig_ws, orig_wa = self.semantic_weight, self.attribute_weight
+                self.semantic_weight, self.attribute_weight = active_ws, active_wa
 
-            # Restore original weights
-            self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
+                scored_items = []
+                for item in candidates:
+                    book_id = str(item.get("id"))
+                    if not book_id or book_id == "None":
+                        continue
+                    vector_score = vector_score_map.get(book_id, 0.0)
+                    raw_bm25_score = bm25_score_map.get(book_id, 0.0) if active_bm25 else 0.0
+                    bm25_metric = bm25_metric_map.get(book_id, 0.0) if active_bm25 else 0.0
+                    
+                    final_score, breakdown = self.calculate_score(
+                        item,
+                        vector_score,
+                        tag_terms_list,
+                        tag_mapping_weights,
+                        bm25_metric=bm25_metric,
+                    )
+                    scored_items.append(
+                        {
+                            "item": item,
+                            "score": float(final_score),
+                            "vector_score": vector_score,
+                            "bm25_score": raw_bm25_score,
+                            "bm25_metric": bm25_metric,
+                            "breakdown": breakdown,
+                            "payload": payload_map.get(book_id, {}),
+                        }
+                    )
 
-        scored_items.sort(key=lambda result: result["score"], reverse=True)
-        scored_items = self._post_filter(
-            scored_items,
-            parse_result.criteria,
-            negative_tag_terms,
-        )
-        scored_items.sort(key=lambda result: result["score"], reverse=True)
+                # Restore original weights
+                self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
 
+            scored_items.sort(key=lambda result: result["score"], reverse=True)
+            scored_items = self._post_filter(
+                scored_items,
+                parse_result.criteria,
+                negative_tag_terms,
+            )
+            scored_items.sort(key=lambda result: result["score"], reverse=True)
+            
+            # ── Degradation check: if we have enough results, stop trying ──
+            final_results = scored_items
+            if len(final_results) >= 5:
+                print(f"[Engine] Got {len(final_results)} results on attempt {attempt}, stopping degradation.")
+                break
+            else:
+                print(f"[Engine] Only got {len(final_results)} results on attempt {attempt}, trying next degradation level...")
+
+        # ── Post-degradation result finalization ──
+        scored_items = final_results
+        
         if not scored_items:
             return {
                 "query": user_query,
@@ -1023,7 +1188,8 @@ class HybridEngine:
             "related_books": related_books,
             "reference_tags": [],
             "parse_metadata": parse_result.parse_metadata,
-            "query_vector": query_vector,
+            "query_vector": final_query_vector,
             "results": final_results,
             "engine": "HybridEngine",
+            "degradation_attempt": degradation_attempt,
         }

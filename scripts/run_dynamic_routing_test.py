@@ -6,6 +6,7 @@ Compares:
   2. weighted_ws35_wa65 — best strict baseline
   3. weighted_ws60_wa40 — best no-strict baseline
   4. rrf_k60_no_bm25 — best RRF baseline
+    5. baseline_weighted_ws35_wa65 — explicit baseline alias for reports
 
 All runs share the same LLM parse cache for fair comparison.
 """
@@ -41,17 +42,47 @@ def main() -> None:
     configs = [
         # ── Dynamic Routing (the new architecture) ──
         {
-            "name": "auto_dynamic_routing",
+            "name": "auto_t2_dynamic_routing",
             "fusion_strategy": "auto",
             "rrf_k": 60,
             "semantic_weight": 0.5,   # fallback defaults (overridden per-query)
             "attribute_weight": 0.5,
             "enable_bm25": True,      # lexical_store always initialized for auto
             "bm25_bonus_max": 0.0,
+            "routing_tag_threshold": 2, # strict mode: only tag_count == 0 goes to RRF
+        },
+        {
+            "name": "auto_t3_dynamic_routing",
+            "fusion_strategy": "auto",
+            "rrf_k": 60,
+            "semantic_weight": 0.5,   # fallback defaults (overridden per-query)
+            "attribute_weight": 0.5,
+            "enable_bm25": True,      # lexical_store always initialized for auto
+            "bm25_bonus_max": 0.0,
+            "routing_tag_threshold": 3, # strict mode: only tag_count == 0 goes to RRF
+        },
+        # ── LLM-as-Router (the LLM decides weighted vs rrf per-query) ──
+        {
+            "name": "auto_llm_routing",
+            "fusion_strategy": "auto_llm",
+            "rrf_k": 60,
+            "semantic_weight": 0.5,
+            "attribute_weight": 0.5,
+            "enable_bm25": True,
+            "bm25_bonus_max": 0.0,
         },
         # ── Static baselines for comparison ──
         {
             "name": "weighted_ws35_wa65",
+            "fusion_strategy": "weighted",
+            "rrf_k": 60,
+            "semantic_weight": 0.35,
+            "attribute_weight": 0.65,
+            "enable_bm25": True,
+            "bm25_bonus_max": 0.0,
+        },
+        {
+            "name": "baseline_weighted_ws35_wa65",
             "fusion_strategy": "weighted",
             "rrf_k": 60,
             "semantic_weight": 0.35,
@@ -75,6 +106,15 @@ def main() -> None:
             "semantic_weight": 0.5,
             "attribute_weight": 0.5,
             "enable_bm25": False,
+            "bm25_bonus_max": 0.0,
+        },
+        {
+            "name": "rrf_k60_with_bm25",
+            "fusion_strategy": "rrf",
+            "rrf_k": 60,
+            "semantic_weight": 0.5,
+            "attribute_weight": 0.5,
+            "enable_bm25": True,
             "bm25_bonus_max": 0.0,
         },
     ]
@@ -103,6 +143,7 @@ def main() -> None:
             bm25_bonus_max=cfg["bm25_bonus_max"],
             fusion_strategy=cfg["fusion_strategy"],
             rrf_k=cfg["rrf_k"],
+            routing_tag_threshold=cfg.get("routing_tag_threshold", 1),
         )
 
     print(f"\n{'#' * 60}")

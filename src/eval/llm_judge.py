@@ -206,6 +206,9 @@ class LLMJudge:
                     raise
 
                 attempt += 1
+                if attempt >= 5:
+                    raise RuntimeError(f"Max retries (5) exceeded. Last error: {exc}")
+
                 error_text = str(exc)
                 if is_rate_limit_error(exc):
                     self._rotate_api_key()
@@ -234,6 +237,8 @@ def _make_task_key(row: Dict[str, Any]) -> str:
 def _is_row_scored(row: Dict[str, Any]) -> bool:
     score = str(row.get("Score (0-3)", "")).strip()
     comment = str(row.get("Comment", "")).strip()
+    if "LLM judge failed:" in comment:
+        return False
     return bool(score or comment)
 
 

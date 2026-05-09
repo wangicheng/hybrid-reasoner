@@ -87,40 +87,56 @@ class VectorStore:
         Translates the dict produced by ``HybridEngine._extract_hard_constraints()``
         into a ``rest.Filter`` that Qdrant can apply server-side during ANN search.
 
+        Implements graceful degradation through tolerant filtering:
+        - Word count range: applies ±20% tolerance buffer
+        - Status & words: uses OR logic to soften constraints (疑罪從無)
+          By using `should` instead of `must`, items with missing metadata
+          are automatically included (benefit of the doubt).
+        
         Returns ``None`` when no filterable constraints are present, so the
         caller can safely pass the result straight to ``query_filter``.
         """
         must_conditions: List[rest.Condition] = []
+        should_conditions: List[rest.Condition] = []
         must_not_conditions: List[rest.Condition] = []
 
-        # 1. Status filter ───────────────────────────────────────────────
+        # 1. Status filter with tolerance: move to `should` for soft matching
+        #    This allows documents with missing status to pass through (疑罪從無)
         status_filter = hard_constraints.get("status_filter")
         if status_filter:
+            status_values = []
             if status_filter == "completed":
-                must_conditions.append(
-                    rest.FieldCondition(
-                        key="publish_status",
-                        match=rest.MatchAny(any=["completed", "已完結", "完結"]),
-                    )
-                )
+                status_values = ["completed", "已完結", "完結"]
             elif status_filter == "ongoing":
-                must_conditions.append(
+                status_values = ["ongoing", "連載中", "連載"]
+            
+            if status_values:
+                # Use `should` instead of `must` to allow missing status fields
+                should_conditions.append(
                     rest.FieldCondition(
                         key="publish_status",
-                        match=rest.MatchAny(any=["ongoing", "連載中", "連載"]),
+                        match=rest.MatchAny(any=status_values),
                     )
                 )
 
-        # 2. Word-count range ────────────────────────────────────────────
+        # 2. Word-count range with 20% tolerance + soft matching
+        #    ±20% complacency: words_min → 0.8×, words_max → 1.2×
+        #    Soft matching: items with missing words_total pass through (疑罪從無)
         words_min = hard_constraints.get("words_min")
         words_max = hard_constraints.get("words_max")
         if words_min is not None or words_max is not None:
+            # Apply 20% tolerance buffer
+            relaxed_min = int(words_min * 0.8) if words_min is not None else None
+            relaxed_max = int(words_max * 1.2) if words_max is not None else None
+            
             range_kwargs: Dict[str, Any] = {}
-            if words_min is not None:
-                range_kwargs["gte"] = int(words_min)
-            if words_max is not None:
-                range_kwargs["lte"] = int(words_max)
-            must_conditions.append(
+            if relaxed_min is not None:
+                range_kwargs["gte"] = relaxed_min
+            if relaxed_max is not None:
+                range_kwargs["lte"] = relaxed_max
+            
+            # Use `should` instead of `must` to allow missing words_total fields
+            should_conditions.append(
                 rest.FieldCondition(
                     key="words_total",
                     range=rest.Range(**range_kwargs),
@@ -128,6 +144,7 @@ class VectorStore:
             )
 
         # 3. Negative tags (must NOT contain) ────────────────────────────
+        #    Negative constraints stay as hard filters (no tolerance)
         negative_tags = hard_constraints.get("negative_tag_terms", [])
         for neg_tag in negative_tags:
             if not neg_tag:
@@ -142,11 +159,13 @@ class VectorStore:
         # 4. Author filter — Qdrant substring match needs a full-text index
         #    which we don't have yet; kept as post-filter in engine.py.
 
-        if not must_conditions and not must_not_conditions:
+        if not should_conditions and not must_not_conditions:
             return None
 
+        # Build filter: should_conditions (soft OR), must_not_conditions (hard NOT)
+        # By using only `should` (not `must`), missing metadata items naturally pass through
         return rest.Filter(
-            must=must_conditions if must_conditions else None,
+            should=should_conditions if should_conditions else None,
             must_not=must_not_conditions if must_not_conditions else None,
         )
 

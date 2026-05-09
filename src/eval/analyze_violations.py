@@ -191,6 +191,34 @@ def main(experiment_dir: str = "data/experiments/runs"):
                     f"  - [{count:3d} ({percentage:5.1f}%)] Query {q_id}: {v_msg}"
                 )
 
+    # Summary Ranking
+    print("\n" + "=" * 60)
+    print("Violation Summary Ranking")
+    print("=" * 60)
+    
+    ranking_data = []
+    for exp in sorted_exps:
+        total_v = sum(sum(v_counts.values()) for v_counts in summary[exp].values())
+        blocked_tag_v = 0
+        for q_id in summary[exp]:
+            for v_msg, count in summary[exp][q_id].items():
+                if v_msg.startswith("Contains blocked tag:"):
+                    blocked_tag_v += count
+        
+        ranking_data.append({
+            "exp": exp,
+            "total": total_v,
+            "blocked": blocked_tag_v
+        })
+    
+    # Sort by total violations ascending (lower is better)
+    ranking_data.sort(key=lambda x: (x["total"], x["blocked"]))
+    
+    print(f"{'Experiment':<45} | {'Total':<7} | {'Blocked':<7}")
+    print("-" * 65)
+    for row in ranking_data:
+        print(f"{row['exp']:<45} | {row['total']:<7} | {row['blocked']:<7}")
+
     print("\n" + "=" * 60)
     print("Analysis complete")
 

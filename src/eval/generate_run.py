@@ -173,12 +173,22 @@ class RunGenerator:
         bm25_weight: float = 0.3,
         bm25_bonus_max: Optional[float] = None,
         bm25_fusion_mode: Optional[str] = None,
+        fusion_strategy: Optional[str] = None,
+        rrf_k: int = 60,
+        # Dynamic routing parameters (auto mode only)
+        routing_tag_threshold: int = 1,
+        routing_weighted_ws: float = 0.35,
+        routing_weighted_wa: float = 0.65,
+        routing_weighted_bm25: bool = True,
+        routing_rrf_bm25: bool = False,
     ) -> None:
+        fusion_label = fusion_strategy or "weighted"
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
-            f"(W1: {semantic_weight}, W2: {attribute_weight}, "
+            f"(fusion={fusion_label}, W1: {semantic_weight}, W2: {attribute_weight}, "
             f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight} (recall-only), "
             f"BM25 Bonus Max: {bm25_bonus_max}, "
+            f"rrf_k={rrf_k}, "
             "fixed retrieval path, "
             f"model={normalize_model_id(self.model_id)}, "
             f"parser_variant={DEFAULT_PARSER_VARIANT}, "
@@ -195,6 +205,13 @@ class RunGenerator:
             bm25_weight=bm25_weight,
             bm25_bonus_max=bm25_bonus_max,
             bm25_fusion_mode=bm25_fusion_mode,
+            fusion_strategy=fusion_strategy,
+            rrf_k=rrf_k,
+            routing_tag_threshold=routing_tag_threshold,
+            routing_weighted_ws=routing_weighted_ws,
+            routing_weighted_wa=routing_weighted_wa,
+            routing_weighted_bm25=routing_weighted_bm25,
+            routing_rrf_bm25=routing_rrf_bm25,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)

@@ -10,9 +10,10 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel as PydanticBaseModel
 from src.models.schemas import QueryParseResult, ScoringCriteria, ScoringParameters, TagIntent
+from src.core.api_utils import is_rate_limit_error
 
 # ??????謘?(???????制??謅???????剜???蹇?????
-DEFAULT_PARSER_MODEL = "gemma-3-27b-it"
+DEFAULT_PARSER_MODEL = "gemma-4-31b-it"
 PARSER_VARIANT_SEMANTIC_SECTIONS_V3_TAGLITE = "semantic_sections_v3_taglite"
 DEFAULT_PARSER_VARIANT = PARSER_VARIANT_SEMANTIC_SECTIONS_V3_TAGLITE
 
@@ -1214,16 +1215,30 @@ Rules:
 - Do not put optional concepts into `negative_concepts` unless the user explicitly rejects them.
 """.strip()
 
+    # ── Constrained Decoding: build tag enum from whitelist ──
+    # When the caller provides a tag_list (the full set of legal tags from the DB),
+    # we inject it as a JSON Schema `enum` constraint on the items of both
+    # positive_terms and negative_terms.  The Gemini Structured Outputs backend
+    # uses this to mask illegal tokens at decode time, so the model physically
+    # cannot emit a tag that does not exist in the database.
+    if tag_list:
+        tag_enum = list(tag_list)  # tuple → list for JSON serialisation
+        tag_item_schema = {"type": "string", "enum": tag_enum}
+        print(f"[Parser] Constrained decoding ACTIVE: {len(tag_enum)} legal tags in enum")
+    else:
+        tag_item_schema = {"type": "string"}
+        print("[Parser] Constrained decoding INACTIVE: no tag_list provided, free-form strings allowed")
+
     tag_projection_schema = {
         "type": "object",
         "properties": {
             "positive_terms": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": tag_item_schema,
             },
             "negative_terms": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": tag_item_schema,
             },
         },
         "required": ["positive_terms", "negative_terms"],
@@ -1281,14 +1296,11 @@ You are the tag projection pass.
     - Be conservative for positive_terms. Omit weak, optional, or example-derived concepts.
     - `positive_terms` should contain 3-6 high-confidence terms only.
     - `negative_terms` should contain 0-8 explicit exclusions.
-    - CRITICAL for `negative_terms`: You MUST capture ALL genres, types, themes, or elements the user explicitly rejects or expresses dislike for. Check the original query carefully for:
-      - Direct rejections: 「不要」「不喜歡」「不接受」「沒興趣」「排除」「不想看」「不行」「看膩了」
-      - Conditional rejections: 「不要有....元素」「不要太....」「别....」
-      - Implicit rejections: 「純現實的」 implies rejecting 奇幻/科幻/異世界
-      - Overused tropes: 「氾濫」「太過氾濫」
+    - CRITICAL for `negative_terms`: 
+      1. MUST capture ALL genres or elements explicitly rejected by the user.
+      2. PROACTIVE EXPANSION: When a user rejects a concept (e.g., "不要奇幻"), you MUST also add all closely related tags from the list to `negative_terms` (e.g., add "魔法", "異世界"). Do not just stop at one tag.
+      3. INFER GENRE CLASHES: If the user requests pure, peaceful, or wholesome genres (like "日常", "溫馨", "治癒", "純戀愛"), you MUST proactively add highly toxic/clashing tags like "NTR", "黑暗", "獵奇", "病嬌" to `negative_terms`, even if the user didn't explicitly mention them.
     - Each rejected concept should map to the closest AVAILABLE TAG name.
-    - Avoid near-duplicates, synonyms, and broad filler terms.
-    - If a concept belongs only in semantic retrieval text and not in tags, omit it.
     - Return only these two keys. Do not emit helper fields, explanations, or notes.
 """.strip()
 
@@ -1519,3 +1531,133 @@ def parse_query(
     )
 
 
+# ═══════════════════════════════════════════════════════════════
+# LLM-as-Router: Let the LLM decide the fusion strategy
+# ═══════════════════════════════════════════════════════════════
+
+_LLM_ROUTER_SYSTEM_PROMPT = """\
+You are a query intent classifier for a novel recommendation system.
+Your task is to analyze the user's book recommendation request and choose the most suitable retrieval strategy.
+
+You have two retrieval tools to choose from:
+
+## Tool A: Weighted (Strict Tag-Based Retriever)
+Best for queries with **explicit, concrete hard constraints**, such as:
+  - Specifying completion status (e.g. "must be completed", "要完結的")
+  - Specifying an author name (e.g. "books by author XX")
+  - Specifying word count range (e.g. "at least 1 million words")
+  - Having many specific genre/tag requirements (e.g. "isekai + harem + battle")
+  - Having explicit exclusion conditions (e.g. "no NTR", "不要異世界")
+Strength: Precise matching of hard filters. Best for "find books matching these exact criteria" queries.
+
+## Tool B: RRF (Fuzzy Semantic Retriever)
+Best for queries describing **atmosphere, feelings, or vague preferences**, such as:
+  - "I want something that gets my blood pumping"
+  - "Something like Mushoku Tensei with a vast world"
+  - "Recommend novels that will make me cry"
+  - Long descriptions of personal reading tastes and feelings
+  - Using a specific work as a reference to find "similar style" books
+Strength: Strong semantic understanding. Best for "recommend books with this kind of vibe" queries.
+
+## Decision Rules
+1. If the query contains **any hard filtering conditions** (completion status, author, word count limits), choose weighted.
+2. If the query primarily describes **atmosphere, style, or feelings** with no hard filters, choose rrf.
+3. If the query mixes both, determine which aspect dominates. If hard constraints are the core need, choose weighted; if they are just mentioned in passing, choose rrf.
+4. Use confidence to express your certainty (0.0~1.0). If unsure, set to 0.5.
+"""
+
+_LLM_ROUTER_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "strategy": {
+            "type": "STRING",
+            "description": "The chosen retrieval strategy. Must be 'weighted' or 'rrf'.",
+            "enum": ["weighted", "rrf"],
+        },
+        "confidence": {
+            "type": "NUMBER",
+            "description": "Confidence level of the routing decision, from 0.0 to 1.0.",
+        },
+        "reasoning": {
+            "type": "STRING",
+            "description": "Brief reasoning for the decision.",
+        },
+    },
+    "required": ["strategy", "confidence", "reasoning"],
+}
+
+
+@functools.lru_cache(maxsize=500)
+def route_query_with_llm(
+    user_query: str,
+    model_id: Optional[str] = None,
+    cache_namespace: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Use the LLM to classify the query intent and decide the fusion strategy.
+
+    Returns a dict with keys:
+        strategy: 'weighted' or 'rrf'
+        confidence: float 0.0-1.0
+        reasoning: str
+        metadata: dict with LLM call metrics
+    """
+    _ = cache_namespace  # included for lru_cache key diversity
+
+    contents = (
+        f"## User's Book Recommendation Request\n\n"
+        f"{user_query}\n\n"
+        f"## Your Task\n\n"
+        f"Analyze the request above and decide whether to use "
+        f"'weighted' (strict tag retriever) or 'rrf' (fuzzy semantic retriever)."
+    )
+
+    max_retries = 3
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            parsed, metadata = _generate_json_from_contents(
+                contents=contents,
+                task_label=f"routing_attempt_{attempt}",
+                system_instruction=_LLM_ROUTER_SYSTEM_PROMPT,
+                response_schema=_LLM_ROUTER_RESPONSE_SCHEMA,
+                model_id=model_id,
+                sampling_temperature=0.1,
+                enforce_rate_limit=True,
+            )
+
+            strategy = str(parsed.get("strategy", "weighted")).strip().lower()
+            if strategy not in ("weighted", "rrf"):
+                print(f"[Router:LLM] invalid strategy '{strategy}', falling back to weighted")
+                strategy = "weighted"
+
+            confidence = float(parsed.get("confidence", 0.5))
+            confidence = max(0.0, min(1.0, confidence))
+            reasoning = str(parsed.get("reasoning", "")).strip()
+
+            print(
+                f"[Router:LLM] decision={strategy} confidence={confidence:.2f} "
+                f"reason={reasoning[:80]}"
+            )
+
+            return {
+                "strategy": strategy,
+                "confidence": confidence,
+                "reasoning": reasoning,
+                "metadata": metadata,
+                "fallback": False,
+            }
+        except Exception as exc:
+            last_error = exc
+            print(f"[Router:LLM] LLM routing attempt {attempt} failed: {exc}")
+            if attempt < max_retries:
+                time.sleep(1.5)
+
+    print(f"[Router:LLM] LLM routing failed after {max_retries} attempts. Falling back to weighted.")
+    return {
+        "strategy": "weighted",
+        "confidence": 0.0,
+        "reasoning": f"LLM routing failed after {max_retries} attempts: {last_error}",
+        "metadata": {"error": str(last_error)},
+        "fallback": True,
+    }
