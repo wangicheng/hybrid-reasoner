@@ -18,6 +18,7 @@ class HybridEngine:
         vs: Optional[VectorStore] = None,
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None,
+        max_tags_per_term: int = 3,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
@@ -30,7 +31,9 @@ class HybridEngine:
             if attribute_weight is not None
             else settings.ATTRIBUTE_WEIGHT
         )
+        self.max_tags_per_term = max_tags_per_term
         self.all_tags_cache: Optional[Tuple[str, ...]] = None
+        self.tag_descriptions_cache: Optional[Dict[str, str]] = None
         self._load_tags_cache()
         if not self.all_tags_cache:
             raise RuntimeError(
@@ -38,7 +41,7 @@ class HybridEngine:
             )
 
         # Keep the tag embedding collection aligned with the curated whitelist.
-        self.vs.sync_tag_collection(self.all_tags_cache)
+        self.vs.sync_tag_collection(self.all_tags_cache, tag_descriptions=self.tag_descriptions_cache)
 
         if not self.vs.collection_exists("novel_tags"):
             raise RuntimeError("Qdrant collection 'novel_tags' is missing.")
@@ -58,11 +61,20 @@ class HybridEngine:
 
         if isinstance(data, list) and data:
             self.all_tags_cache = tuple(str(tag) for tag in data if tag)
-            return
+        else:
+            raise RuntimeError(
+                f"Tag metadata file '{tags_path}' is empty or has an unexpected format."
+            )
 
-        raise RuntimeError(
-            f"Tag metadata file '{tags_path}' is empty or has an unexpected format."
-        )
+        # Also load descriptions for semantic enhancement (Strategy C)
+        desc_path = "data/experiments/tag_template/datasets/tag_descriptions.json"
+        try:
+            with open(desc_path, "r", encoding="utf-8") as f:
+                self.tag_descriptions_cache = json.load(f)
+            print(f"[Engine] Loaded {len(self.tag_descriptions_cache)} tag descriptions.")
+        except Exception as exc:
+            print(f"[Engine] Warning: Failed to load tag descriptions from '{desc_path}': {exc}")
+            self.tag_descriptions_cache = None
 
     @staticmethod
     def _criteria_params(criteria: Any) -> Dict[str, Any]:
@@ -104,12 +116,15 @@ class HybridEngine:
             deduped.append(normalized)
         return deduped
 
-    @staticmethod
     def _extract_recall_tags(
+        self,
         tag_mapping_weights: List[Dict[str, float]],
         min_score: float = 0.7,
-        max_tags_per_term: int = 3,
+        max_tags_per_term: Optional[int] = None,
     ) -> List[str]:
+        if max_tags_per_term is None:
+            max_tags_per_term = self.max_tags_per_term
+
         recall_tags: List[str] = []
         seen = set()
 
@@ -241,7 +256,6 @@ class HybridEngine:
                     ),
                 }
             )
-
         if has_tag_scoring:
             total_score = (
                 semantic_score * self.semantic_weight
@@ -531,10 +545,13 @@ class HybridEngine:
             ],
             "search_terms": parse_result.search_terms,
             "generated_keywords": parse_result.generated_keywords,
-            "tag_intent": parse_result.tag_intent.model_dump(),
+            "tag_intent": {
+                "positive_terms": list(parse_result.tag_intent.positive_terms),
+                "negative_terms": negative_tag_terms,
+            },
             "hypothetical_intro": parse_result.hypothetical_intro,
             "related_books": related_books,
-            "reference_tags": [],
+            "reference_tags": recall_tags if 'recall_tags' in locals() else [],
             "parse_metadata": parse_result.parse_metadata,
             "query_vector": query_vector,
             "results": final_results,

@@ -106,22 +106,27 @@ class RunGenerator:
         semantic_weight: float = 0.3,
         attribute_weight: float = 0.7,
         run_suffix: str = "",
+        engine_class: Optional[type] = None,
+        engine_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
+        resolved_engine_class = engine_class or HybridEngine
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
-            "fixed retrieval path, "
+            f"engine={resolved_engine_class.__name__}, "
             f"model={normalize_model_id(self.model_id)}, "
             f"parser_variant={DEFAULT_PARSER_VARIANT}, "
             f"run_suffix={run_suffix or 'none'})"
         )
 
         vs = VectorStore(collection_name="novels")
-        engine = HybridEngine(
+        actual_engine_kwargs = engine_kwargs or {}
+        engine = resolved_engine_class(
             db=self.db,
             vs=vs,
             semantic_weight=semantic_weight,
             attribute_weight=attribute_weight,
+            **actual_engine_kwargs
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -197,6 +202,8 @@ class RunGenerator:
                             "execution_metadata": execution_metadata,
                             "parse_metadata": parse_metadata,
                             "parsed_criteria": parsed_criteria,
+                            "tag_intent": response.get("tag_intent"),
+                            "reference_tags": response.get("reference_tags", []),
                             "results": extracted_results,
                         }
                     )
@@ -255,10 +262,33 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
+    from src.core.engine_direct_tag import DirectTagEngine, SchemaConstrainedTagEngine
+
     experiments = [
+        # {
+        #     "name": "gemma4_hybrid_mapping_1",
+        #     "model_id": "gemma-4-31b-it",
+        #     "engine_kwargs": {"max_tags_per_term": 1},
+        # },
+        # {
+        #     "name": "gemma4_hybrid_mapping_2",
+        #     "model_id": "gemma-4-31b-it",
+        #     "engine_kwargs": {"max_tags_per_term": 2},
+        # },
+        # {
+        #     "name": "gemma4_hybrid_mapping_3",
+        #     "model_id": "gemma-4-31b-it",
+        #     "engine_kwargs": {"max_tags_per_term": 3},
+        # },
+        # {
+        #     "name": "gemma4_direct_generation",
+        #     "model_id": "gemma-4-31b-it",
+        #     "engine_class": DirectTagEngine,
+        # },
         {
-            "name": "gemma4_default_parser",
+            "name": "gemma4_schema_constrained",
             "model_id": "gemma-4-31b-it",
+            "engine_class": SchemaConstrainedTagEngine,
         },
     ]
 
@@ -285,6 +315,8 @@ if __name__ == "__main__":
                     semantic_weight=0.4,
                     attribute_weight=0.6,
                     run_suffix=run_suffix,
+                    engine_class=exp.get("engine_class"),
+                    engine_kwargs=exp.get("engine_kwargs"),
                 )
             except Exception as exc:
                 print(
