@@ -110,7 +110,7 @@ class RunGenerator:
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
             f"(W1: {semantic_weight}, W2: {attribute_weight}, "
-            "fixed retrieval path, "
+            f"engine=HybridEngine, "
             f"model={normalize_model_id(self.model_id)}, "
             f"parser_variant={DEFAULT_PARSER_VARIANT}, "
             f"run_suffix={run_suffix or 'none'})"
@@ -197,6 +197,8 @@ class RunGenerator:
                             "execution_metadata": execution_metadata,
                             "parse_metadata": parse_metadata,
                             "parsed_criteria": parsed_criteria,
+                            "tag_intent": response.get("tag_intent"),
+                            "reference_tags": response.get("reference_tags", []),
                             "results": extracted_results,
                         }
                     )
