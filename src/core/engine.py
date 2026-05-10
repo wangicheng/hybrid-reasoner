@@ -673,11 +673,53 @@ class HybridEngine:
         )
         return scored_items
 
+    def _tag_matches_blocked(self, blocked_term: str, book_tag: str) -> bool:
+        """檢查 book_tag 是否違反 blocked_term，使用詞邊界感知的匹配。
+        
+        匹配優先順序:
+        1. 精確匹配 (case-insensitive)
+        2. 子字符串匹配 (僅在完整詞邊界上)
+        
+        詞邊界包括: 開始/結束位置、空格、連字符、下劃線
+        """
+        blocked = str(blocked_term).strip()
+        tag = str(book_tag).strip()
+        
+        if not blocked or not tag:
+            return False
+        
+        blocked_lower = blocked.lower()
+        tag_lower = tag.lower()
+        
+        # 1. 精確匹配 (首選)
+        if blocked_lower == tag_lower:
+            return True
+        
+        # 2. 子字符串匹配 (詞邊界感知)
+        if blocked_lower in tag_lower:
+            idx = tag_lower.find(blocked_lower)
+            if idx < 0:
+                return False
+            
+            # 檢查左邊界: 必須在開始或分隔符後
+            if idx > 0 and tag_lower[idx - 1] not in ' -_/\\，。':
+                return False
+            
+            # 檢查右邊界: 必須在結束或分隔符前
+            end_idx = idx + len(blocked_lower)
+            if end_idx < len(tag_lower) and tag_lower[end_idx] not in ' -_/\\，。':
+                return False
+            
+            return True
+        
+        return False
+
     def _post_filter(
         self,
         scored_items: List[Dict[str, Any]],
         criteria_list: List[Any],
         negative_tag_terms: List[str],
+        required_tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         filtered: List[Dict[str, Any]] = []
 
@@ -701,13 +743,23 @@ class HybridEngine:
             excluded = False
             book_tags = self._normalize_tags(item.get("tags", []))
 
-            for negative_term in negative_tag_terms:
-                if any(
-                    negative_term in book_tag or book_tag in negative_term
-                    for book_tag in book_tags
-                ):
-                    excluded = True
-                    break
+            # Check required_tags: book must contain ALL required tags
+            if not excluded and required_tags:
+                for req_tag in required_tags:
+                    if not any(req_tag == tag for tag in book_tags):
+                        excluded = True
+                        break
+
+            # Check negative_tags (blocked tags) using improved matching
+            if not excluded and negative_tag_terms:
+                for negative_term in negative_tag_terms:
+                    # Use improved boundary-aware matching
+                    if any(
+                        self._tag_matches_blocked(negative_term, book_tag)
+                        for book_tag in book_tags
+                    ):
+                        excluded = True
+                        break
 
             if not excluded and status_filter:
                 item_status = self._normalize_status(item.get("publish_status", ""))
@@ -1108,10 +1160,13 @@ class HybridEngine:
                 self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
 
             scored_items.sort(key=lambda result: result["score"], reverse=True)
+            # Extract required_tags from positive semantic criteria
+            required_tags = list(parse_result.tag_intent.positive_terms) if hasattr(parse_result, 'tag_intent') else []
             scored_items = self._post_filter(
                 scored_items,
                 parse_result.criteria,
                 negative_tag_terms,
+                required_tags=required_tags,
             )
             scored_items.sort(key=lambda result: result["score"], reverse=True)
             
