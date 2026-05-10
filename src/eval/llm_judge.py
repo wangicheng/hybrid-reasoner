@@ -31,7 +31,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 load_dotenv()
 
-JUDGE_MODELS = ["gemma-3-27b-it", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
+JUDGE_MODELS = ["gemma-4-31b-it"]
 ANNOTATION_COLUMNS = [
     "Query ID",
     "Query",

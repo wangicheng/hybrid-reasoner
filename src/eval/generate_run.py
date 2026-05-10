@@ -29,10 +29,15 @@ class RunGenerator:
         self,
         k_per_engine: int = 10,
         model_id: Optional[str] = None,
+        rerank: bool = False,
     ) -> None:
         self.k = k_per_engine
         self.model_id = model_id
         self.db = Database()
+        self.rerank = rerank
+        if rerank:
+            from src.eval.gemma4_reranking_experiment import PermSCReranker
+            self.reranker = PermSCReranker()
 
     async def _search_once(
         self,
@@ -42,7 +47,7 @@ class RunGenerator:
     ) -> Dict[str, Any]:
         return await engine.search(
             query,
-            limit=self.k,
+            limit=self.k if not self.rerank else 100,
             model_id=self.model_id,
             explain=False,
             cache_namespace=cache_namespace,
@@ -168,25 +173,58 @@ class RunGenerator:
                     parse_metadata = response.get("parse_metadata", {})
                     extracted_results = []
 
-                    for rank, res in enumerate(results):
-                        item = res.get("item", {})
-                        b_id = str(item.get("id", "")).strip()
-                        if not b_id:
-                            continue
-
-                        author_name = item.get("author") or item.get("user", {}).get("name", "")
-                        extracted_results.append(
-                            {
+                    if self.rerank:
+                        candidates = []
+                        for rank, res in enumerate(results):
+                            item = res.get("item", {})
+                            b_id = str(item.get("id", "")).strip()
+                            if not b_id:
+                                continue
+                            candidates.append({
                                 "book_id": b_id,
-                                "title": item.get("name", ""),
-                                "author": author_name,
+                                "name": item.get("name", ""),
+                                "author": item.get("author") or item.get("user", {}).get("name", ""),
+                                "tags": item.get("tags", []),
                                 "intro": item.get("intro", ""),
                                 "words_total": item.get("words_total", 0),
                                 "publish_status": item.get("publish_status", ""),
-                                "tags": item.get("tags", []),
+                                "original_rank": rank + 1
+                            })
+                        
+                        print(f"     [Rerank] Reranking {len(candidates)} candidates...")
+                        reranked = asyncio.run(self.reranker.rerank_candidates(query, candidates))
+                        
+                        for rank, res in enumerate(reranked[:self.k]):
+                            extracted_results.append({
+                                "book_id": res["book_id"],
+                                "title": res["name"],
+                                "author": res.get("author", ""),
+                                "intro": res["intro"],
+                                "words_total": res["words_total"],
+                                "publish_status": res["publish_status"],
+                                "tags": res["tags"],
                                 "rank": rank + 1,
-                            }
-                        )
+                            })
+                    else:
+                        for rank, res in enumerate(results):
+                            item = res.get("item", {})
+                            b_id = str(item.get("id", "")).strip()
+                            if not b_id:
+                                continue
+
+                            author_name = item.get("author") or item.get("user", {}).get("name", "")
+                            extracted_results.append(
+                                {
+                                    "book_id": b_id,
+                                    "title": item.get("name", ""),
+                                    "author": author_name,
+                                    "intro": item.get("intro", ""),
+                                    "words_total": item.get("words_total", 0),
+                                    "publish_status": item.get("publish_status", ""),
+                                    "tags": item.get("tags", []),
+                                    "rank": rank + 1,
+                                }
+                            )
 
                     run_data.append(
                         {
@@ -257,8 +295,9 @@ if __name__ == "__main__":
 
     experiments = [
         {
-            "name": "gemma4_default_parser",
+            "name": "gemma4_permsc_rerank",
             "model_id": "gemma-4-31b-it",
+            "rerank": True,
         },
     ]
 
@@ -276,14 +315,15 @@ if __name__ == "__main__":
             generator = RunGenerator(
                 k_per_engine=10,
                 model_id=model_id,
+                rerank=exp.get("rerank", False),
             )
             try:
                 generator.generate_run(
                     queries_config=sample_queries,
                     engine_name=exp["name"],
                     output_dir=output_folder,
-                    semantic_weight=0.4,
-                    attribute_weight=0.6,
+                    semantic_weight=0.3,
+                    attribute_weight=0.7,
                     run_suffix=run_suffix,
                 )
             except Exception as exc:
