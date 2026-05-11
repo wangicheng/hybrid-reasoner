@@ -309,13 +309,18 @@ class VectorStore:
         texts_to_embed: List[str],
         collection_name: str,
     ) -> None:
-        current_tags = self._scroll_collection_tags(collection_name)
-        if (
-            current_tags
-            and len(current_tags) == len(tags)
-            and set(current_tags) == set(tags)
-        ):
-            return
+        # Check if collection exists and has at least the required number of points (fast path)
+        try:
+            if self.collection_exists(collection_name):
+                info = self.client.get_collection(collection_name)
+                if info.points_count >= len(tags):
+                    # We'll still do a deeper check with scroll if we want to be 100% sure,
+                    # but for performance we can just check if tags are a subset.
+                    current_tags = self._scroll_collection_tags(collection_name)
+                    if set(tags).issubset(set(current_tags)):
+                        return
+        except Exception as exc:
+            print(f"[VectorStore] Fast check for '{collection_name}' failed: {exc}")
 
         if self.collection_exists(collection_name):
             print(

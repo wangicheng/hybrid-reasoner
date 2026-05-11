@@ -6,7 +6,7 @@ echo  Hybrid Reasoner - Web Server
 echo ==========================================
 
 REM Activate virtual environment
-call venv\Scripts\activate
+call .venv\Scripts\activate
 
 REM Install dependencies if needed
 echo Checking dependencies...

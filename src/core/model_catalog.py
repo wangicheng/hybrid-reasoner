@@ -8,6 +8,7 @@ DEFAULT_MODEL_ID = "gemma-4-31b-it"
 
 MODEL_OPTIONS: List[Tuple[str, str]] = [
     ("gemma-4-31b-it", "Gemma 4 31B"),
+    ("gemma-3-27b-it", "Gemma 3 27B"),
     ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
     ("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
 ]

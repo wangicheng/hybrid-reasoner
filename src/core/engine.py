@@ -2,12 +2,11 @@ import asyncio
 import json
 import math
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
 
 from src.config import settings
 from src.core.book_matcher import BookMatcher
 from src.core.database import Database
-from src.core.explainer import generate_explanation
 from src.core.llm import parse_query, route_query_with_llm
 from src.core.query_compiler import CompiledQuery, compile_query
 from src.core.vector_store import VectorStore
@@ -1441,6 +1440,7 @@ class HybridEngine:
         model_id: Optional[str] = None,
         explain: bool = True,
         cache_namespace: Optional[str] = None,
+        progress_callback: Optional[Callable[[str, Any], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """HyST v2 Dual-Path Search: Fast Path → Exception Path."""
         if self.all_tags_cache:
@@ -1453,6 +1453,14 @@ class HybridEngine:
         # ── Step 2.5: Query Compiler ──
         exact_neg_terms = self._dedupe_terms(list(parse_result.tag_intent.negative_terms)) if hasattr(parse_result, "tag_intent") else []
         fuzzy_neg_terms = self._dedupe_terms(list(parse_result.tag_intent.fuzzy_negative_terms)) if hasattr(parse_result, "tag_intent") else []
+
+        if progress_callback:
+            await progress_callback("planner", {
+                "search_terms": parse_result.search_terms,
+                "generated_keywords": parse_result.generated_keywords,
+                "positive_terms": list(parse_result.tag_intent.positive_terms) if hasattr(parse_result, "tag_intent") and parse_result.tag_intent else [],
+                "negative_terms": list(parse_result.tag_intent.negative_terms) if hasattr(parse_result, "tag_intent") and parse_result.tag_intent else []
+            })
 
         # Map fuzzy_neg_terms to real tags via Vector Mapping, since Qdrant filter only works with exact tags.
         mapped_fuzzy_neg = []
@@ -1572,6 +1580,11 @@ class HybridEngine:
             active_beta=active_beta,
             recall_tags_override=recall_tags_override,
         )
+        if progress_callback:
+            await progress_callback("retrieval", {
+                "candidate_count": len(scored_items),
+                "recall_tags": recall_tags if 'recall_tags' in locals() else []
+            })
         scored_items = self._post_filter(scored_items, hard_constraint_dict)
         scored_items.sort(key=lambda r: r["score"], reverse=True)
 
@@ -1702,6 +1715,11 @@ class HybridEngine:
                 f"total={len(scored_items)}, degradation_level=1"
             )
 
+        if progress_callback:
+            await progress_callback("post_filter", {
+                "filtered_count": len(scored_items)
+            })
+
         if not scored_items:
             return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": parse_result.tag_intent.model_dump(), "query_vector": query_vector, "results": [], "message": "No matching novels were found.", "engine": "HybridEngine", "related_books": related_books, "reference_tags": [], "parse_metadata": parse_result.parse_metadata, "degradation_level": degradation_level, "system_message": system_message}
 
@@ -1711,18 +1729,16 @@ class HybridEngine:
             reranked = await self._rerank_results(scored_items[:cl], user_query, limit)
             scored_items = reranked + scored_items[cl:]
 
+        if progress_callback:
+            await progress_callback("rerank", {
+                "top_results": [
+                    {"name": r["item"].get("name"), "score": r["score"]} 
+                    for r in scored_items[:3]
+                ]
+            })
+
         final_results = scored_items[:limit]
-        top_n_explain = 3 if explain else 0
-        state = {"gemini_fail_count": 0, "gemini_disabled": False, "gemini_fail_threshold": 3}
-        for i, result in enumerate(final_results):
-            if i >= top_n_explain:
-                result["explanation"] = None; continue
-            item, payload = result["item"], result.get("payload", {})
-            chunks = []
-            if payload.get("content"): chunks.append(f"Retrieved content:\n{payload['content'][:500]}...")
-            elif payload.get("intro"): chunks.append(f"Retrieved intro:\n{payload['intro'][:500]}...")
-            if item.get("intro"): chunks.append(f"Database intro:\n{item['intro']}")
-            result["explanation"] = generate_explanation(query=user_query, book_item=item, context_chunks=chunks, score_breakdown=result["breakdown"], runtime_state=state, model_id=model_id)
+        for result in final_results:
+            result["explanation"] = None
 
         return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": {"positive_terms": list(parse_result.tag_intent.positive_terms), "negative_terms": combined_negative_terms}, "tag_mapping": tag_mapping_info, "hypothetical_intro": parse_result.hypothetical_intro, "related_books": related_books, "reference_tags": recall_tags, "parse_metadata": parse_result.parse_metadata, "query_vector": query_vector, "results": final_results, "engine": "HybridEngine", "degradation_level": degradation_level, "system_message": system_message, "dat_info": dat_info}
-

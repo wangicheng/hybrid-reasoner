@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Any
 import sys
 import os
 
@@ -45,7 +46,62 @@ async def lifespan(app: FastAPI):
         raise
     yield
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(lifespan=lifespan)
+
+# Add CORS middleware to allow requests from Vite dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # For development, we can allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+from fastapi.responses import StreamingResponse
+import json
+import asyncio
+
+@app.get("/api/search/stream")
+async def search_stream(query: str, model_id: str = DEFAULT_MODEL_ID):
+    global engine
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine is still initializing")
+
+    async def event_generator():
+        queue = asyncio.Queue()
+
+        async def on_progress(step: str, data: Any):
+            await queue.put({"event": step, "data": data})
+
+        # Run search in a way that we can capture its progress
+        search_task = asyncio.create_task(engine.search(
+            query,
+            limit=10,
+            model_id=normalize_model_id(model_id),
+            progress_callback=on_progress
+        ))
+
+        while not search_task.done() or not queue.empty():
+            try:
+                # Use a short timeout to keep checking if the task is done
+                item = await asyncio.wait_for(queue.get(), timeout=0.2)
+                yield f"event: {item['event']}\ndata: {json.dumps(item['data'])}\n\n"
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+                break
+
+        if search_task.done():
+            try:
+                result = await search_task
+                yield f"event: complete\ndata: {json.dumps(result)}\n\n"
+            except Exception as e:
+                yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.post("/api/search")
 async def search(request: SearchRequest):
