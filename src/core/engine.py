@@ -1,3 +1,4 @@
+import asyncio
 import json
 import math
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,6 +42,7 @@ class HybridEngine:
         routing_weighted_wa: float = 0.65,
         routing_weighted_bm25: bool = True,
         routing_rrf_bm25: bool = False,
+        rerank: Optional[bool] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
@@ -84,7 +86,11 @@ class HybridEngine:
             if attribute_weight is not None
             else settings.ATTRIBUTE_WEIGHT
         )
+        self.rerank_enabled = rerank if rerank is not None else settings.RERANK_ENABLED
+        self._reranker = None
+        self.max_tags_per_term = 3
         self.all_tags_cache: Optional[Tuple[str, ...]] = None
+        self.tag_descriptions_cache: Optional[Dict[str, str]] = None
         self._load_tags_cache()
         if not self.all_tags_cache:
             raise RuntimeError(
@@ -92,7 +98,7 @@ class HybridEngine:
             )
 
         # Keep the tag embedding collection aligned with the curated whitelist.
-        self.vs.sync_tag_collection(self.all_tags_cache)
+        self.vs.sync_tag_collection(self.all_tags_cache, tag_descriptions=self.tag_descriptions_cache)
 
         if not self.vs.collection_exists("novel_tags"):
             raise RuntimeError("Qdrant collection 'novel_tags' is missing.")
@@ -112,11 +118,20 @@ class HybridEngine:
 
         if isinstance(data, list) and data:
             self.all_tags_cache = tuple(str(tag) for tag in data if tag)
-            return
+        else:
+            raise RuntimeError(
+                f"Tag metadata file '{tags_path}' is empty or has an unexpected format."
+            )
 
-        raise RuntimeError(
-            f"Tag metadata file '{tags_path}' is empty or has an unexpected format."
-        )
+        # Also load descriptions for semantic enhancement (Strategy C)
+        desc_path = "data/tag_descriptions.json"
+        try:
+            with open(desc_path, "r", encoding="utf-8") as f:
+                self.tag_descriptions_cache = json.load(f)
+            print(f"[Engine] Loaded {len(self.tag_descriptions_cache)} tag descriptions.")
+        except Exception as exc:
+            print(f"[Engine] Warning: Failed to load tag descriptions from '{desc_path}': {exc}")
+            self.tag_descriptions_cache = None
 
     @staticmethod
     def _criteria_params(criteria: Any) -> Dict[str, Any]:
@@ -158,12 +173,13 @@ class HybridEngine:
             deduped.append(normalized)
         return deduped
 
-    @staticmethod
     def _extract_recall_tags(
+        self,
         tag_mapping_weights: List[Dict[str, float]],
         min_score: float = 0.7,
-        max_tags_per_term: int = 3,
     ) -> List[str]:
+        max_tags_per_term = self.max_tags_per_term
+
         recall_tags: List[str] = []
         seen = set()
 
@@ -254,7 +270,7 @@ class HybridEngine:
 
             try:
                 mapped = self.vs.search_tags(
-                    f"tag: {query_text}",
+                    f"這部作品的類型偏向{query_text}",
                     limit=1,
                     similarity_threshold=0.7,
                 )
@@ -480,7 +496,6 @@ class HybridEngine:
                     ),
                 }
             )
-
         if has_tag_scoring:
             base_score = (
                 semantic_score * self.semantic_weight
@@ -895,6 +910,53 @@ class HybridEngine:
         print(f"[Router:LLM] {strategy['reason']}")
         return strategy
 
+    def _get_reranker(self):
+        """Lazy-initialise the PermSC reranker on first use."""
+        if self._reranker is None:
+            from src.core.reranker import PermSCReranker
+            self._reranker = PermSCReranker(
+                model_id=settings.RERANK_MODEL_ID,
+                n_permutations=settings.RERANK_PERMUTATIONS,
+            )
+        return self._reranker
+
+    async def _rerank_results(
+        self,
+        scored_items: List[Dict[str, Any]],
+        user_query: str,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Apply PermSC reranking to the post-filtered candidate pool."""
+        reranker = self._get_reranker()
+        candidates = []
+        for rank, result in enumerate(scored_items):
+            item = result["item"]
+            book_id = str(item.get("id", "")).strip()
+            if not book_id:
+                continue
+            candidates.append({
+                "book_id": book_id,
+                "name": item.get("name", ""),
+                "author": item.get("author") or item.get("user", {}).get("name", ""),
+                "tags": item.get("tags", []),
+                "intro": item.get("intro", ""),
+                "words_total": item.get("words_total", 0),
+                "publish_status": item.get("publish_status", ""),
+                "original_rank": rank + 1,
+            })
+
+        print(f"[Reranker] PermSC reranking {len(candidates)} candidates...")
+        reranked = await reranker.rerank(user_query, candidates)
+
+        # Rebuild scored_items in reranked order
+        id_to_result = {str(r["item"].get("id", "")).strip(): r for r in scored_items}
+        reranked_results = []
+        for c in reranked:
+            original = id_to_result.get(c["book_id"])
+            if original:
+                reranked_results.append(original)
+        return reranked_results
+
     async def search(
         self,
         user_query: str,
@@ -1199,6 +1261,17 @@ class HybridEngine:
                 "parse_metadata": parse_result.parse_metadata,
             }
 
+        # --- Optional PermSC Reranking ---
+        if self.rerank_enabled:
+            candidate_limit = settings.RERANK_CANDIDATE_LIMIT
+            # Only rerank the top N candidates to avoid overwhelming the LLM
+            to_rerank = scored_items[:candidate_limit]
+            print(f"[Engine] Limiting rerank pool from {len(scored_items)} to {len(to_rerank)} candidates.")
+            
+            reranked = await self._rerank_results(to_rerank, user_query, limit)
+            # Combine reranked items with the rest of the unranked items
+            scored_items = reranked + scored_items[candidate_limit:]
+
         final_results = scored_items[:limit]
 
         top_n_explain = 3 if explain else 0
@@ -1238,10 +1311,13 @@ class HybridEngine:
             ],
             "search_terms": parse_result.search_terms,
             "generated_keywords": parse_result.generated_keywords,
-            "tag_intent": parse_result.tag_intent.model_dump(),
+            "tag_intent": {
+                "positive_terms": list(parse_result.tag_intent.positive_terms),
+                "negative_terms": negative_tag_terms,
+            },
             "hypothetical_intro": parse_result.hypothetical_intro,
             "related_books": related_books,
-            "reference_tags": [],
+            "reference_tags": recall_tags if 'recall_tags' in locals() else [],
             "parse_metadata": parse_result.parse_metadata,
             "query_vector": final_query_vector,
             "results": final_results,

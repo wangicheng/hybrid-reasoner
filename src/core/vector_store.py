@@ -228,40 +228,71 @@ class VectorStore:
     def sync_tag_collection(
         self,
         tags: Any,
+        tag_descriptions: Optional[Dict[str, str]] = None,
         collection_name: str = "novel_tags",
     ) -> None:
         normalized_tags = self._normalize_tags(tags)
         if not normalized_tags:
             raise ValueError("Tag collection sync requires at least one tag.")
 
+        # 1. Sync Symmetric Collection (novel_tags)
+        self._sync_single_tag_collection(
+            normalized_tags,
+            [f"這部作品的類型偏向{tag}" for tag in normalized_tags],
+            collection_name
+        )
+
+        # 2. Sync Asymmetric/Description Collection (novel_tags_desc)
+        if tag_descriptions:
+            desc_texts = []
+            valid_desc_tags = []
+            for tag in normalized_tags:
+                desc = tag_descriptions.get(tag)
+                if desc:
+                    desc_texts.append(f"{tag}：{desc}")
+                    valid_desc_tags.append(tag)
+            
+            if desc_texts:
+                self._sync_single_tag_collection(
+                    valid_desc_tags,
+                    desc_texts,
+                    f"{collection_name}_desc"
+                )
+
+    def _sync_single_tag_collection(
+        self,
+        tags: List[str],
+        texts_to_embed: List[str],
+        collection_name: str,
+    ) -> None:
         current_tags = self._scroll_collection_tags(collection_name)
         if (
             current_tags
-            and len(current_tags) == len(normalized_tags)
-            and set(current_tags) == set(normalized_tags)
+            and len(current_tags) == len(tags)
+            and set(current_tags) == set(tags)
         ):
             return
 
         if self.collection_exists(collection_name):
             print(
                 f"[VectorStore] Rebuilding '{collection_name}' with "
-                f"{len(normalized_tags)} allowed tags."
+                f"{len(tags)} allowed tags."
             )
             self.client.delete_collection(collection_name=collection_name)
         else:
             print(
                 f"[VectorStore] Creating '{collection_name}' with "
-                f"{len(normalized_tags)} allowed tags."
+                f"{len(tags)} allowed tags."
             )
 
         self._ensure_named_collection(collection_name)
 
         tag_vectors = self._embed_with_retry(
-            [f"tag: {tag}" for tag in normalized_tags],
-            task_type="RETRIEVAL_QUERY",
+            texts_to_embed,
+            task_type="RETRIEVAL_DOCUMENT",
         )
         points = []
-        for tag, vector in zip(normalized_tags, tag_vectors):
+        for tag, vector in zip(tags, tag_vectors):
             points.append(
                 rest.PointStruct(
                     id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{collection_name}:{tag}")),
@@ -337,7 +368,7 @@ class VectorStore:
                     time.sleep(backoff_seconds)
                     continue
                 raise
-
+        
         raise RuntimeError("Max embed retries exceeded")
 
     def search(
@@ -419,18 +450,53 @@ class VectorStore:
             raise RuntimeError("Qdrant collection 'novel_tags' is missing.")
 
         query_vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
-        response = self.client.query_points(
+        
+        has_desc_collection = self.collection_exists("novel_tags_desc")
+        
+        # 1. Search Symmetric
+        sym_scores: Dict[str, float] = {}
+        response_sym = self.client.query_points(
             collection_name="novel_tags",
             query=query_vector,
             limit=limit,
             score_threshold=similarity_threshold,
             with_payload=True,
         )
-
-        results = []
-        for point in response.points:
+        for point in response_sym.points:
             if point.payload and "tag" in point.payload:
-                results.append({"tag": point.payload["tag"], "score": point.score})
+                sym_scores[point.payload["tag"]] = float(point.score)
+
+        # 2. Search Description
+        desc_scores: Dict[str, float] = {}
+        if has_desc_collection:
+            response_desc = self.client.query_points(
+                collection_name="novel_tags_desc",
+                query=query_vector,
+                limit=limit,
+                score_threshold=similarity_threshold,
+                with_payload=True,
+            )
+            for point in response_desc.points:
+                if point.payload and "tag" in point.payload:
+                    desc_scores[point.payload["tag"]] = float(point.score)
+
+        # 3. Hybrid Fusion
+        results = []
+        all_tags = set(sym_scores.keys()) | set(desc_scores.keys())
+        for tag in all_tags:
+            s_sym = sym_scores.get(tag, 0.0)
+            s_desc = desc_scores.get(tag, 0.0)
+            
+            if has_desc_collection:
+                combined_score = (s_sym * 0.7) + (s_desc * 0.3)
+            else:
+                combined_score = s_sym
+            
+            if combined_score >= similarity_threshold:
+                results.append({"tag": tag, "score": combined_score})
+        
+        # Sort by score
+        results.sort(key=lambda x: x["score"], reverse=True)
         return results
 
     def batch_map_tags(
@@ -446,32 +512,70 @@ class VectorStore:
             raise RuntimeError("Qdrant collection 'novel_tags' is missing.")
 
         try:
+            # We use the same query vector for both searches as it's the same template: 
+            # "這部作品的類型偏向{tag}"
             query_vectors = self._embed_with_retry(
-                [f"tag: {tag}" for tag in target_tags],
+                [f"這部作品的類型偏向{tag}" for tag in target_tags],
                 task_type="RETRIEVAL_QUERY",
             )
+            
+            has_desc_collection = self.collection_exists("novel_tags_desc")
             results: List[Dict[str, float]] = []
+            
             for vector in query_vectors:
-                mapping: Dict[str, float] = {}
-                response = self.client.query_points(
+                # 1. Get scores from Symmetric collection (weight 0.7)
+                sym_scores: Dict[str, float] = {}
+                response_sym = self.client.query_points(
                     collection_name="novel_tags",
                     query=vector,
                     limit=limit_per_tag,
                     score_threshold=similarity_threshold,
                     with_payload=True,
                 )
-                for point in response.points:
-                    if not point.payload or "tag" not in point.payload:
-                        continue
-                    tag_name = point.payload["tag"]
-                    score = float(point.score)
-                    if tag_name not in mapping or score > mapping[tag_name]:
-                        mapping[tag_name] = score
+                for point in response_sym.points:
+                    if point.payload and "tag" in point.payload:
+                        sym_scores[point.payload["tag"]] = float(point.score)
+
+                # 2. Get scores from Asymmetric/Description collection (weight 0.3)
+                desc_scores: Dict[str, float] = {}
+                if has_desc_collection:
+                    response_desc = self.client.query_points(
+                        collection_name="novel_tags_desc",
+                        query=vector,
+                        limit=limit_per_tag,
+                        score_threshold=similarity_threshold,
+                        with_payload=True,
+                    )
+                    for point in response_desc.points:
+                        if point.payload and "tag" in point.payload:
+                            desc_scores[point.payload["tag"]] = float(point.score)
+
+                # 3. Hybrid Weight Fusion
+                # Formula: Score = (Symmetric Score * 0.7) + (Description Score * 0.3)
+                mapping: Dict[str, float] = {}
+                all_tags = set(sym_scores.keys()) | set(desc_scores.keys())
+                
+                for tag in all_tags:
+                    s_sym = sym_scores.get(tag, 0.0)
+                    s_desc = desc_scores.get(tag, 0.0)
+                    
+                    if has_desc_collection:
+                        # If we have both, apply 0.7 / 0.3
+                        # If one is missing from a search result, we treat it as 0.0 (or we could use sym only)
+                        # The report implies both contribute.
+                        combined_score = (s_sym * 0.7) + (s_desc * 0.3)
+                    else:
+                        combined_score = s_sym
+                    
+                    if combined_score >= similarity_threshold:
+                        mapping[tag] = combined_score
+                
                 results.append(mapping)
             return results
         except Exception as exc:
             print(f"[VectorStore] Batch tag mapping failed: {exc}")
             return []
+
 
     def add_items(self, items: List[Dict[str, Any]]) -> None:
         import time

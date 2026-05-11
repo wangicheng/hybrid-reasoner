@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     TOP_K_BM25: int = 1000  # Default to fetching many to merge
     BM25_WEIGHT: float = 0.3  # Legacy setting retained for compatibility
 
+    # Reranker (PermSC Listwise Reranking)
+    RERANK_ENABLED: bool = True
+    RERANK_MODEL_ID: str = "gemma-4-31b-it"
+    RERANK_CANDIDATE_LIMIT: int = 100
+    RERANK_PERMUTATIONS: int = 3
+
     class Config:
         env_file = ".env"
         extra = "ignore"
