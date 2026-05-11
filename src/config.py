@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     
     # Dual-Track Fusion Weights (語意-屬性雙軌融合權重)
     # w1 = SEMANTIC_WEIGHT, w2 = ATTRIBUTE_WEIGHT
-    SEMANTIC_WEIGHT: float = 0.3
-    ATTRIBUTE_WEIGHT: float = 0.7
+    SEMANTIC_WEIGHT: float = 0.4
+    ATTRIBUTE_WEIGHT: float = 0.6
 
     class Config:
         env_file = ".env"

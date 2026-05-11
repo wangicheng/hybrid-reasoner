@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>專題海報規劃 - 基於 RAG 與混合檢索的輕小說查詢系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        /* 模擬 A0 直式比例 (1 : 1.414) */
+        .poster-container {
+            width: 841px;
+            height: 1189px;
+            background: white;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid #ddd;
+        }
+
+        .header-bg {
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+        }
+
+        .accent-border {
+            border-left: 6px solid #3b82f6;
+        }
+
+        .chart-placeholder {
+            background-color: #f8fafc;
+            border: 1px dashed #cbd5e1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: #64748b;
+        }
+
+        .formula {
+            background: #f1f5f9;
+            font-family: "Times New Roman", serif;
+            padding: 8px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="poster-container">
+        <!-- 頂部標題 -->
+        <header class="header-bg text-white p-10 text-center">
+            <h1 class="text-4xl font-bold mb-2">基於 RAG 與混合檢索的輕小說查詢系統</h1>
+            <p class="text-xl opacity-90">建立自然語言意圖與結構化標籤之穩定映射機制</p>
+            <div class="flex justify-center gap-10 mt-6 text-sm">
+                <span>指導老師：XXX 教授</span>
+                <span>學生：您的姓名</span>
+                <span>所屬單位：國立 XX 大學 XX 系</span>
+            </div>
+        </header>
+
+        <main class="flex-1 grid grid-cols-3 gap-6 p-8">
+
+            <!-- 左側欄：背景與處理流程 -->
+            <div class="space-y-6">
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">一、研究動機與挑戰</h2>
+                    <div class="bg-blue-50 p-4 rounded text-sm leading-relaxed">
+                        <ul class="list-disc ml-4 space-y-1">
+                            <li><strong>結構僵硬：</strong> 現有系統依賴手動勾選，無法處理口語化查詢。</li>
+                            <li><strong>標籤幻覺：</strong> 純 LLM 生成標籤常產生資料庫不存在的內容。</li>
+                            <li><strong>語義偏移：</strong> 字面接近但實質分類不同。</li>
+                        </ul>
+                    </div>
+                </section>
+
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">二、資料處理與索引</h2>
+                    <p class="text-xs mb-2">採用雙軌特徵抽取：向量 (VS) 與屬性 (DB)。</p>
+                    <div class="chart-placeholder h-48 text-center text-xs p-4">
+                        [ 資料 ETL 流程圖 ]<br>
+                        標準化 → 標籤抽取 → 語意嵌入<br>
+                        (對齊同義與別名)
+                    </div>
+                </section>
+
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">三、語義映射模組</h2>
+                    <p class="text-xs mb-2">利用 MaxSim 避開「語意稀釋」：</p>
+                    <div class="formula text-xs text-center">
+                        Score = avg( max( similarity ) )
+                    </div>
+                    <p class="text-xs mt-2 italic text-gray-500">※ 針對各目標面向選取最高分標籤後取平均，確保檢索穩定性。</p>
+                </section>
+            </div>
+
+            <!-- 中間欄：核心架構與並行解析 -->
+            <div class="space-y-6">
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">四、核心架構：平行查詢解析 (SoT)</h2>
+                    <p class="text-xs mb-3 text-gray-600">打破單體式 JSON 的侷限，將任務拆分為獨立分支。</p>
+                    <div class="chart-placeholder h-[450px] flex-col p-4 space-y-4">
+                        <div class="w-full bg-blue-100 p-2 text-center rounded">原始查詢請求</div>
+                        <div class="flex justify-between w-full gap-2">
+                            <div
+                                class="flex-1 bg-green-100 p-2 text-center text-[10px] rounded border border-green-300">
+                                語意理解 (Marked)</div>
+                            <div
+                                class="flex-1 bg-yellow-100 p-2 text-center text-[10px] rounded border border-yellow-300">
+                                標籤投影 (Taglite)</div>
+                            <div class="flex-1 bg-red-100 p-2 text-center text-[10px] rounded border border-red-300">
+                                結構過濾 (4-Key JSON)</div>
+                        </div>
+                        <div class="w-full bg-purple-100 p-2 text-center rounded">決定性合併 (Merge)</div>
+                        <p class="text-[10px] text-gray-400">系統效益：徹底解決格式破碎，結構化解析率提升至 100%</p>
+                    </div>
+                </section>
+
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">五、差異化 Response Schema</h2>
+                    <table class="w-full text-[10px] border-collapse">
+                        <thead>
+                            <tr class="bg-gray-100">
+                                <th class="border p-1">分支類型</th>
+                                <th class="border p-1">優化方案</th>
+                                <th class="border p-1">效果</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="border p-1">語義理解</td>
+                                <td class="border p-1">標記式 (Marked)</td>
+                                <td class="border p-1">重試率大幅下降</td>
+                            </tr>
+                            <tr>
+                                <td class="border p-1">標籤投影</td>
+                                <td class="border p-1">Taglite (精簡)</td>
+                                <td class="border p-1">消除長尾延遲</td>
+                            </tr>
+                            <tr>
+                                <td class="border p-1">結構過濾</td>
+                                <td class="border p-1">固定 Schema</td>
+                                <td class="border p-1">100% 解析成功</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </section>
+            </div>
+
+            <!-- 右側欄：實驗數據與結論 -->
+            <div class="space-y-6">
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">六、實驗成果</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <p class="text-xs font-bold text-gray-700">1. 標籤映射精度 (Top-3 Accuracy)</p>
+                            <div class="chart-placeholder h-32 text-xs">
+                                [ CMC 累積曲線圖 ]<br>
+                                強化策略 (95.83%) > 對稱模板 (93.63%)
+                            </div>
+                        </div>
+                        <div>
+                            <p class="text-xs font-bold text-gray-700">2. 系統可擴展性 (Hybrid vs LLM)</p>
+                            <div class="chart-placeholder h-32 text-xs">
+                                [ 數據規模與品質趨勢圖 ]<br>
+                                Hybrid 穩定上升至 2.35；純 LLM 於 2000 本崩潰
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">七、研究結論</h2>
+                    <div class="bg-gray-50 p-4 rounded text-[11px] space-y-2 border">
+                        <p><strong>1. 高穩定性：</strong> 透過 SoT 架構將原本不可控的解析流程重構為可觀測的多分支架構。</p>
+                        <p><strong>2. 語境強化：</strong> 標籤模板嵌入 (Template) 顯著解決了俚語映射（如 JK → 女高中生）問題。</p>
+                        <p><strong>3. 突破物理極限：</strong> Hybrid 引擎成功解決純 LLM 掃描面臨的「上下文之牆」，具備線性擴展能力。</p>
+                    </div>
+                </section>
+
+                <section>
+                    <h2 class="text-xl font-bold text-blue-800 mb-2 accent-border pl-3">八、參考文獻</h2>
+                    <ul class="text-[8px] text-gray-400 space-y-1">
+                        <li>Gao, L. et al. (2022). Precise zero-shot dense retrieval.</li>
+                        <li>Ning, X. et al. (2023). Skeleton-of-Thought (SoT).</li>
+                        <li>Boudourides, M. (2026). Structural Hallucination in LLMs.</li>
+                    </ul>
+                </section>
+
+                <div class="flex justify-between items-end pt-4">
+                    <div class="text-[10px] text-gray-400 font-mono">系統穩定性提升 +380% (SDK 解析率)</div>
+                    <div class="w-16 h-16 bg-gray-200 chart-placeholder text-[10px]">QR Code</div>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- 底部裝飾條 -->
+        <footer class="h-4 header-bg"></footer>
+    </div>
+
+</body>
+
+</html>

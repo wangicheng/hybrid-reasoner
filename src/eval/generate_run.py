@@ -108,8 +108,8 @@ class RunGenerator:
         queries_config: List[Dict[str, Any]],
         engine_name: str,
         output_dir: Path,
-        semantic_weight: float = 0.3,
-        attribute_weight: float = 0.7,
+        semantic_weight: float = 0.4,
+        attribute_weight: float = 0.6,
         run_suffix: str = "",
     ) -> None:
         print(
@@ -322,8 +322,8 @@ if __name__ == "__main__":
                     queries_config=sample_queries,
                     engine_name=exp["name"],
                     output_dir=output_folder,
-                    semantic_weight=0.3,
-                    attribute_weight=0.7,
+                    semantic_weight=0.4,
+                    attribute_weight=0.6,
                     run_suffix=run_suffix,
                 )
             except Exception as exc:
