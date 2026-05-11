@@ -29,9 +29,11 @@ class RunGenerator:
         self,
         k_per_engine: int = 10,
         model_id: Optional[str] = None,
+        rerank: Optional[bool] = None,
     ) -> None:
         self.k = k_per_engine
         self.model_id = model_id
+        self.rerank = rerank
         self.db = Database()
 
     async def _search_once(
@@ -122,6 +124,7 @@ class RunGenerator:
             vs=vs,
             semantic_weight=semantic_weight,
             attribute_weight=attribute_weight,
+            rerank=self.rerank,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -276,6 +279,7 @@ if __name__ == "__main__":
             generator = RunGenerator(
                 k_per_engine=10,
                 model_id=model_id,
+                rerank=exp.get("rerank", None),
             )
             try:
                 generator.generate_run(

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,6 +19,7 @@ class HybridEngine:
         vs: Optional[VectorStore] = None,
         semantic_weight: Optional[float] = None,
         attribute_weight: Optional[float] = None,
+        rerank: Optional[bool] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
@@ -30,6 +32,8 @@ class HybridEngine:
             if attribute_weight is not None
             else settings.ATTRIBUTE_WEIGHT
         )
+        self.rerank_enabled = rerank if rerank is not None else settings.RERANK_ENABLED
+        self._reranker = None
         self.all_tags_cache: Optional[Tuple[str, ...]] = None
         self._load_tags_cache()
         if not self.all_tags_cache:
@@ -330,6 +334,53 @@ class HybridEngine:
         )
         return filtered
 
+    def _get_reranker(self):
+        """Lazy-initialise the PermSC reranker on first use."""
+        if self._reranker is None:
+            from src.core.reranker import PermSCReranker
+            self._reranker = PermSCReranker(
+                model_id=settings.RERANK_MODEL_ID,
+                n_permutations=settings.RERANK_PERMUTATIONS,
+            )
+        return self._reranker
+
+    async def _rerank_results(
+        self,
+        scored_items: List[Dict[str, Any]],
+        user_query: str,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Apply PermSC reranking to the post-filtered candidate pool."""
+        reranker = self._get_reranker()
+        candidates = []
+        for rank, result in enumerate(scored_items):
+            item = result["item"]
+            book_id = str(item.get("id", "")).strip()
+            if not book_id:
+                continue
+            candidates.append({
+                "book_id": book_id,
+                "name": item.get("name", ""),
+                "author": item.get("author") or item.get("user", {}).get("name", ""),
+                "tags": item.get("tags", []),
+                "intro": item.get("intro", ""),
+                "words_total": item.get("words_total", 0),
+                "publish_status": item.get("publish_status", ""),
+                "original_rank": rank + 1,
+            })
+
+        print(f"[Reranker] PermSC reranking {len(candidates)} candidates...")
+        reranked = await reranker.rerank(user_query, candidates)
+
+        # Rebuild scored_items in reranked order
+        id_to_result = {str(r["item"].get("id", "")).strip(): r for r in scored_items}
+        reranked_results = []
+        for c in reranked:
+            original = id_to_result.get(c["book_id"])
+            if original:
+                reranked_results.append(original)
+        return reranked_results
+
     async def search(
         self,
         user_query: str,
@@ -491,6 +542,17 @@ class HybridEngine:
                 "reference_tags": [],
                 "parse_metadata": parse_result.parse_metadata,
             }
+
+        # --- Optional PermSC Reranking ---
+        if self.rerank_enabled:
+            candidate_limit = settings.RERANK_CANDIDATE_LIMIT
+            # Only rerank the top N candidates to avoid overwhelming the LLM
+            to_rerank = scored_items[:candidate_limit]
+            print(f"[Engine] Limiting rerank pool from {len(scored_items)} to {len(to_rerank)} candidates.")
+            
+            reranked = await self._rerank_results(to_rerank, user_query, limit)
+            # Combine reranked items with the rest of the unranked items
+            scored_items = reranked + scored_items[candidate_limit:]
 
         final_results = scored_items[:limit]
 

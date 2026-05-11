@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     SEMANTIC_WEIGHT: float = 0.3
     ATTRIBUTE_WEIGHT: float = 0.7
 
+    # Reranker (PermSC Listwise Reranking)
+    RERANK_ENABLED: bool = True
+    RERANK_MODEL_ID: str = "gemma-4-31b-it"
+    RERANK_CANDIDATE_LIMIT: int = 100
+    RERANK_PERMUTATIONS: int = 3
+
     class Config:
         env_file = ".env"
         extra = "ignore"
