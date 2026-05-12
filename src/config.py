@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     RERANK_ENABLED: bool = True
     RERANK_MODEL_ID: str = "gemma-4-31b-it"
     RERANK_CANDIDATE_LIMIT: int = 100
-    RERANK_PERMUTATIONS: int = 3
+    RERANK_PERMUTATIONS: int = 5
 
     class Config:
         env_file = ".env"
