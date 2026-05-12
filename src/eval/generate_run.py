@@ -300,9 +300,15 @@ if __name__ == "__main__":
         default=0.3,
         help="Legacy BM25 recall setting retained for compatibility",
     )
+    parser.add_argument(
+        "--queries",
+        type=str,
+        default="data/experiments/queries.json",
+        help="Path to queries JSON file",
+    )
     args = parser.parse_args()
 
-    queries_path = Path("data/experiments/queries.json")
+    queries_path = Path(args.queries)
     if not queries_path.exists():
         print(f"Error: {queries_path} not found!")
         raise SystemExit(1)

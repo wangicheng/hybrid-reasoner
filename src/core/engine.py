@@ -424,10 +424,11 @@ class HybridEngine:
             constraints["soft_words_max"] = constraints.pop("words_max", None)
             constraints["soft_status_filter"] = constraints.pop("status_filter", None)
             constraints["soft_author_filter"] = constraints.pop("author_filter", None)
-            # Drop the strict required_tags constraint so we can fall back to semantic/partial matches
+            # Transfer required_tags to soft_required_tags for Python memory Tag Rescue Bonus
+            constraints["soft_required_tags"] = constraints.pop("required_tags", [])
             constraints["required_tags"] = []
             similarity_threshold = 0.4
-            print(f"[Engine] Degradation Attempt 3 (終極放寬): Author/Status/Words soft-matched, required_tags dropped, threshold=0.4")
+            print(f"[Engine] Degradation Attempt 3 (終極放寬): Author/Status/Words/Tags soft-matched (Tag Rescue active), threshold=0.4")
             
         else:
             # Fallback
@@ -443,6 +444,7 @@ class HybridEngine:
         tag_terms_list: List[str],
         tag_mapping_weights: List[Dict[str, float]],
         bm25_metric: float = 0.0,
+        iteration_constraints: Optional[Dict[str, Any]] = None,
     ) -> Tuple[float, List[Dict[str, Any]]]:
         breakdown: List[Dict[str, Any]] = []
 
@@ -560,6 +562,35 @@ class HybridEngine:
                 "reason": fusion_reason,
             }
         )
+
+        # ── Tag Rescue Bonus (Memory Softening) ──
+        tag_rescue_bonus = 0.0
+        rescue_details = []
+        if iteration_constraints and "soft_required_tags" in iteration_constraints:
+            soft_tags = iteration_constraints["soft_required_tags"]
+            # Gate on semantic relevance: prevent junk/tag-stuffed items from getting rescue bonus
+            if soft_tags and semantic_score >= 0.50:
+                book_tags = self._normalize_tags(item.get("tags", []))
+                for stag in soft_tags:
+                    if any(stag in t or t in stag for t in book_tags):
+                        tag_rescue_bonus += 0.4
+                        rescue_details.append(stag)
+
+        if tag_rescue_bonus > 0:
+            total_score += tag_rescue_bonus
+            breakdown.append(
+                {
+                    "criteria": "tag_rescue_bonus",
+                    "label": "Tag Rescue Bonus",
+                    "raw_score": tag_rescue_bonus,
+                    "weighted_score": tag_rescue_bonus,
+                    "is_filter": False,
+                    "reason": f"soft-matched required tags: {', '.join(rescue_details)} (+{tag_rescue_bonus:.2f})",
+                }
+            )
+
+        # ── Score Capping ──
+        total_score = min(total_score, 1.0)
 
         return total_score, breakdown
 
@@ -1082,7 +1113,7 @@ class HybridEngine:
                     f"neg_tags={iteration_constraints.get('negative_tag_terms', [])}"
                 )
 
-            retrieval_limit = 10000
+            retrieval_limit = 300
             candidates_map: Dict[str, Dict[str, Any]] = {}
             vector_score_map: Dict[str, float] = {}
             payload_map: Dict[str, Dict[str, Any]] = {}
@@ -1211,6 +1242,7 @@ class HybridEngine:
                         tag_terms_list,
                         tag_mapping_weights,
                         bm25_metric=bm25_metric,
+                        iteration_constraints=iteration_constraints,
                     )
                     scored_items.append(
                         {
@@ -1239,18 +1271,27 @@ class HybridEngine:
             # usually large unless filtered. We must check the *quality* of the results.
             # A result is "good" if it has high semantic similarity or matched some tags.
             final_results = scored_items
-            good_results_count = 0
+            excellent_results_count = 0
+            acceptable_results_count = 0
             for r in final_results:
-                if r.get("vector_score", 0) >= 0.55:
-                    good_results_count += 1
-                elif any(b.get("criteria") == "attribute_track" and b.get("raw_score", 0) > 0 for b in r.get("breakdown", [])):
-                    good_results_count += 1
+                v_score = r.get("vector_score", 0)
+                if v_score >= 0.70:
+                    excellent_results_count += 1
+                elif v_score >= 0.55 or any(b.get("criteria") == "attribute_track" and b.get("raw_score", 0) > 0 for b in r.get("breakdown", [])):
+                    acceptable_results_count += 1
 
-            if good_results_count >= 5:
-                print(f"[Engine] Got {good_results_count} good results on attempt {attempt}, stopping degradation.")
-                break
+            total_good = excellent_results_count + acceptable_results_count
+
+            # Quality-aware early stopping: require excellent semantic hits to stop early
+            if attempt < 3:
+                if excellent_results_count >= 3:
+                    print(f"[Engine] Got {excellent_results_count} EXCELLENT results on attempt {attempt}, stopping degradation early.")
+                    break
+                else:
+                    print(f"[Engine] Attempt {attempt} yielded {excellent_results_count} excellent and {acceptable_results_count} acceptable results. Forcing deeper degradation...")
             else:
-                print(f"[Engine] Only got {good_results_count} good results on attempt {attempt}, trying next degradation level...")
+                if total_good > 0:
+                    print(f"[Engine] Final attempt 3 completed with {total_good} viable candidates.")
 
         # ── Post-degradation result finalization ──
         scored_items = final_results

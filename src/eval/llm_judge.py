@@ -59,8 +59,9 @@ Your task is to judge how well a recommended book matches a user's search query.
 ### Important Guidelines:
 1. Focus on the user's intent, not just keyword overlap.
 2. Ignore hard constraints like status or word count. Only judge semantic and genre relevance.
-3. Books with empty or missing information should be scored 0.
-4. Provide brief reasoning in Traditional Chinese.
+3. Latent Semantic Recognition: Web novel tags are often incomplete. If the Intro clearly conveys the desired theme, core concepts, or atmosphere requested by the query, grant a high score (Score 2 or 3) even if explicit genre tags are missing.
+4. Books with empty or missing information should be scored 0.
+5. Provide brief reasoning in Traditional Chinese.
 
 ### Output Format:
 Return a JSON object with exactly two fields:
