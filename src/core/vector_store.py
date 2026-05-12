@@ -84,24 +84,32 @@ class VectorStore:
     ) -> Optional[rest.Filter]:
         """Build a Qdrant metadata filter from extracted hard constraints.
 
-        Translates the dict produced by ``HybridEngine._extract_hard_constraints()``
-        into a ``rest.Filter`` that Qdrant can apply server-side during ANN search.
+        HyST Architecture: Hard constraints are applied as MANDATORY pre-filters
+        at the Qdrant level. This physically eliminates non-qualifying books
+        before they enter the scoring pipeline — filtering is completely
+        separated from scoring.
 
-        Implements graceful degradation through tolerant filtering:
-        - Word count range: applies ±20% tolerance buffer
-        - Status & words: uses OR logic to soften constraints (疑罪從無)
-          By using `should` instead of `must`, items with missing metadata
-          are automatically included (benefit of the doubt).
-        
+        Translates the dict produced by ``HybridEngine._extract_hard_constraints()``
+        into a ``rest.Filter`` using ``must`` + ``must_not`` conditions so that
+        Qdrant enforces them server-side during ANN search.
+
+        - Status filter: ``must`` match (hard)
+        - Word count range: ``must`` match with ±20% tolerance buffer (hard)
+        - Negative tags: ``must_not`` match (hard)
+        - Author filter: not handled here (requires substring matching;
+          kept as a post-filter in engine.py)
+
         Returns ``None`` when no filterable constraints are present, so the
         caller can safely pass the result straight to ``query_filter``.
         """
         must_conditions: List[rest.Condition] = []
-        should_conditions: List[rest.Condition] = []
         must_not_conditions: List[rest.Condition] = []
+        should_conditions: List[rest.Condition] = []
 
-        # 1. Status filter with tolerance: move to `should` for soft matching
-        #    This allows documents with missing status to pass through (疑罪從無)
+        # 1. Status filter (HARD) ────────────────────────────────────────
+        #    Must match one of the known status values.
+        #    Books with missing publish_status are excluded — we prefer
+        #    precision over recall for hard constraints.
         status_filter = hard_constraints.get("status_filter")
         if status_filter:
             status_values = []
@@ -109,9 +117,27 @@ class VectorStore:
                 status_values = ["completed", "已完結", "完結"]
             elif status_filter == "ongoing":
                 status_values = ["ongoing", "連載中", "連載"]
-            
+
             if status_values:
-                # Use `should` instead of `must` to allow missing status fields
+                must_conditions.append(
+                    rest.FieldCondition(
+                        key="publish_status",
+                        match=rest.MatchAny(any=status_values),
+                    )
+                )
+
+        # 1.5 Soft Status filter (DEGRADATION) ────────────────────────────
+        #    Added to `should` to boost books with the correct status,
+        #    but not physically eliminate others.
+        soft_status_filter = hard_constraints.get("soft_status_filter")
+        if soft_status_filter:
+            status_values = []
+            if soft_status_filter == "completed":
+                status_values = ["completed", "已完結", "完結"]
+            elif soft_status_filter == "ongoing":
+                status_values = ["ongoing", "連載中", "連載"]
+
+            if status_values:
                 should_conditions.append(
                     rest.FieldCondition(
                         key="publish_status",
@@ -119,23 +145,41 @@ class VectorStore:
                     )
                 )
 
-        # 2. Word-count range with 20% tolerance + soft matching
-        #    ±20% complacency: words_min → 0.8×, words_max → 1.2×
-        #    Soft matching: items with missing words_total pass through (疑罪從無)
+        # 2. Word-count range (HARD) with ±20% tolerance ─────────────────
+        #    The tolerance accommodates approximate user intent (e.g.
+        #    "around 1M words") while still enforcing a firm boundary.
         words_min = hard_constraints.get("words_min")
         words_max = hard_constraints.get("words_max")
         if words_min is not None or words_max is not None:
-            # Apply 20% tolerance buffer
             relaxed_min = int(words_min * 0.8) if words_min is not None else None
             relaxed_max = int(words_max * 1.2) if words_max is not None else None
-            
+
             range_kwargs: Dict[str, Any] = {}
             if relaxed_min is not None:
                 range_kwargs["gte"] = relaxed_min
             if relaxed_max is not None:
                 range_kwargs["lte"] = relaxed_max
-            
-            # Use `should` instead of `must` to allow missing words_total fields
+
+            must_conditions.append(
+                rest.FieldCondition(
+                    key="words_total",
+                    range=rest.Range(**range_kwargs),
+                )
+            )
+
+        # 2.5 Soft Word-count range (DEGRADATION) ────────────────────────
+        soft_words_min = hard_constraints.get("soft_words_min")
+        soft_words_max = hard_constraints.get("soft_words_max")
+        if soft_words_min is not None or soft_words_max is not None:
+            relaxed_min = int(soft_words_min * 0.8) if soft_words_min is not None else None
+            relaxed_max = int(soft_words_max * 1.2) if soft_words_max is not None else None
+
+            range_kwargs: Dict[str, Any] = {}
+            if relaxed_min is not None:
+                range_kwargs["gte"] = relaxed_min
+            if relaxed_max is not None:
+                range_kwargs["lte"] = relaxed_max
+
             should_conditions.append(
                 rest.FieldCondition(
                     key="words_total",
@@ -143,8 +187,8 @@ class VectorStore:
                 )
             )
 
-        # 3. Negative tags (must NOT contain) ────────────────────────────
-        #    Negative constraints stay as hard filters (no tolerance)
+        # 3. Negative tags (HARD must_not) ───────────────────────────────
+        #    Books containing any blocked tag are physically excluded.
         negative_tags = hard_constraints.get("negative_tag_terms", [])
         for neg_tag in negative_tags:
             if not neg_tag:
@@ -159,14 +203,13 @@ class VectorStore:
         # 4. Author filter — Qdrant substring match needs a full-text index
         #    which we don't have yet; kept as post-filter in engine.py.
 
-        if not should_conditions and not must_not_conditions:
+        if not must_conditions and not must_not_conditions and not should_conditions:
             return None
 
-        # Build filter: should_conditions (soft OR), must_not_conditions (hard NOT)
-        # By using only `should` (not `must`), missing metadata items naturally pass through
         return rest.Filter(
-            should=should_conditions if should_conditions else None,
+            must=must_conditions if must_conditions else None,
             must_not=must_not_conditions if must_not_conditions else None,
+            should=should_conditions if should_conditions else None,
         )
 
     def collection_exists(self, collection_name: str) -> bool:

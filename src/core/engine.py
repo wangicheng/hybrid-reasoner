@@ -399,8 +399,8 @@ class HybridEngine:
         
         Degradation strategy:
         - Attempt 1 (嚴格模式): All constraints active, similarity_threshold=0.6
-        - Attempt 2 (一階放寬): Remove word constraints, similarity_threshold=0.4
-        - Attempt 3 (終極放寬): Remove author & status filters, keep only semantic + negative tags
+        - Attempt 2 (一階放寬): Convert word constraints to soft match (should), similarity_threshold=0.4
+        - Attempt 3 (終極放寬): Convert status/author to soft match, keep only semantic + negative tags hard
         """
         constraints = dict(original_constraints)  # Make a copy
         
@@ -412,21 +412,22 @@ class HybridEngine:
             
         elif attempt == 2:
             # ── Attempt 2: First relaxation ──
-            # Remove word count constraints (words_min/words_max)
-            constraints["words_min"] = None
-            constraints["words_max"] = None
+            # Move word counts to soft match
+            constraints["soft_words_min"] = constraints.pop("words_min", None)
+            constraints["soft_words_max"] = constraints.pop("words_max", None)
             similarity_threshold = 0.4
-            print(f"[Engine] Degradation Attempt 2 (一階放寬): Word constraints removed, threshold=0.4")
+            print(f"[Engine] Degradation Attempt 2 (一階放寬): Word constraints soft-matched, threshold=0.4")
             
         elif attempt == 3:
             # ── Attempt 3: Ultimate relaxation ──
-            # Remove author & status filters (keep only semantic + negative tags)
-            constraints["author_filter"] = None
-            constraints["status_filter"] = None
-            constraints["words_min"] = None
-            constraints["words_max"] = None
+            constraints["soft_words_min"] = constraints.pop("words_min", None)
+            constraints["soft_words_max"] = constraints.pop("words_max", None)
+            constraints["soft_status_filter"] = constraints.pop("status_filter", None)
+            constraints["soft_author_filter"] = constraints.pop("author_filter", None)
+            # Drop the strict required_tags constraint so we can fall back to semantic/partial matches
+            constraints["required_tags"] = []
             similarity_threshold = 0.4
-            print(f"[Engine] Degradation Attempt 3 (終極放寬): Author/Status removed, threshold=0.4")
+            print(f"[Engine] Degradation Attempt 3 (終極放寬): Author/Status/Words soft-matched, required_tags dropped, threshold=0.4")
             
         else:
             # Fallback
@@ -732,26 +733,28 @@ class HybridEngine:
     def _post_filter(
         self,
         scored_items: List[Dict[str, Any]],
-        criteria_list: List[Any],
-        negative_tag_terms: List[str],
-        required_tags: Optional[List[str]] = None,
+        iteration_constraints: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
+        """HyST Safety-Net Post-Filter.
+
+        Under HyST, Qdrant pre-filters enforce status/words/negative-tags at
+        the database level. This post-filter exists as a safety net for:
+        1. Author matching (Qdrant lacks substring index)
+        2. Boundary-aware negative tag matching (Qdrant MatchValue is exact-only)
+        3. Required tag enforcement
+        4. Catch any BM25/tag-recall candidates that bypassed Qdrant pre-filter
+        
+        It relies on iteration_constraints so that if Graceful Degradation
+        removes a constraint, the post-filter correctly relaxes as well.
+        """
         filtered: List[Dict[str, Any]] = []
 
-        status_filter = None
-        author_filter = None
-        words_min = None
-        words_max = None
-
-        for criteria in criteria_list:
-            params = self._criteria_params(criteria)
-            if criteria.name == "status_check":
-                status_filter = self._normalize_status(params.get("target_status", ""))
-            elif criteria.name == "author_match":
-                author_filter = params.get("author_name", "").strip()
-            elif criteria.name == "numeric_range" and params.get("field") == "words_total":
-                words_min = params.get("min_val")
-                words_max = params.get("max_val")
+        author_filter = iteration_constraints.get("author_filter")
+        status_filter = iteration_constraints.get("status_filter")
+        words_min = iteration_constraints.get("words_min")
+        words_max = iteration_constraints.get("words_max")
+        negative_tag_terms = iteration_constraints.get("negative_tag_terms", [])
+        required_tags = iteration_constraints.get("required_tags", [])
 
         for result in scored_items:
             item = result["item"]
@@ -766,6 +769,8 @@ class HybridEngine:
                         break
 
             # Check negative_tags (blocked tags) using improved matching
+            # NOTE: This uses boundary-aware matching which is stricter than
+            # Qdrant's exact MatchValue — catches partial/fuzzy violations
             if not excluded and negative_tag_terms:
                 for negative_term in negative_tag_terms:
                     # Use improved boundary-aware matching
@@ -776,14 +781,16 @@ class HybridEngine:
                         excluded = True
                         break
 
-            if not excluded and status_filter:
-                item_status = self._normalize_status(item.get("publish_status", ""))
-                if item_status != status_filter:
-                    excluded = True
-
+            # Author check — primary post-filter duty (Qdrant can't do this)
             if not excluded and author_filter:
                 author = item.get("author", "")
                 if not (author_filter in author or author in author_filter):
+                    excluded = True
+
+            # Safety-net: status & word count for non-Qdrant candidates
+            if not excluded and status_filter:
+                item_status = self._normalize_status(item.get("publish_status", ""))
+                if item_status != status_filter:
                     excluded = True
 
             if not excluded and (words_min is not None or words_max is not None):
@@ -797,7 +804,7 @@ class HybridEngine:
                 filtered.append(result)
 
         print(
-            f"[PostFilter] {len(scored_items)} -> {len(filtered)} "
+            f"[PostFilter:HyST] {len(scored_items)} -> {len(filtered)} "
             f"(removed {len(scored_items) - len(filtered)})"
         )
         return filtered
@@ -807,31 +814,29 @@ class HybridEngine:
         parse_result: Any,
         hard_constraints: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Intent-Aware Dynamic Routing.
+        """Intent-Aware Dynamic Routing (HyST: filter/score separated).
 
-        Inspects the LLM parse result to decide the optimal fusion strategy:
-        - Constraint-heavy queries -> Weighted (倚天劍模式)
+        Hard constraints (status, words, author, negative tags) are already
+        enforced as Qdrant payload pre-filters — they do NOT influence the
+        fusion strategy decision.
+
+        Routing is purely based on semantic/tag intent:
+        - Tag-heavy queries -> Weighted (倚天劍模式)
         - Atmosphere/semantic queries -> RRF (屠龍刀模式)
 
         Returns a config dict consumed by the scoring pipeline.
         """
         pos_tags_count = len(parse_result.tag_intent.positive_terms)
         neg_tags_count = len(parse_result.tag_intent.negative_terms)
-        has_status = bool(hard_constraints.get("status_filter"))
-        has_words = (
-            hard_constraints.get("words_min") is not None
-            or hard_constraints.get("words_max") is not None
-        )
-        has_author = bool(hard_constraints.get("author_filter"))
-        has_hard_constraints = has_status or has_words or has_author
 
-        is_constraint_heavy = (
+        # HyST: routing decision is based ONLY on tag/semantic signal,
+        # NOT on the presence of hard constraints (which are pre-filtered).
+        is_tag_heavy = (
             pos_tags_count >= self.routing_tag_threshold
             or neg_tags_count > 0
-            or has_hard_constraints
         )
 
-        if is_constraint_heavy:
+        if is_tag_heavy:
             strategy = {
                 "fusion": "weighted",
                 "ws": self.routing_weighted_ws,
@@ -840,7 +845,7 @@ class HybridEngine:
                 "reason": (
                     f"倚天劍 (Weighted ws={self.routing_weighted_ws} wa={self.routing_weighted_wa}): "
                     f"pos_tags={pos_tags_count}, "
-                    f"neg_tags={neg_tags_count}, hard_constraints={has_hard_constraints}"
+                    f"neg_tags={neg_tags_count}, tag-heavy query"
                 ),
             }
         else:
@@ -1016,6 +1021,7 @@ class HybridEngine:
         hard_constraints = self._extract_hard_constraints(
             parse_result.criteria, negative_tag_terms
         )
+        hard_constraints["required_tags"] = list(parse_result.tag_intent.positive_terms) if hasattr(parse_result, 'tag_intent') else []
 
         # ── Dynamic Routing: decide fusion strategy per-query ──
         if self.fusion_strategy == "auto":
@@ -1070,7 +1076,7 @@ class HybridEngine:
             metadata_filter = VectorStore.build_metadata_filter(iteration_constraints)
             if metadata_filter:
                 print(
-                    f"[Engine] Metadata pre-filter active: "
+                    f"[Engine:HyST] HARD pre-filter active: "
                     f"status={iteration_constraints.get('status_filter')}, "
                     f"words=[{iteration_constraints.get('words_min')}, {iteration_constraints.get('words_max')}], "
                     f"neg_tags={iteration_constraints.get('negative_tag_terms', [])}"
@@ -1222,23 +1228,29 @@ class HybridEngine:
                 self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
 
             scored_items.sort(key=lambda result: result["score"], reverse=True)
-            # Extract required_tags from positive semantic criteria
-            required_tags = list(parse_result.tag_intent.positive_terms) if hasattr(parse_result, 'tag_intent') else []
             scored_items = self._post_filter(
                 scored_items,
-                parse_result.criteria,
-                negative_tag_terms,
-                required_tags=required_tags,
+                iteration_constraints,
             )
             scored_items.sort(key=lambda result: result["score"], reverse=True)
             
-            # ── Degradation check: if we have enough results, stop trying ──
+            # ── Quality-Aware Degradation check ──
+            # Vector search always returns `limit` items, so len(scored_items) is
+            # usually large unless filtered. We must check the *quality* of the results.
+            # A result is "good" if it has high semantic similarity or matched some tags.
             final_results = scored_items
-            if len(final_results) >= 5:
-                print(f"[Engine] Got {len(final_results)} results on attempt {attempt}, stopping degradation.")
+            good_results_count = 0
+            for r in final_results:
+                if r.get("vector_score", 0) >= 0.55:
+                    good_results_count += 1
+                elif any(b.get("criteria") == "attribute_track" and b.get("raw_score", 0) > 0 for b in r.get("breakdown", [])):
+                    good_results_count += 1
+
+            if good_results_count >= 5:
+                print(f"[Engine] Got {good_results_count} good results on attempt {attempt}, stopping degradation.")
                 break
             else:
-                print(f"[Engine] Only got {len(final_results)} results on attempt {attempt}, trying next degradation level...")
+                print(f"[Engine] Only got {good_results_count} good results on attempt {attempt}, trying next degradation level...")
 
         # ── Post-degradation result finalization ──
         scored_items = final_results

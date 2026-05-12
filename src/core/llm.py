@@ -995,9 +995,8 @@ def _generate_json_from_contents(
             }
             _augment_exception_with_call_metadata(exc, call_metadata)
             if _is_retryable(exc):
-                # Rotate key on rate limits or permission issues to try another key
-                if is_rate_limit_error(exc):
-                    rotator.on_rate_limit_error()
+                # Rotate key on any retryable error (like 500 INTERNAL) to try another key/project context
+                rotator.rotate()
                 
                 print(
                     f"[llm:{task_label}] retryable error; sleeping "
@@ -1093,9 +1092,8 @@ def _generate_text_from_contents(
             }
             _augment_exception_with_call_metadata(exc, call_metadata)
             if _is_retryable(exc):
-                # Rotate key on rate limits or permission issues to try another key
-                if is_rate_limit_error(exc):
-                    rotator.on_rate_limit_error()
+                # Rotate key on any retryable error (like 500 INTERNAL) to try another key/project context
+                rotator.rotate()
                 
                 print(
                     f"[llm:{task_label}] retryable error; sleeping "

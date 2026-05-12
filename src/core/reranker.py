@@ -127,8 +127,8 @@ Do not output anything else.
                     break
 
                 error_text = str(exc)
-                if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-                    self._rotate_api_key()
+                # Rotate key on any retryable error (like 500 INTERNAL) to try another key/project context
+                self._rotate_api_key()
                 await asyncio.sleep(2.0)
 
         return []

@@ -210,8 +210,8 @@ class LLMJudge:
                     raise RuntimeError(f"Max retries (5) exceeded. Last error: {exc}")
 
                 error_text = str(exc)
-                if is_rate_limit_error(exc):
-                    self._rotate_api_key()
+                # Rotate key on any retryable error (like 500 INTERNAL) to bypass potential per-project/key issues
+                self._rotate_api_key()
 
                 delay = self._retry_delay_seconds(attempt)
                 print(
