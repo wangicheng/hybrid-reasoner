@@ -378,9 +378,26 @@ class VectorStore:
         query_filter: Optional[rest.Filter] = None,
         with_payload: bool = True,
         collection_name: Optional[str] = None,
+        allowed_point_ids: Optional[set[str]] = None,
     ) -> Tuple[List[Dict[str, Any]], List[float]]:
         vector = self._embed_with_retry(query_text, task_type="RETRIEVAL_QUERY")
         target_collection = collection_name or self.collection_name
+
+        if allowed_point_ids:
+            subset_filter = rest.Filter(
+                must=[
+                    rest.HasIdCondition(has_id=list(allowed_point_ids))
+                ]
+            )
+            if query_filter:
+                # Merge filters
+                query_filter = rest.Filter(
+                    must=(query_filter.must or []) + subset_filter.must,
+                    should=query_filter.should,
+                    must_not=query_filter.must_not,
+                )
+            else:
+                query_filter = subset_filter
 
         response = self.client.query_points(
             collection_name=target_collection,

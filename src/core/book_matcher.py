@@ -13,8 +13,13 @@ from src.core.database import Database
 
 
 class BookMatcher:
-    def __init__(self, db: Database):
+    def __init__(
+        self, 
+        db: Database,
+        allowed_book_ids: Optional[set[str]] = None,
+    ):
         self.db = db
+        self.allowed_book_ids = allowed_book_ids
         self._title_cache: Optional[List[Dict[str, Any]]] = None
 
     def extract_related_books(self, user_query: str, limit: int = 3) -> List[Dict[str, Any]]:
@@ -126,7 +131,7 @@ class BookMatcher:
         if not title or len(title.strip()) < 2:
             return None
 
-        results = self.db.search_by_title_fuzzy(title)
+        results = self.db.search_by_title_fuzzy(title, allowed_book_ids=self.allowed_book_ids)
         if results:
             return self._book_to_context(
                 results[0],
@@ -219,6 +224,6 @@ class BookMatcher:
         if self._title_cache is not None:
             return self._title_cache
 
-        self._title_cache = self.db.get_all_items()
+        self._title_cache = self.db.get_all_items(allowed_book_ids=self.allowed_book_ids)
         print(f"[BookMatcher] Title cache loaded: {len(self._title_cache)} books")
         return self._title_cache

@@ -39,7 +39,7 @@ class RunGenerator:
 
     async def _search_once(
         self,
-        engine: HybridEngine,
+        engine: Any,
         query: str,
         cache_namespace: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -59,7 +59,7 @@ class RunGenerator:
 
     def _search_with_retry(
         self,
-        engine: HybridEngine,
+        engine: Any,
         query: str,
         q_id: str,
         cache_namespace: Optional[str] = None,
@@ -101,7 +101,15 @@ class RunGenerator:
                 )
                 time.sleep(delay)
 
-    def _process_single_query(self, q_conf: Dict[str, Any], engine: HybridEngine, engine_name: str, run_suffix: str) -> Dict[str, Any]:
+    def _process_single_query(
+        self, 
+        q_conf: Dict[str, Any], 
+        engine: Any, 
+        engine_name: str, 
+        run_suffix: str,
+        engine_type: str = "hybrid",
+        run_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         q_id = q_conf["id"]
         query = q_conf["query"]
 
@@ -149,6 +157,8 @@ class RunGenerator:
                 "parsed_criteria": parsed_criteria,
                 "tag_intent": response.get("tag_intent"),
                 "reference_tags": response.get("reference_tags", []),
+                "engine_type": engine_type,
+                "run_metadata": run_metadata,
                 "results": extracted_results,
             }
         except Exception as query_err:
@@ -161,6 +171,8 @@ class RunGenerator:
                 "execution_metadata": getattr(query_err, "query_execution_metadata", {}),
                 "parsed_criteria": [],
                 "parse_metadata": getattr(query_err, "parser_metadata", {}),
+                "engine_type": engine_type,
+                "run_metadata": run_metadata,
                 "results": [],
                 "error": str(query_err),
             }
@@ -170,6 +182,7 @@ class RunGenerator:
         queries_config: List[Dict[str, Any]],
         engine_name: str,
         output_dir: Path,
+        engine_type: str = "hybrid",
         semantic_weight: float = 0.3,
         attribute_weight: float = 0.7,
         run_suffix: str = "",
@@ -185,20 +198,11 @@ class RunGenerator:
         routing_weighted_wa: float = 0.65,
         routing_weighted_bm25: bool = True,
         routing_rrf_bm25: bool = False,
+        engine_kwargs: Optional[Dict[str, Any]] = None,
+        run_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         fusion_label = fusion_strategy or "weighted"
-        print(
-            f"\n[Batch] Starting Experiment: {engine_name} "
-            f"(fusion={fusion_label}, W1: {semantic_weight}, W2: {attribute_weight}, "
-            f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight} (recall-only), "
-            f"BM25 Bonus Max: {bm25_bonus_max}, "
-            f"rrf_k={rrf_k}, "
-            f"engine=HybridEngine, "
-            "fixed retrieval path, "
-            f"model={normalize_model_id(self.model_id)}, "
-            f"parser_variant={DEFAULT_PARSER_VARIANT}, "
-            f"run_suffix={run_suffix or 'none'})"
-        )
+        engine_kwargs = engine_kwargs or {}
 
         vs = VectorStore(collection_name="novels")
         engine = HybridEngine(
@@ -218,6 +222,20 @@ class RunGenerator:
             routing_weighted_bm25=routing_weighted_bm25,
             routing_rrf_bm25=routing_rrf_bm25,
             rerank=self.rerank,
+            **engine_kwargs,
+        )
+
+        print(
+            f"\n[Batch] Starting Experiment: {engine_name} "
+            f"(engine_type={engine_type}, fusion={fusion_label}, "
+            f"W1: {semantic_weight}, W2: {attribute_weight}, "
+            f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight} (recall-only), "
+            f"BM25 Bonus Max: {bm25_bonus_max}, "
+            f"rrf_k={rrf_k}, "
+            "fixed retrieval path, "
+            f"model={normalize_model_id(self.model_id)}, "
+            f"parser_variant={getattr(engine, 'PARSER_VARIANT', DEFAULT_PARSER_VARIANT)}, "
+            f"run_suffix={run_suffix or 'none'})"
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -246,7 +264,15 @@ class RunGenerator:
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 futures = {
-                    executor.submit(self._process_single_query, q_conf, engine, engine_name, run_suffix): q_conf
+                    executor.submit(
+                        self._process_single_query, 
+                        q_conf, 
+                        engine, 
+                        engine_name, 
+                        run_suffix,
+                        engine_type=engine_type,
+                        run_metadata=run_metadata,
+                    ): q_conf
                     for q_conf in pending_queries
                 }
                 
@@ -258,7 +284,8 @@ class RunGenerator:
 
             print(f"[{engine_name}] Run complete! Saved to {output_path}")
         finally:
-            vs.client.close()
+            if vs is not None:
+                vs.client.close()
 
 
 if __name__ == "__main__":

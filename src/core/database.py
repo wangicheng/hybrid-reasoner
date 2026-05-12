@@ -170,11 +170,18 @@ class Database:
             return d
         return None
 
-    def get_all_items(self) -> List[Dict[str, Any]]:
+    def get_all_items(self, allowed_book_ids: Optional[set[str]] = None) -> List[Dict[str, Any]]:
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM novels")
+        
+        if allowed_book_ids:
+            placeholders = ",".join(["?"] * len(allowed_book_ids))
+            sql = f"SELECT * FROM novels WHERE id IN ({placeholders})"
+            cursor.execute(sql, list(allowed_book_ids))
+        else:
+            cursor.execute("SELECT * FROM novels")
+            
         rows = cursor.fetchall()
         conn.close()
         items = []
@@ -184,7 +191,11 @@ class Database:
             items.append(d)
         return items
 
-    def search_by_title_fuzzy(self, keyword: str) -> List[Dict[str, Any]]:
+    def search_by_title_fuzzy(
+        self, 
+        keyword: str, 
+        allowed_book_ids: Optional[set[str]] = None
+    ) -> List[Dict[str, Any]]:
         if not keyword:
             return []
             
@@ -192,17 +203,24 @@ class Database:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
+        subset_clause = ""
+        subset_params = []
+        if allowed_book_ids:
+            placeholders = ",".join(["?"] * len(allowed_book_ids))
+            subset_clause = f" AND id IN ({placeholders})"
+            subset_params = list(allowed_book_ids)
+
         # Strategy 1: direct LIKE
         pattern = f"%{keyword}%"
-        cursor.execute("SELECT * FROM novels WHERE name LIKE ?", (pattern,))
+        sql = f"SELECT * FROM novels WHERE name LIKE ?{subset_clause}"
+        cursor.execute(sql, [pattern] + subset_params)
         rows = cursor.fetchall()
         
         # Strategy 2: if no results and keyword is long enough,
-        # try per-character gap matching (e.g. "為美好世界" → "%為%美%好%世%界%")
-        # This handles cases where user drops particles (的/了/之) or slightly misspells
         if not rows and len(keyword) >= 4:
             gap_pattern = "%" + "%".join(keyword) + "%"
-            cursor.execute("SELECT * FROM novels WHERE name LIKE ?", (gap_pattern,))
+            sql = f"SELECT * FROM novels WHERE name LIKE ?{subset_clause}"
+            cursor.execute(sql, [gap_pattern] + subset_params)
             rows = cursor.fetchall()
         
         conn.close()
@@ -214,13 +232,25 @@ class Database:
             items.append(d)
         return items
 
-    def search_by_author(self, author_name: str) -> List[Dict[str, Any]]:
+    def search_by_author(
+        self, 
+        author_name: str, 
+        allowed_book_ids: Optional[set[str]] = None
+    ) -> List[Dict[str, Any]]:
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
+        subset_clause = ""
+        subset_params = []
+        if allowed_book_ids:
+            placeholders = ",".join(["?"] * len(allowed_book_ids))
+            subset_clause = f" AND id IN ({placeholders})"
+            subset_params = list(allowed_book_ids)
+
         pattern = f"%{author_name}%"
-        cursor.execute("SELECT * FROM novels WHERE author LIKE ?", (pattern,))
+        sql = f"SELECT * FROM novels WHERE author LIKE ?{subset_clause}"
+        cursor.execute(sql, [pattern] + subset_params)
         
         rows = cursor.fetchall()
         conn.close()
@@ -232,7 +262,12 @@ class Database:
             items.append(d)
         return items
 
-    def search_by_tags_any(self, tags: List[str], limit: int = 10000) -> List[Dict[str, Any]]:
+    def search_by_tags_any(
+        self, 
+        tags: List[str], 
+        limit: int = 10000,
+        allowed_book_ids: Optional[set[str]] = None,
+    ) -> List[Dict[str, Any]]:
         normalized_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
         if not normalized_tags:
             return []
@@ -247,7 +282,13 @@ class Database:
             clauses.append("tags LIKE ?")
             params.append(f'%"{tag}"%')
 
-        sql = f"SELECT * FROM novels WHERE {' OR '.join(clauses)} LIMIT ?"
+        subset_clause = ""
+        if allowed_book_ids:
+            placeholders = ",".join(["?"] * len(allowed_book_ids))
+            subset_clause = f" AND id IN ({placeholders})"
+            params.extend(list(allowed_book_ids))
+
+        sql = f"SELECT * FROM novels WHERE ({' OR '.join(clauses)}){subset_clause} LIMIT ?"
         params.append(limit)
         cursor.execute(sql, params)
         rows = cursor.fetchall()
