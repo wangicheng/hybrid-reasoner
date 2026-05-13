@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
@@ -24,6 +25,13 @@ class EngineMetrics:
     violation_rate_at_k: Dict[int, float]
     clean_rate_at_k: Dict[int, float]
     violation_breakdown_rate: Dict[str, float]
+    # --- Fault Tolerance & Survival metrics ---
+    zero_result_rate: float
+    semantic_recall_at_k: Dict[int, float]
+    # --- Advanced metrics ---
+    penalized_ndcg_at_k: Dict[int, float]
+    rbv_at_k: Dict[int, float]
+    rc_f1_at_k: Dict[int, float]
 
 
 def _load_annotations(annotation_path: Path) -> ScoreMap:
@@ -136,6 +144,12 @@ def _precision_at_k(binary_relevance: List[int], k: int) -> float:
     return sum(binary_relevance[:k]) / float(k)
 
 
+def _recall_at_k(binary_relevance: List[int], total_relevant: int, k: int) -> float:
+    if k <= 0 or total_relevant <= 0:
+        return 0.0
+    return sum(binary_relevance[:k]) / float(total_relevant)
+
+
 def _ap_at_k(
     binary_relevance: List[int],
     total_relevant: int,
@@ -164,18 +178,130 @@ def _safe_mean(values: List[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+# ---------------------------------------------------------------------------
+# Advanced Metric Helpers
+# ---------------------------------------------------------------------------
+
+def _dcg(gains: List[float], k: int) -> float:
+    """Discounted Cumulative Gain up to position k."""
+    score = 0.0
+    for i, g in enumerate(gains[:k], start=1):
+        score += g / math.log2(i + 1)
+    return score
+
+
+def _penalized_ndcg_at_k(
+    graded_scores: List[float],
+    violations_by_rank: List[List[str]],
+    k: int,
+    alpha_map: Dict[str, float],
+) -> float:
+    """NDCG@K with stratified multiplicative penalty for violated positions.
+
+    For each rank position i, the gain is multiplied by (1 - alpha_type)
+    for each distinct violation type present at that rank position.
+    The result is normalised against the ideal ranking (sorted scores,
+    no violations).
+
+    Args:
+        graded_scores: raw relevance scores (0-3 scale) per rank position.
+        violations_by_rank: list of violation strings per rank position.
+        k: cutoff depth.
+        alpha_map: mapping of violation type to penalty weight (0-1).
+    """
+    if k <= 0:
+        return 0.0
+
+    penalized_gains: List[float] = []
+    for i in range(min(k, len(graded_scores))):
+        g = graded_scores[i]
+        if i < len(violations_by_rank) and violations_by_rank[i]:
+            # Apply stratified penalties multiplicatively for each distinct violation type
+            for v_type in set(violations_by_rank[i]):
+                alpha = alpha_map.get(v_type, alpha_map.get("other", 0.5))
+                # ── Semantic Immunity for Benign Tag Omissions ──
+                # If content is highly relevant semantically (score >= 2.5), missing an official tag
+                # is a benign omission rather than a quality flaw. We apply graceful softening.
+                if v_type == "required_tags" and graded_scores[i] >= 2.5:
+                    alpha *= 0.25
+                g *= (1.0 - alpha)
+        penalized_gains.append(g)
+
+    actual_dcg = _dcg(penalized_gains, k)
+
+    # Ideal: best possible scores sorted descending, no violations
+    ideal_gains = sorted(graded_scores[:k], reverse=True)
+    ideal_dcg = _dcg(ideal_gains, k)
+
+    return actual_dcg / ideal_dcg if ideal_dcg > 0 else 0.0
+
+
+def _rbv_at_k(
+    violations_flags: List[bool],
+    k: int,
+    persistence: float = 0.8,
+) -> float:
+    """Rank-Biased Violation rate at K.
+
+    Uses a geometric weight decay so violations at top ranks are
+    exponentially more costly.  A persistence of 0.8 means rank 1
+    carries ~5x the weight of rank 10.
+
+    Returns a value in [0, 1] where 0 = no violations, 1 = all violated.
+    """
+    if k <= 0:
+        return 0.0
+
+    weighted_sum = 0.0
+    normalizer = 0.0
+    for i in range(min(k, len(violations_flags))):
+        weight = persistence ** i          # rank-1 → weight 1.0
+        normalizer += weight
+        if violations_flags[i]:
+            weighted_sum += weight
+
+    return weighted_sum / normalizer if normalizer > 0 else 0.0
+
+
+def _rc_f1_at_k(
+    precision_k: float,
+    clean_k: float,
+) -> float:
+    """Relevance-Compliance F1: harmonic mean of P@K and Clean@K.
+
+    Returns 0 if either dimension collapses, harshly penalising
+    single-dimension failure.
+    """
+    if precision_k + clean_k <= 0:
+        return 0.0
+    return 2.0 * precision_k * clean_k / (precision_k + clean_k)
+
+
 def evaluate_ir(
     experiment_dir: str,
     annotations_dir: str,
     ks: List[int],
     relevance_threshold: float,
     denominator_mode: ApDenominatorMode,
+    queries_path: str = "data/experiments/queries.json",
+    penalty_alpha_blocked: float = 1.0,
+    penalty_alpha_status: float = 0.7,
+    penalty_alpha_tag: float = 0.4,
+    penalty_alpha_other: float = 0.5,
+    rbv_persistence: float = 0.8,
 ) -> Dict[str, EngineMetrics]:
     k_values = sorted(set(k for k in ks if k > 0))
     if not k_values:
         raise ValueError("At least one positive K value is required.")
 
-    queries = load_queries()
+    alpha_map = {
+        "blocked_tags": penalty_alpha_blocked,
+        "required_status": penalty_alpha_status,
+        "required_tags": penalty_alpha_tag,
+        "other": penalty_alpha_other,
+    }
+
+    queries = load_queries(queries_path=Path(queries_path))
     runs = load_runs(experiment_dir)
 
     annotation_path = resolve_annotation_path(annotations_dir)
@@ -197,10 +323,14 @@ def evaluate_ir(
 
         p_acc: Dict[int, List[float]] = {k: [] for k in k_values}
         ap_acc: Dict[int, List[float]] = {k: [] for k in k_values}
+        recall_acc: Dict[int, List[float]] = {k: [] for k in k_values}
         violation_acc: Dict[int, List[float]] = {k: [] for k in k_values}
+        pndcg_acc: Dict[int, List[float]] = {k: [] for k in k_values}
+        rbv_acc: Dict[int, List[float]] = {k: [] for k in k_values}
 
         total_unjudged = 0
         total_positions = 0
+        zero_result_queries = 0
         violation_breakdown_counts: Dict[str, int] = {}
 
         for query_id in query_ids:
@@ -214,12 +344,21 @@ def evaluate_ir(
             binary, unjudged_count = _binary_relevance(ranked_ids, query_scores, relevance_threshold)
             total_unjudged += unjudged_count
             total_positions += len(ranked_ids)
+            if len(ranked_ids) == 0:
+                zero_result_queries += 1
 
-            violations_by_rank: List[bool] = []
+            # Graded scores per rank (for NDCG)
+            graded_by_rank: List[float] = [
+                query_scores.get(bid, 0.0) for bid in ranked_ids
+            ]
+
+            violation_flags_by_rank: List[bool] = []
+            violation_types_by_rank: List[List[str]] = []
             rules = query_rules.get(query_id, {})
             for res in ranked_results:
                 violations = _check_structural_violations(rules, res)
-                violations_by_rank.append(bool(violations))
+                violation_flags_by_rank.append(bool(violations))
+                violation_types_by_rank.append(violations)
                 for reason in violations:
                     violation_breakdown_counts[reason] = violation_breakdown_counts.get(reason, 0) + 1
 
@@ -233,15 +372,28 @@ def evaluate_ir(
                         denominator_mode=denominator_mode,
                     )
                 )
+                recall_acc[k].append(_recall_at_k(binary, total_relevant, k))
 
-                top_k_violations = violations_by_rank[:k]
+                top_k_violations = violation_flags_by_rank[:k]
                 has_violation = 1.0 if any(top_k_violations) else 0.0
                 violation_acc[k].append(has_violation)
 
+                # Advanced metrics per query
+                pndcg_acc[k].append(
+                    _penalized_ndcg_at_k(graded_by_rank, violation_types_by_rank, k, alpha_map=alpha_map)
+                )
+                rbv_acc[k].append(
+                    _rbv_at_k(violation_flags_by_rank, k, persistence=rbv_persistence)
+                )
+
         precision = {k: _safe_mean(vals) for k, vals in p_acc.items()}
         map_scores = {k: _safe_mean(vals) for k, vals in ap_acc.items()}
+        recalls = {k: _safe_mean(vals) for k, vals in recall_acc.items()}
         violation_rate = {k: _safe_mean(vals) for k, vals in violation_acc.items()}
         clean_rate = {k: (1.0 - violation_rate[k]) for k in k_values}
+        pndcg = {k: _safe_mean(vals) for k, vals in pndcg_acc.items()}
+        rbv = {k: _safe_mean(vals) for k, vals in rbv_acc.items()}
+        rc_f1 = {k: _rc_f1_at_k(precision[k], clean_rate[k]) for k in k_values}
 
         total_violation_events = sum(violation_breakdown_counts.values())
         if total_violation_events > 0:
@@ -261,6 +413,11 @@ def evaluate_ir(
             violation_rate_at_k=violation_rate,
             clean_rate_at_k=clean_rate,
             violation_breakdown_rate=violation_breakdown_rate,
+            zero_result_rate=(zero_result_queries / len(query_ids) if query_ids else 0.0),
+            semantic_recall_at_k=recalls,
+            penalized_ndcg_at_k=pndcg,
+            rbv_at_k=rbv,
+            rc_f1_at_k=rc_f1,
         )
 
     return results_by_engine
@@ -340,6 +497,49 @@ def print_report(
             reason_text,
         ]))
 
+    # --- Fault Tolerance & Survival Report ---
+    print("\n" + "=" * 120)
+    print("Fault Tolerance & Survival Report (ZRR, Recall@K)")
+    print("=" * 120)
+
+    surv_header = ["Engine", "ZRR (零結果率)"] + [f"Recall@{k}" for k in k_values]
+    print(" | ".join([
+        surv_header[0].ljust(col_width),
+        surv_header[1].rjust(15),
+        *[col.rjust(10) for col in surv_header[2:]],
+    ]))
+    print("-" * 120)
+
+    for engine_name, metric in sorted_engines:
+        cells = [
+            engine_name.ljust(col_width),
+            _format_pct(metric.zero_result_rate).rjust(15),
+        ]
+        cells.extend(_format_pct(metric.semantic_recall_at_k[k]).rjust(10) for k in k_values)
+        print(" | ".join(cells))
+
+    # --- Advanced Metrics Report ---
+    print("\n" + "=" * 120)
+    print("Advanced Metrics Report (Primary: pNDCG | Guardrails: RBV, RC-F1)")
+    print("=" * 120)
+
+    adv_header = ["Engine"]
+    for k in k_values:
+        adv_header.extend([f"pNDCG@{k}", f"RBV@{k}", f"RC-F1@{k}"])
+    print(" | ".join([
+        adv_header[0].ljust(col_width),
+        *[col.rjust(9) for col in adv_header[1:]],
+    ]))
+    print("-" * 120)
+
+    for engine_name, metric in sorted_engines:
+        cells = [engine_name.ljust(col_width)]
+        for k in k_values:
+            cells.append(_format_pct(metric.penalized_ndcg_at_k[k]).rjust(9))
+            cells.append(_format_pct(metric.rbv_at_k[k]).rjust(9))
+            cells.append(_format_pct(metric.rc_f1_at_k[k]).rjust(9))
+        print(" | ".join(cells))
+
     if baseline:
         if baseline not in metrics_by_engine:
             print(f"\n[Warning] Baseline '{baseline}' not found. Skip delta report.")
@@ -381,6 +581,12 @@ def main() -> None:
         help="Directory containing run JSON files",
     )
     parser.add_argument(
+        "--queries",
+        type=str,
+        default="data/experiments/queries.json",
+        help="Path to queries JSON file",
+    )
+    parser.add_argument(
         "--annotations-dir",
         type=str,
         default="data/experiments/annotations",
@@ -392,6 +598,36 @@ def main() -> None:
         nargs="+",
         default=[1, 3, 5, 10],
         help="K values for Precision@K / mAP@K / Violation@K",
+    )
+    parser.add_argument(
+        "--penalty-alpha-blocked",
+        type=float,
+        default=1.0,
+        help="Penalty weight for blocked_tags violations (default 1.0, dealbreaker)",
+    )
+    parser.add_argument(
+        "--penalty-alpha-status",
+        type=float,
+        default=0.7,
+        help="Penalty weight for required_status violations (default 0.7, high friction)",
+    )
+    parser.add_argument(
+        "--penalty-alpha-tag",
+        type=float,
+        default=0.4,
+        help="Penalty weight for required_tags violations (default 0.4, vibe substitutability)",
+    )
+    parser.add_argument(
+        "--penalty-alpha-other",
+        type=float,
+        default=0.5,
+        help="Penalty weight for other violations (default 0.5)",
+    )
+    parser.add_argument(
+        "--rbv-persistence",
+        type=float,
+        default=0.8,
+        help="RBV persistence parameter (higher = more top-heavy weighting)",
     )
     parser.add_argument(
         "--relevance-threshold",
@@ -423,9 +659,15 @@ def main() -> None:
     metrics_by_engine = evaluate_ir(
         experiment_dir=args.experiment_dir,
         annotations_dir=args.annotations_dir,
+        queries_path=args.queries,
         ks=args.ks,
         relevance_threshold=args.relevance_threshold,
         denominator_mode=args.ap_denominator,
+        penalty_alpha_blocked=args.penalty_alpha_blocked,
+        penalty_alpha_status=args.penalty_alpha_status,
+        penalty_alpha_tag=args.penalty_alpha_tag,
+        penalty_alpha_other=args.penalty_alpha_other,
+        rbv_persistence=args.rbv_persistence,
     )
     print_report(metrics_by_engine=metrics_by_engine, ks=args.ks, baseline=args.baseline)
 

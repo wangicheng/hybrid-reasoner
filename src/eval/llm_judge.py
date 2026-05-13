@@ -59,8 +59,9 @@ Your task is to judge how well a recommended book matches a user's search query.
 ### Important Guidelines:
 1. Focus on the user's intent, not just keyword overlap.
 2. Ignore hard constraints like status or word count. Only judge semantic and genre relevance.
-3. Books with empty or missing information should be scored 0.
-4. Provide brief reasoning in Traditional Chinese.
+3. Latent Semantic Recognition: Web novel tags are often incomplete. If the Intro clearly conveys the desired theme, core concepts, or atmosphere requested by the query, grant a high score (Score 2 or 3) even if explicit genre tags are missing.
+4. Books with empty or missing information should be scored 0.
+5. Provide brief reasoning in Traditional Chinese.
 
 ### Output Format:
 Return a JSON object with exactly two fields:
@@ -210,8 +211,8 @@ class LLMJudge:
                     raise RuntimeError(f"Max retries (5) exceeded. Last error: {exc}")
 
                 error_text = str(exc)
-                if is_rate_limit_error(exc):
-                    self._rotate_api_key()
+                # Rotate key on any retryable error (like 500 INTERNAL) to bypass potential per-project/key issues
+                self._rotate_api_key()
 
                 delay = self._retry_delay_seconds(attempt)
                 print(
