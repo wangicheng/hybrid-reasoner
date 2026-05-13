@@ -182,21 +182,39 @@ def run_experiment(
     query_task_type = config["query_task_type"]
     candidate_task_type = config["candidate_task_type"]
     batch_size = config["batch_size"]
+    # Load tag descriptions first to act as the "whitelist"
+    tag_descriptions = load_tag_descriptions(tag_descriptions_source)
+    if not tag_descriptions:
+        raise ValueError(f"Tag descriptions missing from {tag_descriptions_source}")
+    
+    whitelist = set(tag_descriptions.keys())
 
     # Load data
     parsed_records = load_source_records(source)
-    dataset = build_dataset(parsed_records=parsed_records, max_items=None)
-    candidate_labels = load_candidate_tags(candidate_tags_source, dataset)
+    # Filter dataset to only include target labels in the whitelist
+    filtered_records = [r for r in parsed_records if r[1] in whitelist]
+    
+    dataset = build_dataset(parsed_records=filtered_records, max_items=None)
+    
+    # Strictly use the whitelist as candidate labels
+    candidate_labels = sorted(list(whitelist))
+    
     examples = build_mapping_examples(dataset=dataset, include_canonical_label_queries=False)
-    tag_descriptions = load_tag_descriptions(tag_descriptions_source) if use_desc else {}
+    
+    # For baseline runs, we might not want the description text in candidates, 
+    # but the whitelist labels stay the same.
+    current_tag_descriptions = tag_descriptions if use_desc else {}
 
-    print(f"\n[Run: {name}] Labels: {len(dataset)}, Queries: {len(examples)}, Candidates: {len(candidate_labels)}")
+    print(f"\n[Run: {name}] Whitelisted Labels: {len(whitelist)}, Filtered Queries: {len(examples)}, Candidates: {len(candidate_labels)}")
+
+    # Use the parent model directory for caching to share vectors across experiments
+    cache_dir = config["output_dir"]
 
     # Embed queries
     query_rendered_texts = [query_template.format(label=example.query_text) for example in examples]
     query_vectors = get_rendered_vectors(
         rendered_texts=query_rendered_texts,
-        output_dir=output_dir,
+        output_dir=cache_dir,
         cache_name="queries",
         template_text=query_template,
         role="query",
@@ -207,12 +225,12 @@ def run_experiment(
 
     # Embed candidates
     candidate_rendered_texts = [
-        render_desc_text(candidate_template, label, tag_descriptions.get(label, "")) 
+        render_desc_text(candidate_template, label, current_tag_descriptions.get(label, "")) 
         for label in candidate_labels
     ]
     candidate_vectors = get_rendered_vectors(
         rendered_texts=candidate_rendered_texts,
-        output_dir=output_dir,
+        output_dir=cache_dir,
         cache_name="candidates",
         template_text=candidate_template,
         role="candidate",
@@ -224,7 +242,7 @@ def run_experiment(
     # Evaluate
     result = evaluate_with_desc(
         candidate_labels=candidate_labels,
-        tag_descriptions=tag_descriptions,
+        tag_descriptions=current_tag_descriptions,
         candidate_vectors=candidate_vectors,
         query_vectors=query_vectors,
         query_template=query_template,
@@ -357,9 +375,9 @@ def main():
         config=config
     )
 
-    # 2. Experiment: Asymmetric (With Description)
-    experiment = run_experiment(
-        name="experiment_with_desc",
+    # 2. Experiment: Asymmetric (Label + Description)
+    baseline_desc = run_experiment(
+        name="baseline_desc",
         query_template=QUERY_TPL,
         candidate_template=CAND_TPL_DESC,
         use_desc=True,
@@ -368,20 +386,25 @@ def main():
 
     # 3. Hybrid: Weighted (0.7 symmetric + 0.3 desc)
     print("\n[Run: Hybrid 0.7/0.3]")
-    # Reload data
+    # Reload data with whitelist filtering
     source = Path(config["source"])
-    candidate_tags_source = Path(config["candidate_tags_source"])
     tag_descriptions_source = Path(config["tag_descriptions_source"])
-    parsed_records = load_source_records(source)
-    dataset = build_dataset(parsed_records=parsed_records, max_items=None)
-    candidate_labels = load_candidate_tags(candidate_tags_source, dataset)
-    examples = build_mapping_examples(dataset=dataset, include_canonical_label_queries=False)
+    
     tag_descriptions = load_tag_descriptions(tag_descriptions_source)
+    whitelist = set(tag_descriptions.keys())
 
-    # Get cached vectors
+    parsed_records = load_source_records(source)
+    filtered_records = [r for r in parsed_records if r[1] in whitelist]
+    dataset = build_dataset(parsed_records=filtered_records, max_items=None)
+    
+    candidate_labels = sorted(list(whitelist))
+    examples = build_mapping_examples(dataset=dataset, include_canonical_label_queries=False)
+
+    # Get cached vectors from shared cache dir
+    cache_dir = base_output_dir
     query_vectors = get_rendered_vectors(
         rendered_texts=[QUERY_TPL.format(label=e.query_text) for e in examples],
-        output_dir=base_output_dir / "baseline_symmetric",
+        output_dir=cache_dir,
         cache_name="queries",
         template_text=QUERY_TPL,
         role="query",
@@ -392,7 +415,7 @@ def main():
     
     candidate_vectors_sym = get_rendered_vectors(
         rendered_texts=[CAND_TPL_SYM.format(label=l) for l in candidate_labels],
-        output_dir=base_output_dir / "baseline_symmetric",
+        output_dir=cache_dir,
         cache_name="candidates",
         template_text=CAND_TPL_SYM,
         role="candidate",
@@ -403,7 +426,7 @@ def main():
     
     candidate_vectors_desc = get_rendered_vectors(
         rendered_texts=[render_desc_text(CAND_TPL_DESC, l, tag_descriptions.get(l, "")) for l in candidate_labels],
-        output_dir=base_output_dir / "experiment_with_desc",
+        output_dir=cache_dir,
         cache_name="candidates",
         template_text=CAND_TPL_DESC,
         role="candidate",
@@ -426,16 +449,16 @@ def main():
     )
 
     # Final Comparison
-    print("\n" + "="*90)
+    print("\n" + "="*95)
     print(f"Comparison for {model}")
-    print("="*90)
-    print(f"{'Metric':<10} | {'Raw':<12} | {'Symmetric':<12} | {'With Desc':<12} | {'Hybrid (0.7)':<12}")
+    print("="*95)
+    print(f"{'Metric':<10} | {'Raw':<12} | {'Symmetric':<12} | {'Desc':<12} | {'Hybrid (0.7)':<12}")
     print("-" * 95)
     
     for key in ["top1", "top3", "top5", "top10", "mrr", "macro_f1"]:
         v_raw = raw_baseline["metrics"].get(key, 0)
         v_base = baseline["metrics"].get(key, 0)
-        v_exp = experiment["metrics"].get(key, 0)
+        v_exp = baseline_desc["metrics"].get(key, 0)
         v_hybrid = hybrid.get(key, 0)
         print(f"{key:<10} | {v_raw:<12.4f} | {v_base:<12.4f} | {v_exp:<12.4f} | {v_hybrid:<12.4f}")
     print("="*95)
@@ -444,9 +467,10 @@ def main():
     def format_cmc(cmc):
         return "[" + ", ".join([f"{x*100:.2f}" for x in cmc]) + "]"
 
-    print(f"Raw:       {format_cmc(raw_baseline['metrics']['cmc'])}")
-    print(f"Symmetric: {format_cmc(baseline['metrics']['cmc'])}")
-    print(f"Hybrid:    {format_cmc(hybrid['cmc'])}")
+    print(f"Raw:        {format_cmc(raw_baseline['metrics']['cmc'])}")
+    print(f"Symmetric:  {format_cmc(baseline['metrics']['cmc'])}")
+    print(f"Desc:       {format_cmc(baseline_desc['metrics']['cmc'])}")
+    print(f"Hybrid:     {format_cmc(hybrid['cmc'])}")
 
 if __name__ == "__main__":
     main()
