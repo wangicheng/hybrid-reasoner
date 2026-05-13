@@ -8,6 +8,7 @@ from src.core.book_matcher import BookMatcher
 from src.core.database import Database
 from src.core.explainer import generate_explanation
 from src.core.llm import parse_query, route_query_with_llm
+from src.core.query_compiler import CompiledQuery, compile_query
 from src.core.vector_store import VectorStore
 from src.core.lexical_store import LexicalStore
 
@@ -993,6 +994,110 @@ class HybridEngine:
                 reranked_results.append(original)
         return reranked_results
 
+    # ── Dual-Path Architecture Constants ──
+    SOFT_SCORE_ALPHA = 0.25   # Tag Match Ratio multiplier
+    FAST_PATH_MIN_RESULTS = 1000
+    FAST_PATH_RETRIEVAL_LIMIT = 500  # Each channel (Vector + BM25) recalls this many
+    EXCEPTION_PATH_LIMIT = 3000
+    NEGATIVE_TAG_PENALTY = 0.1
+
+    def _soft_score_candidates(self, scored_items: List[Dict[str, Any]], positive_tags: List[str]) -> List[Dict[str, Any]]:
+        """In-Memory Soft Scoring: Final_Score = Base × (1 + α × MatchRatio)."""
+        if not positive_tags:
+            return scored_items
+        total = len(positive_tags)
+        for r in scored_items:
+            book_tags = self._normalize_tags(r["item"].get("tags", []))
+            matched = [pt for pt in positive_tags if any(pt in t or t in pt for t in book_tags)]
+            ratio = len(matched) / total
+            if ratio > 0:
+                base = r["score"]
+                mult = 1.0 + self.SOFT_SCORE_ALPHA * ratio
+                r["score"] = min(base * mult, 1.0)
+                r["breakdown"].append({"criteria": "soft_tag_bonus", "label": "Soft Tag Bonus", "raw_score": ratio, "weighted_score": r["score"] - base, "is_filter": False, "reason": f"MatchRatio={ratio:.2f} ({len(matched)}/{total}), α={self.SOFT_SCORE_ALPHA}, ×{mult:.3f}"})
+        scored_items.sort(key=lambda x: x["score"], reverse=True)
+        return scored_items
+
+    def _run_retrieval_pipeline(self, expanded_terms, metadata_filter, constraint_dict, tag_terms_list, tag_mapping_weights, active_bm25, active_fusion, active_ws, active_wa, active_rrf_k, vector_limit=500, bm25_limit=500):
+        """Shared retrieval+scoring pipeline for both paths. Returns (scored_items, query_vector, recall_tags)."""
+        candidates_map, vector_score_map, payload_map = {}, {}, {}
+        vector_results, query_vector = self.vs.search(expanded_terms, limit=vector_limit, query_filter=metadata_filter, with_payload=True)
+        for hit in vector_results:
+            payload = hit.get("payload") or {}
+            bid = payload.get("id")
+            if not bid: continue
+            bid = str(bid)
+            candidates_map[bid] = payload; payload_map[bid] = payload; vector_score_map[bid] = float(hit["score"])
+
+        bm25_score_map, bm25_metric_map = {}, {}
+        if active_bm25 and self.lexical_store:
+            for res in self.lexical_store.search(expanded_terms, limit=bm25_limit):
+                item = res["item"]; bid = str(item.get("id"))
+                if not bid: continue
+                bm25_score_map[bid] = float(res["score"])
+                if bid not in candidates_map:
+                    if self._item_violates_hard_constraints(item, constraint_dict): continue
+                    candidates_map[bid] = item; payload_map[bid] = item; vector_score_map[bid] = 0.0
+            bm25_metric_map = self._normalize_bm25_scores(bm25_score_map)
+
+        recall_tags = []
+        if tag_terms_list and tag_mapping_weights:
+            recall_tags = self._extract_recall_tags(tag_mapping_weights)
+            if recall_tags:
+                for item in self.db.search_by_tags_any(recall_tags, limit=vector_limit):
+                    bid = str(item.get("id", "")).strip()
+                    if not bid or bid in candidates_map: continue
+                    if self._item_violates_hard_constraints(item, constraint_dict): continue
+                    candidates_map[bid] = item; payload_map[bid] = item; vector_score_map[bid] = 0.0
+
+        candidates = []
+        for bid, item in candidates_map.items():
+            if not item.get("classification") or not item.get("words_total"):
+                db_item = self.db.get_item(bid)
+                if db_item: item = {**db_item, **item}; candidates_map[bid] = item
+            if self._item_violates_hard_constraints(item, constraint_dict): continue
+            if "id" not in item or not item["id"]: item["id"] = bid
+            if not (str(item.get("name","")).strip() or str(item.get("intro","")).strip() or item.get("words_total") or item.get("tags") or str(item.get("classification","")).strip()): continue
+            candidates.append(item)
+        print(f"[Engine] Candidate pool: {len(candidates)}")
+
+        if active_fusion == "rrf":
+            scored = self._rrf_fuse(candidates, vector_score_map, bm25_score_map, tag_terms_list, tag_mapping_weights, payload_map)
+        else:
+            orig_ws, orig_wa = self.semantic_weight, self.attribute_weight
+            self.semantic_weight, self.attribute_weight = active_ws, active_wa
+            scored = []
+            for item in candidates:
+                bid = str(item.get("id"))
+                if not bid or bid == "None": continue
+                vs = vector_score_map.get(bid, 0.0)
+                bm = bm25_metric_map.get(bid, 0.0) if active_bm25 else 0.0
+                fs, bd = self.calculate_score(item, vs, tag_terms_list, tag_mapping_weights, bm25_metric=bm)
+                scored.append({"item": item, "score": float(fs), "vector_score": vs, "bm25_score": bm25_score_map.get(bid, 0.0) if active_bm25 else 0.0, "bm25_metric": bm, "breakdown": bd, "payload": payload_map.get(bid, {})})
+            self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
+        scored.sort(key=lambda r: r["score"], reverse=True)
+        return scored, query_vector, recall_tags
+
+    def _exception_path_triage(self, scored_items, negative_tag_terms, positive_tags, min_results=1000):
+        """Tiered triage: Tier1=filter neg tags; Tier2=soft penalty ×0.1. Returns (items, level)."""
+        tier1, rejected = [], []
+        for r in scored_items:
+            tags = self._normalize_tags(r["item"].get("tags", []))
+            if any(any(self._tag_matches_blocked(nt, bt) for bt in tags) for nt in negative_tag_terms):
+                rejected.append(r)
+            else:
+                tier1.append(r)
+        print(f"[ExceptionPath:Tier1] {len(tier1)} clean, {len(rejected)} rejected")
+        if len(tier1) >= min_results:
+            return self._soft_score_candidates(tier1, positive_tags), 1
+        print(f"[ExceptionPath:Tier2] Applying soft penalty to {len(rejected)} items")
+        for r in rejected:
+            r["score"] *= self.NEGATIVE_TAG_PENALTY
+            r["breakdown"].append({"criteria": "neg_tag_penalty", "label": "Neg Tag Penalty", "raw_score": self.NEGATIVE_TAG_PENALTY, "weighted_score": r["score"], "is_filter": False, "reason": f"Tier 2: score × {self.NEGATIVE_TAG_PENALTY}"})
+        all_items = self._soft_score_candidates(tier1 + rejected, positive_tags)
+        all_items.sort(key=lambda r: r["score"], reverse=True)
+        return all_items, 2
+
     async def search(
         self,
         user_query: str,
@@ -1001,379 +1106,132 @@ class HybridEngine:
         explain: bool = True,
         cache_namespace: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """HyST v2 Dual-Path Search: Fast Path → Exception Path."""
         if self.all_tags_cache:
-            print(
-                f"[Engine] Using cached tag list with {len(self.all_tags_cache)} entries."
-            )
+            print(f"[Engine] Using cached tag list with {len(self.all_tags_cache)} entries.")
 
         related_books = self.book_matcher.extract_related_books(user_query)
         related_book_context = self.book_matcher.build_related_book_context(related_books)
+        parse_result = parse_query(user_query, model_id=model_id, cache_namespace=cache_namespace, tag_list=self.all_tags_cache, reference_book_context=related_book_context)
 
-        parse_result = parse_query(
-            user_query,
-            model_id=model_id,
-            cache_namespace=cache_namespace,
-            tag_list=self.all_tags_cache,
-            reference_book_context=related_book_context,
-        )
+        # ── Step 2.5: Query Compiler ──
+        negative_tag_terms = self._dedupe_terms(list(parse_result.tag_intent.negative_terms)) or self._resolve_negative_tag_terms(parse_result.criteria)
+        compiled = compile_query(parse_result, negative_tag_terms)
+        hard_constraint_dict = compiled.hard_filters.to_constraint_dict()
+        tag_terms_list = compiled.soft_factors.tag_terms_list
+        positive_tags = compiled.soft_factors.positive_tags
+        print(f"[QueryCompiler] Hard: status={compiled.hard_filters.status_filter}, words=[{compiled.hard_filters.words_min}, {compiled.hard_filters.words_max}], neg_tags={compiled.hard_filters.negative_tag_terms} | Soft: pos_tags={positive_tags}")
 
-        positive_tag_terms = list(parse_result.tag_intent.positive_terms) or list(
-            parse_result.generated_keywords
-        )
-        tag_terms_list = self._build_tag_terms_list(positive_tag_terms)
-
-        # Note: We don't pre-compute tag_mapping_weights here anymore;
-        # it will be computed inside the degradation loop with the appropriate threshold
+        # ── Expand search terms ──
         base_terms = parse_result.search_terms or parse_result.original_query
         expanded_terms = base_terms
+        positive_semantic = [c for c in parse_result.criteria if c.name == "semantic_similarity" and not getattr(c, "is_negative", False)]
+        sem_texts = []
+        norm_base = "".join(str(base_terms).split()).lower()
+        for c in positive_semantic:
+            qt = self._criteria_params(c).get("query_text", "").strip()
+            if qt and "".join(qt.split()).lower() != norm_base:
+                sem_texts.append(qt)
+        if sem_texts:
+            expanded_terms = f"{expanded_terms} {' '.join(sem_texts)}".strip()
 
-        positive_semantic = [
-            criteria
-            for criteria in parse_result.criteria
-            if criteria.name == "semantic_similarity"
-            and not getattr(criteria, "is_negative", False)
-        ]
-        semantic_texts = []
-        normalized_base_terms = "".join(str(base_terms).split()).lower()
-        for criteria in positive_semantic:
-            query_text = self._criteria_params(criteria).get("query_text", "").strip()
-            normalized_query_text = "".join(query_text.split()).lower()
-            if query_text and normalized_query_text != normalized_base_terms:
-                semantic_texts.append(query_text)
-        if semantic_texts:
-            semantic_expansion = " ".join(semantic_texts)
-            expanded_terms = f"{expanded_terms} {semantic_expansion}".strip()
-
-        # ── Extract hard constraints early for BM25 pre-filtering ──
-        negative_tag_terms = self._dedupe_terms(
-            list(parse_result.tag_intent.negative_terms)
-        ) or self._resolve_negative_tag_terms(parse_result.criteria)
-
-        hard_constraints = self._extract_hard_constraints(
-            parse_result.criteria, negative_tag_terms
-        )
-        hard_constraints["required_tags"] = list(parse_result.tag_intent.positive_terms) if hasattr(parse_result, 'tag_intent') else []
-
-        # ── Dynamic Routing: decide fusion strategy per-query ──
+        # ── Dynamic Routing ──
         if self.fusion_strategy == "auto":
-            routing = self._determine_routing_strategy(parse_result, hard_constraints)
-            active_fusion = routing["fusion"]
-            active_ws = routing.get("ws", self.semantic_weight)
-            active_wa = routing.get("wa", self.attribute_weight)
-            active_rrf_k = routing.get("rrf_k", self.rrf_k)
-            active_bm25 = routing.get("enable_bm25", self.enable_bm25)
+            routing = self._determine_routing_strategy(parse_result, hard_constraint_dict)
         elif self.fusion_strategy == "auto_llm":
-            routing = self._determine_routing_strategy_llm(
-                user_query, parse_result, hard_constraints, model_id=model_id,
-                cache_namespace=cache_namespace,
-            )
-            active_fusion = routing["fusion"]
-            active_ws = routing.get("ws", self.semantic_weight)
-            active_wa = routing.get("wa", self.attribute_weight)
-            active_rrf_k = routing.get("rrf_k", self.rrf_k)
-            active_bm25 = routing.get("enable_bm25", self.enable_bm25)
+            routing = self._determine_routing_strategy_llm(user_query, parse_result, hard_constraint_dict, model_id=model_id, cache_namespace=cache_namespace)
         else:
-            active_fusion = self.fusion_strategy
-            active_ws = self.semantic_weight
-            active_wa = self.attribute_weight
-            active_rrf_k = self.rrf_k
-            active_bm25 = self.enable_bm25
+            routing = {"fusion": self.fusion_strategy}
+        active_fusion = routing.get("fusion", self.fusion_strategy)
+        active_ws = routing.get("ws", self.semantic_weight)
+        active_wa = routing.get("wa", self.attribute_weight)
+        active_rrf_k = routing.get("rrf_k", self.rrf_k)
+        active_bm25 = routing.get("enable_bm25", self.enable_bm25)
+
+        # ── Compute tag mappings (once) ──
+        tag_mapping_weights: List[Dict[str, float]] = []
+        if tag_terms_list:
+            tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list, similarity_threshold=0.6)
 
         # ════════════════════════════════════════════════════════════════
-        # ── GRACEFUL DEGRADATION: Multi-attempt search with relaxation ──
+        # ── FAST PATH: Dual-channel recall (Vector 500 + BM25 500) with hard filters ──
         # ════════════════════════════════════════════════════════════════
-        final_results = []
-        final_query_vector = None
-        degradation_attempt = 0
-        
-        for attempt in range(1, 4):  # Maximum 3 attempts
-            degradation_attempt = attempt
-            
-            # Apply degradation strategy based on attempt number
-            iteration_constraints, tag_similarity_threshold = self._apply_degradation_step(
-                hard_constraints, attempt
+        metadata_filter = VectorStore.build_metadata_filter(hard_constraint_dict)
+        print(f"[FastPath] Executing (Vector={self.FAST_PATH_RETRIEVAL_LIMIT}, BM25={self.FAST_PATH_RETRIEVAL_LIMIT}, filter={'ON' if metadata_filter else 'OFF'})...")
+        scored_items, query_vector, recall_tags = self._run_retrieval_pipeline(
+            expanded_terms, metadata_filter, hard_constraint_dict,
+            tag_terms_list, tag_mapping_weights,
+            active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
+            vector_limit=self.FAST_PATH_RETRIEVAL_LIMIT, bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT)
+        scored_items = self._post_filter(scored_items, hard_constraint_dict)
+        scored_items.sort(key=lambda r: r["score"], reverse=True)
+        scored_items = self._soft_score_candidates(scored_items, positive_tags)
+
+        degradation_level = 0
+        system_message = None
+        passed_count = len(scored_items)
+
+        if passed_count >= self.FAST_PATH_MIN_RESULTS:
+            print(f"[FastPath] ✅ {passed_count} results ≥ {self.FAST_PATH_MIN_RESULTS}, returning directly.")
+        else:
+            # ════════════════════════════════════════════════════════════
+            # ── EXCEPTION PATH: Expanded recall with hard filters ──
+            # ════════════════════════════════════════════════════════════
+            deficit = self.EXCEPTION_PATH_LIMIT - passed_count
+            vec_extra = int(deficit * 0.7)
+            bm25_extra = int(deficit * 0.3)
+            print(
+                f"[ExceptionPath] ⚠️ {passed_count} < {self.FAST_PATH_MIN_RESULTS}, "
+                f"expanding recall: Vector +{vec_extra}, BM25 +{bm25_extra} (deficit={deficit})..."
             )
-            
-            # ── Compute tag mappings with degradation-aware threshold ──
-            tag_mapping_weights: List[Dict[str, float]] = []
-            if tag_terms_list:
-                print(f"[Engine] Computing tag mappings (attempt {attempt}) with threshold={tag_similarity_threshold}")
-                tag_mapping_weights = self.vs.batch_map_tags(
-                    tag_terms_list,
-                    similarity_threshold=tag_similarity_threshold,
-                )
-            
-            # ── Build Qdrant metadata pre-filter from (possibly adjusted) hard constraints ──
-            metadata_filter = VectorStore.build_metadata_filter(iteration_constraints)
-            if metadata_filter:
-                print(
-                    f"[Engine:HyST] HARD pre-filter active: "
-                    f"status={iteration_constraints.get('status_filter')}, "
-                    f"words=[{iteration_constraints.get('words_min')}, {iteration_constraints.get('words_max')}], "
-                    f"neg_tags={iteration_constraints.get('negative_tag_terms', [])}"
-                )
 
-            retrieval_limit = 300
-            candidates_map: Dict[str, Dict[str, Any]] = {}
-            vector_score_map: Dict[str, float] = {}
-            payload_map: Dict[str, Dict[str, Any]] = {}
+            # Second retrieval: still WITH hard filters, just wider net
+            exc_scored, _, extra_recall = self._run_retrieval_pipeline(
+                expanded_terms, metadata_filter, hard_constraint_dict,
+                tag_terms_list, tag_mapping_weights,
+                active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
+                vector_limit=vec_extra, bm25_limit=bm25_extra)
+            if extra_recall:
+                recall_tags = list(set(recall_tags + extra_recall))
 
-            vector_results, query_vector = self.vs.search(
-                expanded_terms,
-                limit=retrieval_limit,
-                query_filter=metadata_filter,
-                with_payload=True,
-            )
-            final_query_vector = query_vector  # Store for return value
-            
-            for hit in vector_results:
-                payload = hit.get("payload") or {}
-                book_id = payload.get("id")
-                if not book_id:
-                    continue
-                book_id = str(book_id)
-                candidates_map[book_id] = payload
-                payload_map[book_id] = payload
-                vector_score_map[book_id] = float(hit["score"])
+            # Merge: add only new items from expanded retrieval
+            existing_ids = {str(r["item"].get("id")) for r in scored_items}
+            new_count = 0
+            for r in exc_scored:
+                bid = str(r["item"].get("id"))
+                if bid not in existing_ids:
+                    scored_items.append(r)
+                    existing_ids.add(bid)
+                    new_count += 1
 
-            bm25_score_map: Dict[str, float] = {}
-            bm25_metric_map: Dict[str, float] = {}
-            bm25_new_count = 0
-            bm25_prefiltered_count = 0
-            if active_bm25 and self.lexical_store:
-                bm25_results = self.lexical_store.search(expanded_terms, limit=getattr(settings, "TOP_K_BM25", 1000))
-                for res in bm25_results:
-                    item = res["item"]
-                    book_id = str(item.get("id"))
-                    if not book_id:
-                        continue
-                    bm25_score_map[book_id] = float(res["score"])
-                    if book_id not in candidates_map:
-                        # Pre-filter: skip BM25-only candidates that violate hard constraints
-                        if self._item_violates_hard_constraints(item, iteration_constraints):
-                            bm25_prefiltered_count += 1
-                            continue
-                        candidates_map[book_id] = item
-                        payload_map[book_id] = item
-                        vector_score_map[book_id] = 0.0
-                        bm25_new_count += 1
-                # Normalize once after collecting all BM25 scores
-                bm25_metric_map = self._normalize_bm25_scores(bm25_score_map)
-                print(
-                    f"[Engine] BM25: {len(bm25_results)} results, "
-                    f"{bm25_new_count} new candidates added, "
-                    f"{bm25_prefiltered_count} pre-filtered by hard constraints "
-                    f"(already {len(bm25_score_map) - bm25_new_count - bm25_prefiltered_count} were in pool)"
-                )
+            # Re-apply soft scoring on the merged pool
+            scored_items = self._soft_score_candidates(scored_items, positive_tags)
+            scored_items.sort(key=lambda r: r["score"], reverse=True)
+            degradation_level = 1
+            system_message = f"擴大檢索範圍：初始 {passed_count} 本 + 補充 {new_count} 本 = {len(scored_items)} 本候選"
+            print(f"[ExceptionPath] Merged: {passed_count} + {new_count} = {len(scored_items)} total, level={degradation_level}")
 
-            if tag_terms_list and tag_mapping_weights:
-                recall_tags = self._extract_recall_tags(tag_mapping_weights)
-                if recall_tags:
-                    print(f"[Engine] Triggering mapped-tag recall for {len(recall_tags)} resolved tags.")
-                    tag_recall_items = self.db.search_by_tags_any(recall_tags, limit=retrieval_limit)
-                    for item in tag_recall_items:
-                        book_id = str(item.get("id", "")).strip()
-                        if not book_id:
-                            continue
-                        if book_id not in candidates_map:
-                            # Pre-filter: skip tag-recall candidates that violate hard constraints
-                            if self._item_violates_hard_constraints(item, iteration_constraints):
-                                continue
-                            candidates_map[book_id] = item
-                            payload_map[book_id] = item
-                            vector_score_map[book_id] = 0.0
-
-            candidates: List[Dict[str, Any]] = []
-            for book_id, item in candidates_map.items():
-                if not item.get("classification") or not item.get("words_total"):
-                    db_item = self.db.get_item(book_id)
-                    if db_item:
-                        item = {**db_item, **item}
-                        candidates_map[book_id] = item
-                
-                # Final Pre-filter: now that we have full DB metadata, verify one last time
-                if self._item_violates_hard_constraints(item, iteration_constraints):
-                    continue
-                    
-                if "id" not in item or not item["id"]:
-                    item["id"] = book_id
-                has_minimum_metadata = bool(
-                    str(item.get("name", "")).strip()
-                    or str(item.get("intro", "")).strip()
-                    or item.get("words_total")
-                    or item.get("tags")
-                    or str(item.get("classification", "")).strip()
-                )
-                if not has_minimum_metadata:
-                    continue
-                candidates.append(item)
-
-            print(f"[Engine] Candidate pool size (attempt {attempt}): {len(candidates)}")
-
-            # negative_tag_terms already extracted above (before BM25 search)
-            if active_fusion == "rrf":
-                # ── RRF Fusion Path (屠龍刀) ──
-                scored_items = self._rrf_fuse(
-                    candidates,
-                    vector_score_map,
-                    bm25_score_map,
-                    tag_terms_list,
-                    tag_mapping_weights,
-                    payload_map,
-                )
-            else:
-                # ── Weighted Linear Combination Path (倚天劍) ──
-                # Apply per-query weights from routing (or static defaults)
-                orig_ws, orig_wa = self.semantic_weight, self.attribute_weight
-                self.semantic_weight, self.attribute_weight = active_ws, active_wa
-
-                scored_items = []
-                for item in candidates:
-                    book_id = str(item.get("id"))
-                    if not book_id or book_id == "None":
-                        continue
-                    vector_score = vector_score_map.get(book_id, 0.0)
-                    raw_bm25_score = bm25_score_map.get(book_id, 0.0) if active_bm25 else 0.0
-                    bm25_metric = bm25_metric_map.get(book_id, 0.0) if active_bm25 else 0.0
-                    
-                    final_score, breakdown = self.calculate_score(
-                        item,
-                        vector_score,
-                        tag_terms_list,
-                        tag_mapping_weights,
-                        bm25_metric=bm25_metric,
-                        iteration_constraints=iteration_constraints,
-                    )
-                    scored_items.append(
-                        {
-                            "item": item,
-                            "score": float(final_score),
-                            "vector_score": vector_score,
-                            "bm25_score": raw_bm25_score,
-                            "bm25_metric": bm25_metric,
-                            "breakdown": breakdown,
-                            "payload": payload_map.get(book_id, {}),
-                        }
-                    )
-
-                # Restore original weights
-                self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
-
-            scored_items.sort(key=lambda result: result["score"], reverse=True)
-            scored_items = self._post_filter(
-                scored_items,
-                iteration_constraints,
-            )
-            scored_items.sort(key=lambda result: result["score"], reverse=True)
-            
-            # ── Quality-Aware Degradation check ──
-            # Vector search always returns `limit` items, so len(scored_items) is
-            # usually large unless filtered. We must check the *quality* of the results.
-            # A result is "good" if it has high semantic similarity or matched some tags.
-            final_results = scored_items
-            excellent_results_count = 0
-            acceptable_results_count = 0
-            for r in final_results:
-                v_score = r.get("vector_score", 0)
-                if v_score >= 0.70:
-                    excellent_results_count += 1
-                elif v_score >= 0.55 or any(b.get("criteria") == "attribute_track" and b.get("raw_score", 0) > 0 for b in r.get("breakdown", [])):
-                    acceptable_results_count += 1
-
-            total_good = excellent_results_count + acceptable_results_count
-
-            # Quality-aware early stopping: require excellent semantic hits to stop early
-            if attempt < 3:
-                if excellent_results_count >= 3:
-                    print(f"[Engine] Got {excellent_results_count} EXCELLENT results on attempt {attempt}, stopping degradation early.")
-                    break
-                else:
-                    print(f"[Engine] Attempt {attempt} yielded {excellent_results_count} excellent and {acceptable_results_count} acceptable results. Forcing deeper degradation...")
-            else:
-                if total_good > 0:
-                    print(f"[Engine] Final attempt 3 completed with {total_good} viable candidates.")
-
-        # ── Post-degradation result finalization ──
-        scored_items = final_results
-        
         if not scored_items:
-            return {
-                "query": user_query,
-                "parsed_criteria": [
-                    self._criteria_to_dict(criteria) for criteria in parse_result.criteria
-                ],
-                "search_terms": parse_result.search_terms,
-                "generated_keywords": parse_result.generated_keywords,
-                "tag_intent": parse_result.tag_intent.model_dump(),
-                "query_vector": query_vector,
-                "results": [],
-                "message": "No matching novels were found after applying the filters.",
-                "engine": "HybridEngine",
-                "related_books": related_books,
-                "reference_tags": [],
-                "parse_metadata": parse_result.parse_metadata,
-            }
+            return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": parse_result.tag_intent.model_dump(), "query_vector": query_vector, "results": [], "message": "No matching novels were found.", "engine": "HybridEngine", "related_books": related_books, "reference_tags": [], "parse_metadata": parse_result.parse_metadata, "degradation_level": degradation_level, "system_message": system_message}
 
-        # --- Optional PermSC Reranking ---
+        # ── Optional PermSC Reranking ──
         if self.rerank_enabled:
-            candidate_limit = settings.RERANK_CANDIDATE_LIMIT
-            # Only rerank the top N candidates to avoid overwhelming the LLM
-            to_rerank = scored_items[:candidate_limit]
-            print(f"[Engine] Limiting rerank pool from {len(scored_items)} to {len(to_rerank)} candidates.")
-            
-            reranked = await self._rerank_results(to_rerank, user_query, limit)
-            # Combine reranked items with the rest of the unranked items
-            scored_items = reranked + scored_items[candidate_limit:]
+            cl = settings.RERANK_CANDIDATE_LIMIT
+            reranked = await self._rerank_results(scored_items[:cl], user_query, limit)
+            scored_items = reranked + scored_items[cl:]
 
         final_results = scored_items[:limit]
-
         top_n_explain = 3 if explain else 0
-        explainer_runtime_state = {
-            "gemini_fail_count": 0,
-            "gemini_disabled": False,
-            "gemini_fail_threshold": 3,
-        }
-        for index, result in enumerate(final_results):
-            if index >= top_n_explain:
-                result["explanation"] = None
-                continue
+        state = {"gemini_fail_count": 0, "gemini_disabled": False, "gemini_fail_threshold": 3}
+        for i, result in enumerate(final_results):
+            if i >= top_n_explain:
+                result["explanation"] = None; continue
+            item, payload = result["item"], result.get("payload", {})
+            chunks = []
+            if payload.get("content"): chunks.append(f"Retrieved content:\n{payload['content'][:500]}...")
+            elif payload.get("intro"): chunks.append(f"Retrieved intro:\n{payload['intro'][:500]}...")
+            if item.get("intro"): chunks.append(f"Database intro:\n{item['intro']}")
+            result["explanation"] = generate_explanation(query=user_query, book_item=item, context_chunks=chunks, score_breakdown=result["breakdown"], runtime_state=state, model_id=model_id)
 
-            item = result["item"]
-            payload = result.get("payload", {})
-            chunks_to_analyze = []
-            if payload.get("content"):
-                chunks_to_analyze.append(f"Retrieved content:\n{payload['content'][:500]}...")
-            elif payload.get("intro"):
-                chunks_to_analyze.append(f"Retrieved intro:\n{payload['intro'][:500]}...")
-            if item.get("intro"):
-                chunks_to_analyze.append(f"Database intro:\n{item['intro']}")
+        return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": {"positive_terms": list(parse_result.tag_intent.positive_terms), "negative_terms": negative_tag_terms}, "hypothetical_intro": parse_result.hypothetical_intro, "related_books": related_books, "reference_tags": recall_tags, "parse_metadata": parse_result.parse_metadata, "query_vector": query_vector, "results": final_results, "engine": "HybridEngine", "degradation_level": degradation_level, "system_message": system_message}
 
-            result["explanation"] = generate_explanation(
-                query=user_query,
-                book_item=item,
-                context_chunks=chunks_to_analyze,
-                score_breakdown=result["breakdown"],
-                runtime_state=explainer_runtime_state,
-                model_id=model_id,
-            )
-
-        return {
-            "query": user_query,
-            "parsed_criteria": [
-                self._criteria_to_dict(criteria) for criteria in parse_result.criteria
-            ],
-            "search_terms": parse_result.search_terms,
-            "generated_keywords": parse_result.generated_keywords,
-            "tag_intent": {
-                "positive_terms": list(parse_result.tag_intent.positive_terms),
-                "negative_terms": negative_tag_terms,
-            },
-            "hypothetical_intro": parse_result.hypothetical_intro,
-            "related_books": related_books,
-            "reference_tags": recall_tags if 'recall_tags' in locals() else [],
-            "parse_metadata": parse_result.parse_metadata,
-            "query_vector": final_query_vector,
-            "results": final_results,
-            "engine": "HybridEngine",
-            "degradation_attempt": degradation_attempt,
-        }
