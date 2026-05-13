@@ -39,20 +39,18 @@ class PermSCReranker:
     n_permutations : int
         Number of permuted orderings to evaluate (default: 5).
         More permutations = more robust but slower / higher cost.
-    top_k : int
-        Number of top candidates each permutation should select (default: 10).
+    full_ranking : bool
+        Each permutation returns a complete ranking over the candidate list.
     """
 
     def __init__(
         self,
         model_id: str = "gemma-4-31b-it",
         n_permutations: int = 5,
-        top_k: int = 10,
         kemeny_time_budget_seconds: float = 10.0,
     ) -> None:
         self.model_id = model_id
         self.n_permutations = n_permutations
-        self.top_k = top_k
         self.kemeny_time_budget_seconds = max(0.1, float(kemeny_time_budget_seconds))
         self.rotator = get_api_key_rotator()
         self.rate_limiter = get_rate_limiter()
@@ -80,20 +78,21 @@ class PermSCReranker:
             intro_preview = str(c.get("intro", ""))[:100]
             candidates_text += f"[{i}] {c['name']} (Tags: {tags_preview}) - {intro_preview}...\n"
 
-        prompt = f"""\
+                candidate_count = len(candidates)
+                prompt = f"""\
 You are an expert web novel recommender. The user is looking for novels based on the following query:
 User Query: {query}
 
-Below is a list of {len(candidates)} candidate novels. Each novel has an ID [number], Title, Tags, and a short Intro.
-Please select the top {self.top_k} most relevant novels from this list and rank them from best (1) to worst ({self.top_k}).
+Below is a list of {candidate_count} candidate novels. Each novel has an ID [number], Title, Tags, and a short Intro.
+Please rank ALL {candidate_count} novels from best (1) to worst ({candidate_count}).
 
 Candidate Novels:
 {candidates_text}
 
-Output exactly a JSON object containing a list of the IDs of the top {self.top_k} books you selected, in ranked order.
+Output exactly a JSON object containing a list of the IDs for ALL ranked books, in order.
 Format:
 {{
-  "top_{self.top_k}_ids": [id1, id2, ..., id{self.top_k}]
+    "ranked_ids": [id1, id2, ..., id{candidate_count}]
 }}
 Do not output anything else.
 """
@@ -127,26 +126,32 @@ Do not output anything else.
                 text = text.strip()
 
                 parsed = json.loads(text)
-                top_ids = parsed.get(f"top_{self.top_k}_ids", [])
+                ranked_ids = parsed.get("ranked_ids", [])
+                if not isinstance(ranked_ids, list):
+                    raise ValueError("Invalid ranked_ids payload")
+                if len(ranked_ids) != candidate_count:
+                    raise ValueError("Ranking length mismatch")
 
-                # Convert list index → book_id (top_k)
+                seen = set()
                 ranked_book_ids = []
-                for idx in top_ids:
-                    if isinstance(idx, int) and 0 <= idx < len(candidates):
-                        ranked_book_ids.append(candidates[idx]["book_id"])
+                for idx in ranked_ids:
+                    if not isinstance(idx, int):
+                        raise ValueError("Ranking index must be int")
+                    if idx < 0 or idx >= candidate_count:
+                        raise ValueError("Ranking index out of range")
+                    if idx in seen:
+                        raise ValueError("Ranking contains duplicates")
+                    seen.add(idx)
+                    ranked_book_ids.append(candidates[idx]["book_id"])
 
-                # Expand to full-length ranking by appending the remaining
-                # candidates in the current permutation order.
-                ranked_set = set(ranked_book_ids)
-                remaining = [
-                    candidate["book_id"]
-                    for candidate in candidates
-                    if candidate["book_id"] not in ranked_set
-                ]
-                return ranked_book_ids + remaining
+                return ranked_book_ids
 
             except Exception as exc:
                 attempt += 1
+                if isinstance(exc, ValueError):
+                    print(f"  [Reranker] Invalid ranking output: {exc}")
+                    await asyncio.sleep(2.0)
+                    continue
                 if not _is_retryable(exc):
                     print(f"  [Reranker] Non-retryable error: {exc}")
                     break
@@ -241,7 +246,7 @@ Do not output anything else.
         candidates: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         """
-        Rerank candidates using PermSC Borda Count aggregation.
+        Rerank candidates using PermSC Kemeny-Young aggregation.
 
         Each candidate dict must contain at least:
           - ``book_id``  (str)
@@ -249,7 +254,7 @@ Do not output anything else.
           - ``tags``     (List[str])
           - ``intro``    (str)
 
-        Returns the full candidate list sorted by Borda score (descending).
+        Returns the full candidate list sorted by Kemeny order.
         """
         if not candidates:
             return candidates
@@ -262,7 +267,8 @@ Do not output anything else.
             tasks.append(self._get_single_ranking(query, shuffled, api_key))
 
         rankings = await asyncio.gather(*tasks)
-        rankings = [ranking for ranking in rankings if ranking]
+        expected_len = len(candidates)
+        rankings = [ranking for ranking in rankings if len(ranking) == expected_len]
         if not rankings:
             return candidates
 

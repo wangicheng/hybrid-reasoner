@@ -177,20 +177,6 @@ class RunGenerator:
                         if not b_id:
                             continue
 
-                        author_name = item.get("author") or item.get("user", {}).get("name", "")
-                        extracted_results.append(
-                            {
-                                "book_id": b_id,
-                                "title": item.get("name", ""),
-                                "author": author_name,
-                                "intro": item.get("intro", ""),
-                                "words_total": item.get("words_total", 0),
-                                "publish_status": item.get("publish_status", ""),
-                                "tags": item.get("tags", []),
-                                "rank": rank + 1,
-                            }
-                        )
-
                     run_data.append(
                         {
                             "query_id": q_id,
