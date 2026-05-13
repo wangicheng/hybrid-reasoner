@@ -10,6 +10,7 @@ from qdrant_client.http import models as rest
 
 from src.config import settings
 
+_GLOBAL_EMBEDDING_CACHE: Dict[str, List[float]] = {}
 
 class VectorStore:
     def __init__(self, collection_name: str = "items"):
@@ -347,6 +348,7 @@ class VectorStore:
         self.client.upsert(collection_name=collection_name, points=points)
         print(f"[VectorStore] '{collection_name}' synced with {len(points)} tags.")
 
+
     def _embed_with_retry(
         self,
         text: Any,
@@ -360,25 +362,65 @@ class VectorStore:
         )
         import time
 
+        is_list = isinstance(text, list)
+        
+        # ── 1. Check Cache ──
+        if not is_list:
+            cache_key = f"{task_type}:{text}"
+            if cache_key in _GLOBAL_EMBEDDING_CACHE:
+                return _GLOBAL_EMBEDDING_CACHE[cache_key]
+        else:
+            uncached_texts = []
+            uncached_indices = []
+            cached_results = [None] * len(text)
+            
+            for i, t in enumerate(text):
+                cache_key = f"{task_type}:{t}"
+                if cache_key in _GLOBAL_EMBEDDING_CACHE:
+                    cached_results[i] = _GLOBAL_EMBEDDING_CACHE[cache_key]
+                else:
+                    uncached_texts.append(t)
+                    uncached_indices.append(i)
+            
+            if not uncached_texts:
+                return cached_results
+            
+            # Use uncached_texts for the API call
+            text_to_embed = uncached_texts
+        
+        # If it's a single string and wasn't cached, text_to_embed is just the string
+        if not is_list:
+            text_to_embed = text
+
+        # ── 2. Call API with retries ──
         attempt = 0
         rotator = get_api_key_rotator()
         num_keys = len(rotator.api_keys)
-        # We want to try all keys, plus some retries for transient errors.
-        # At minimum, we should attempt num_keys times if it's a rate limit.
         max_attempts = max(10, num_keys + 2)
-        is_list = isinstance(text, list)
 
         while attempt < max_attempts:
             try:
                 get_rate_limiter().wait(self._current_api_key)
                 response = self.genai_client.models.embed_content(
                     model=self.embedding_model,
-                    contents=text,
+                    contents=text_to_embed,
                     config=types.EmbedContentConfig(task_type=task_type),
                 )
+                
+                # ── 3. Update Cache & Return ──
                 if is_list:
-                    return [list(embedding.values) for embedding in response.embeddings]
-                return list(response.embeddings[0].values)
+                    new_embeddings = [list(embedding.values) for embedding in response.embeddings]
+                    for i, t in enumerate(uncached_texts):
+                        cache_key = f"{task_type}:{t}"
+                        _GLOBAL_EMBEDDING_CACHE[cache_key] = new_embeddings[i]
+                        cached_results[uncached_indices[i]] = new_embeddings[i]
+                    return cached_results
+                else:
+                    emb = list(response.embeddings[0].values)
+                    cache_key = f"{task_type}:{text}"
+                    _GLOBAL_EMBEDDING_CACHE[cache_key] = emb
+                    return emb
+
             except Exception as exc:
                 attempt += 1
                 error_text = str(exc)
