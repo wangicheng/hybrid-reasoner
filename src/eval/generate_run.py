@@ -262,8 +262,10 @@ if __name__ == "__main__":
 
     experiments = [
         {
-            "name": "gemma4_default_parser",
+            "name": "gemma4_w64_full100",
             "model_id": "gemma-4-31b-it",
+            "semantic_weight": 0.4,
+            "attribute_weight": 0.6,
         },
     ]
 
@@ -278,6 +280,8 @@ if __name__ == "__main__":
         print(f"\n=== Trial {repeat_index}/{repeats} ===")
         for exp in experiments:
             model_id = normalize_model_id(exp.get("model_id"))
+            semantic_weight = float(exp.get("semantic_weight", 0.4))
+            attribute_weight = float(exp.get("attribute_weight", 0.6))
             generator = RunGenerator(
                 k_per_engine=10,
                 model_id=model_id,
@@ -288,8 +292,8 @@ if __name__ == "__main__":
                     queries_config=sample_queries,
                     engine_name=exp["name"],
                     output_dir=output_folder,
-                    semantic_weight=0.4,
-                    attribute_weight=0.6,
+                    semantic_weight=semantic_weight,
+                    attribute_weight=attribute_weight,
                     run_suffix=run_suffix,
                 )
             except Exception as exc:

@@ -129,12 +129,21 @@ Do not output anything else.
                 parsed = json.loads(text)
                 top_ids = parsed.get(f"top_{self.top_k}_ids", [])
 
-                # Convert list index → book_id
+                # Convert list index → book_id (top_k)
                 ranked_book_ids = []
                 for idx in top_ids:
                     if isinstance(idx, int) and 0 <= idx < len(candidates):
                         ranked_book_ids.append(candidates[idx]["book_id"])
-                return ranked_book_ids
+
+                # Expand to full-length ranking by appending the remaining
+                # candidates in the current permutation order.
+                ranked_set = set(ranked_book_ids)
+                remaining = [
+                    candidate["book_id"]
+                    for candidate in candidates
+                    if candidate["book_id"] not in ranked_set
+                ]
+                return ranked_book_ids + remaining
 
             except Exception as exc:
                 attempt += 1
