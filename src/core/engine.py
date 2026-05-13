@@ -994,11 +994,12 @@ class HybridEngine:
                 reranked_results.append(original)
         return reranked_results
 
-    # ── Dual-Path Architecture Constants ──
+    # ── Tri-track Architecture Constants ──
     SOFT_SCORE_ALPHA = 0.25   # Tag Match Ratio multiplier
     FAST_PATH_MIN_RESULTS = 1000
-    FAST_PATH_RETRIEVAL_LIMIT = 500  # Each channel (Vector + BM25) recalls this many
-    EXCEPTION_PATH_LIMIT = 3000
+    FAST_PATH_RETRIEVAL_LIMIT = 500  # Track A (Vector) & B (BM25) each recall this many
+    TAG_VECTOR_RETRIEVAL_LIMIT = 300  # Track C (Tag Vector) recall limit
+    EXCEPTION_PATH_LIMIT = 5000
     NEGATIVE_TAG_PENALTY = 0.1
 
     def _soft_score_candidates(self, scored_items: List[Dict[str, Any]], positive_tags: List[str]) -> List[Dict[str, Any]]:
@@ -1018,9 +1019,19 @@ class HybridEngine:
         scored_items.sort(key=lambda x: x["score"], reverse=True)
         return scored_items
 
-    def _run_retrieval_pipeline(self, expanded_terms, metadata_filter, constraint_dict, tag_terms_list, tag_mapping_weights, active_bm25, active_fusion, active_ws, active_wa, active_rrf_k, vector_limit=500, bm25_limit=500):
-        """Shared retrieval+scoring pipeline for both paths. Returns (scored_items, query_vector, recall_tags)."""
+    def _run_retrieval_pipeline(self, expanded_terms, metadata_filter, constraint_dict, tag_terms_list, tag_mapping_weights, active_bm25, active_fusion, active_ws, active_wa, active_rrf_k, vector_limit=500, bm25_limit=500, tag_vector_limit=300, positive_tags=None):
+        """Tri-track retrieval + scoring pipeline.
+
+        Track A: Content vector search (semantic similarity)
+        Track B: BM25 lexical search (keyword matching)
+        Track C: Tag vector search (attribute affinity)
+
+        Returns (scored_items, query_vector, recall_tags).
+        """
         candidates_map, vector_score_map, payload_map = {}, {}, {}
+        tag_vector_score_map: Dict[str, float] = {}  # Track C scores
+
+        # ── Track A: Content Vector Search ──
         vector_results, query_vector = self.vs.search(expanded_terms, limit=vector_limit, query_filter=metadata_filter, with_payload=True)
         for hit in vector_results:
             payload = hit.get("payload") or {}
@@ -1028,10 +1039,13 @@ class HybridEngine:
             if not bid: continue
             bid = str(bid)
             candidates_map[bid] = payload; payload_map[bid] = payload; vector_score_map[bid] = float(hit["score"])
+        print(f"[Engine:TrackA] Vector recall: {len(vector_results)} hits")
 
+        # ── Track B: BM25 Lexical Search ──
         bm25_score_map, bm25_metric_map = {}, {}
         if active_bm25 and self.lexical_store:
-            for res in self.lexical_store.search(expanded_terms, limit=bm25_limit):
+            bm25_results = self.lexical_store.search(expanded_terms, limit=bm25_limit)
+            for res in bm25_results:
                 item = res["item"]; bid = str(item.get("id"))
                 if not bid: continue
                 bm25_score_map[bid] = float(res["score"])
@@ -1039,7 +1053,35 @@ class HybridEngine:
                     if self._item_violates_hard_constraints(item, constraint_dict): continue
                     candidates_map[bid] = item; payload_map[bid] = item; vector_score_map[bid] = 0.0
             bm25_metric_map = self._normalize_bm25_scores(bm25_score_map)
+            print(f"[Engine:TrackB] BM25 recall: {len(bm25_results)} hits")
 
+        # ── Track C: Tag Vector Search (NEW - Tri-track) ──
+        tag_query_terms = positive_tags or tag_terms_list
+        if tag_query_terms and tag_vector_limit > 0:
+            try:
+                tag_queries = [f"這部作品的類型偏向{t}" for t in tag_query_terms]
+                tag_vector_results = self.vs.search_individual(
+                    tag_queries, limit=tag_vector_limit,
+                )
+                tag_new_count = 0
+                for hit in tag_vector_results:
+                    bid = str(hit.get("id", "")).strip()
+                    if not bid: continue
+                    tag_vector_score_map[bid] = float(hit.get("score", 0.0))
+                    hit_payload = hit.get("payload") or {}
+                    if bid not in candidates_map:
+                        # Enrich from payload or DB
+                        item = hit_payload
+                        if not item.get("id"): item["id"] = bid
+                        if self._item_violates_hard_constraints(item, constraint_dict): continue
+                        candidates_map[bid] = item; payload_map[bid] = item
+                        vector_score_map[bid] = 0.0
+                        tag_new_count += 1
+                print(f"[Engine:TrackC] Tag vector recall: {len(tag_vector_results)} hits, {tag_new_count} new candidates")
+            except Exception as exc:
+                print(f"[Engine:TrackC] Tag vector search failed, skipping: {exc}")
+
+        # ── Tag-based exact recall (legacy augmentation) ──
         recall_tags = []
         if tag_terms_list and tag_mapping_weights:
             recall_tags = self._extract_recall_tags(tag_mapping_weights)
@@ -1050,6 +1092,7 @@ class HybridEngine:
                     if self._item_violates_hard_constraints(item, constraint_dict): continue
                     candidates_map[bid] = item; payload_map[bid] = item; vector_score_map[bid] = 0.0
 
+        # ── Enrich & validate candidates ──
         candidates = []
         for bid, item in candidates_map.items():
             if not item.get("classification") or not item.get("words_total"):
@@ -1059,8 +1102,14 @@ class HybridEngine:
             if "id" not in item or not item["id"]: item["id"] = bid
             if not (str(item.get("name","")).strip() or str(item.get("intro","")).strip() or item.get("words_total") or item.get("tags") or str(item.get("classification","")).strip()): continue
             candidates.append(item)
-        print(f"[Engine] Candidate pool: {len(candidates)}")
+        print(f"[Engine] Candidate pool (tri-track merged): {len(candidates)}")
 
+        # ── Bottom-score imputation for cross-track gaps ──
+        min_vector = min(vector_score_map.values()) if vector_score_map else 0.0
+        min_bm25 = min(bm25_score_map.values()) if bm25_score_map else 0.0
+        min_tag_vec = min(tag_vector_score_map.values()) if tag_vector_score_map else 0.0
+
+        # ── Score candidates ──
         if active_fusion == "rrf":
             scored = self._rrf_fuse(candidates, vector_score_map, bm25_score_map, tag_terms_list, tag_mapping_weights, payload_map)
         else:
@@ -1070,10 +1119,17 @@ class HybridEngine:
             for item in candidates:
                 bid = str(item.get("id"))
                 if not bid or bid == "None": continue
-                vs = vector_score_map.get(bid, 0.0)
+                # Impute missing scores with bottom score
+                vs = vector_score_map.get(bid, min_vector * 0.8)
                 bm = bm25_metric_map.get(bid, 0.0) if active_bm25 else 0.0
                 fs, bd = self.calculate_score(item, vs, tag_terms_list, tag_mapping_weights, bm25_metric=bm)
-                scored.append({"item": item, "score": float(fs), "vector_score": vs, "bm25_score": bm25_score_map.get(bid, 0.0) if active_bm25 else 0.0, "bm25_metric": bm, "breakdown": bd, "payload": payload_map.get(bid, {})})
+
+                # Track C bonus: if this book was found via tag vector, add affinity info
+                tv_score = tag_vector_score_map.get(bid, 0.0)
+                if tv_score > 0:
+                    bd.append({"criteria": "tag_vector_affinity", "label": "Tag Vector Affinity", "raw_score": tv_score, "weighted_score": 0.0, "is_filter": False, "reason": f"Track C tag vector score={tv_score:.4f}"})
+
+                scored.append({"item": item, "score": float(fs), "vector_score": vs, "bm25_score": bm25_score_map.get(bid, 0.0) if active_bm25 else 0.0, "bm25_metric": bm, "tag_vector_score": tv_score, "breakdown": bd, "payload": payload_map.get(bid, {})})
             self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
         scored.sort(key=lambda r: r["score"], reverse=True)
         return scored, query_vector, recall_tags
@@ -1154,15 +1210,16 @@ class HybridEngine:
             tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list, similarity_threshold=0.6)
 
         # ════════════════════════════════════════════════════════════════
-        # ── FAST PATH: Dual-channel recall (Vector 500 + BM25 500) with hard filters ──
+        # ── FAST PATH: Tri-track recall (Vector 500 + BM25 500 + TagVec 300) ──
         # ════════════════════════════════════════════════════════════════
         metadata_filter = VectorStore.build_metadata_filter(hard_constraint_dict)
-        print(f"[FastPath] Executing (Vector={self.FAST_PATH_RETRIEVAL_LIMIT}, BM25={self.FAST_PATH_RETRIEVAL_LIMIT}, filter={'ON' if metadata_filter else 'OFF'})...")
+        print(f"[FastPath] Tri-track recall (Vec={self.FAST_PATH_RETRIEVAL_LIMIT}, BM25={self.FAST_PATH_RETRIEVAL_LIMIT}, TagVec={self.TAG_VECTOR_RETRIEVAL_LIMIT}, filter={'ON' if metadata_filter else 'OFF'})...")
         scored_items, query_vector, recall_tags = self._run_retrieval_pipeline(
             expanded_terms, metadata_filter, hard_constraint_dict,
             tag_terms_list, tag_mapping_weights,
             active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
-            vector_limit=self.FAST_PATH_RETRIEVAL_LIMIT, bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT)
+            vector_limit=self.FAST_PATH_RETRIEVAL_LIMIT, bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT,
+            tag_vector_limit=self.TAG_VECTOR_RETRIEVAL_LIMIT, positive_tags=positive_tags)
         scored_items = self._post_filter(scored_items, hard_constraint_dict)
         scored_items.sort(key=lambda r: r["score"], reverse=True)
         scored_items = self._soft_score_candidates(scored_items, positive_tags)
@@ -1190,7 +1247,8 @@ class HybridEngine:
                 expanded_terms, metadata_filter, hard_constraint_dict,
                 tag_terms_list, tag_mapping_weights,
                 active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
-                vector_limit=vec_extra, bm25_limit=bm25_extra)
+                vector_limit=vec_extra, bm25_limit=bm25_extra,
+                tag_vector_limit=0, positive_tags=positive_tags)  # Skip Track C in expansion (already ran)
             if extra_recall:
                 recall_tags = list(set(recall_tags + extra_recall))
 
