@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import settings
@@ -90,6 +91,10 @@ class HybridEngine:
         self.rerank_enabled = rerank if rerank is not None else settings.RERANK_ENABLED
         self._reranker = None
         self.max_tags_per_term = 3
+
+        # DAT (Dynamic Alpha Tuning)
+        self.enable_dat = settings.ENABLE_DAT
+        self._dat_router = None  # Lazy init
         self.all_tags_cache: Optional[Tuple[str, ...]] = None
         self.tag_descriptions_cache: Optional[Dict[str, str]] = None
         self._load_tags_cache()
@@ -202,50 +207,26 @@ class HybridEngine:
 
     @staticmethod
     def _normalize_bm25_scores(bm25_score_map: Dict[str, float]) -> Dict[str, float]:
-        """Normalize positive BM25 scores into [0, 1] using percentile-robust scaling.
-
-        Uses 5th and 95th percentile as boundaries instead of raw min/max to
-        prevent a single extreme outlier from compressing all other scores
-        towards zero.
+        """Normalize positive BM25 scores into [0, 1] using Batch Max Normalization.
+        
+        Calculates the maximum score in the batch and divides all positive scores
+        by this maximum. This preserves the relative score ratios and is standard
+        in hybrid search engines.
         """
-        positive_scores = sorted(
-            [score for score in bm25_score_map.values() if score > 0]
-        )
-        if not positive_scores:
+        if not bm25_score_map:
             return {}
 
-        if len(positive_scores) == 1:
-            return {
-                book_id: 1.0 if score > 0 else 0.0
-                for book_id, score in bm25_score_map.items()
-            }
+        max_score = max(bm25_score_map.values())
+        
+        if max_score <= 0:
+            return {book_id: 0.0 for book_id in bm25_score_map.keys()}
 
-        # Percentile-robust boundaries (P5 / P95)
-        def _percentile(sorted_vals: List[float], pct: float) -> float:
-            idx = (len(sorted_vals) - 1) * pct
-            lo = int(idx)
-            hi = min(lo + 1, len(sorted_vals) - 1)
-            frac = idx - lo
-            return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
-
-        p5 = _percentile(positive_scores, 0.05)
-        p95 = _percentile(positive_scores, 0.95)
-
-        if p95 <= p5:
-            # All positive scores are effectively the same
-            return {
-                book_id: 1.0 if score > 0 else 0.0
-                for book_id, score in bm25_score_map.items()
-            }
-
-        scale = p95 - p5
         normalized: Dict[str, float] = {}
         for book_id, score in bm25_score_map.items():
             if score <= 0:
                 normalized[book_id] = 0.0
-                continue
-            metric = (score - p5) / scale
-            normalized[book_id] = max(0.0, min(1.0, float(metric)))
+            else:
+                normalized[book_id] = float(score) / max_score
         return normalized
 
     def _build_tag_terms_list(
@@ -449,7 +430,15 @@ class HybridEngine:
     ) -> Tuple[float, List[Dict[str, Any]]]:
         breakdown: List[Dict[str, Any]] = []
 
-        semantic_score = vector_score
+        # --- [軌道 A] 內文向量：全域錨點 + 指數放大 ---
+        GLOBAL_MIN_VEC = 0.60
+        GLOBAL_MAX_VEC = 0.85
+        VEC_RANGE = GLOBAL_MAX_VEC - GLOBAL_MIN_VEC
+        TAU = 0.1
+
+        norm_text_base = max(0.0, min(1.0, (vector_score - GLOBAL_MIN_VEC) / VEC_RANGE))
+        semantic_score = math.exp(norm_text_base / TAU) / math.exp(1.0 / TAU)
+
         breakdown.append(
             {
                 "criteria": "semantic_track",
@@ -457,7 +446,7 @@ class HybridEngine:
                 "raw_score": vector_score,
                 "weighted_score": semantic_score,
                 "is_filter": False,
-                "reason": f"semantic score {semantic_score:.4f}",
+                "reason": f"semantic raw {vector_score:.4f} -> exp_norm {semantic_score:.4f} (base {norm_text_base:.4f})",
             }
         )
 
@@ -485,7 +474,10 @@ class HybridEngine:
                     matched_details.append(f"{target_term}->{best_tag}({best_score:.2f})")
 
             average_similarity = total_facet_score / len(tag_mapping_weights)
-            attribute_score = average_similarity
+            # --- [軌道 C] 標籤向量：全域錨點 + 指數放大 ---
+            norm_tag_base = max(0.0, min(1.0, (average_similarity - GLOBAL_MIN_VEC) / VEC_RANGE))
+            attribute_score = math.exp(norm_tag_base / TAU) / math.exp(1.0 / TAU)
+            
             has_tag_scoring = True
             breakdown.append(
                 {
@@ -495,7 +487,7 @@ class HybridEngine:
                     "weighted_score": attribute_score,
                     "is_filter": False,
                     "reason": (
-                        f"facet avg {average_similarity:.4f}; "
+                        f"facet avg {average_similarity:.4f} -> exp_norm {attribute_score:.4f} (base {norm_tag_base:.4f}); "
                         f"matches: {', '.join(matched_details) if matched_details else 'none'}"
                     ),
                 }
@@ -594,6 +586,118 @@ class HybridEngine:
         total_score = min(total_score, 1.0)
 
         return total_score, breakdown
+
+    def calculate_score_v2(
+        self,
+        item: Dict[str, Any],
+        vector_score: float,
+        bm25_metric: float,
+        tag_terms_list: List[str],
+        tag_mapping_weights: List[Dict[str, float]],
+        alpha: float,
+        tag_vector_score: float = 0.0,
+        required_tags: Optional[List[str]] = None,
+        penalty_multiplier: float = 1.0,
+    ) -> Tuple[float, List[Dict[str, Any]]]:
+        """3+1 Layer Scoring Pipeline.
+
+        Layer 1: Base = α × Norm_S_plot + (1-α) × Norm_S_BM25
+        Layer 2: Bonus = Base × (1 + β × Norm_S_tag)
+        Layer 3: Boost = +REQUIRED_TAG_BOOST if required tag present
+        Layer 0: Final = (Bonus + Boost) × penalty_multiplier
+        """
+        breakdown: List[Dict[str, Any]] = []
+        beta = settings.TAG_BONUS_BETA
+        boost_constant = settings.REQUIRED_TAG_BOOST
+
+        # ── Normalization constants (shared with legacy calculate_score) ──
+        GLOBAL_MIN_VEC = 0.60
+        GLOBAL_MAX_VEC = 0.85
+        VEC_RANGE = GLOBAL_MAX_VEC - GLOBAL_MIN_VEC
+        TAU = 0.1
+
+        # ══════════════════════════════════════════════════════════════
+        # Layer 1: Base Relevance — α × Plot + (1-α) × BM25
+        # ══════════════════════════════════════════════════════════════
+        norm_plot_base = max(0.0, min(1.0, (vector_score - GLOBAL_MIN_VEC) / VEC_RANGE))
+        norm_plot = math.exp(norm_plot_base / TAU) / math.exp(1.0 / TAU)
+
+        norm_bm25 = max(0.0, min(1.0, float(bm25_metric)))
+
+        base_score = alpha * norm_plot + (1.0 - alpha) * norm_bm25
+
+        breakdown.append({
+            "criteria": "layer1_base", "label": "L1: Base Relevance",
+            "raw_score": base_score, "weighted_score": base_score, "is_filter": False,
+            "reason": (
+                f"α={alpha:.3f} × plot_exp={norm_plot:.4f} (raw={vector_score:.4f}) + "
+                f"(1-α)={1-alpha:.3f} × bm25={norm_bm25:.4f}"
+            ),
+        })
+
+        # ══════════════════════════════════════════════════════════════
+        # Layer 2: Tag Vector Bonus — Base × (1 + β × Norm_S_tag)
+        # ══════════════════════════════════════════════════════════════
+        norm_tag = 0.0
+        tag_detail = "no tag scoring"
+        if tag_terms_list and tag_mapping_weights:
+            raw_tag_sim = self._compute_attribute_score_for_item(
+                item, tag_terms_list, tag_mapping_weights
+            )
+            norm_tag_base = max(0.0, min(1.0, (raw_tag_sim - GLOBAL_MIN_VEC) / VEC_RANGE))
+            norm_tag = math.exp(norm_tag_base / TAU) / math.exp(1.0 / TAU)
+            tag_detail = f"raw_sim={raw_tag_sim:.4f} → exp_norm={norm_tag:.4f}"
+        elif tag_vector_score > 0:
+            # Fallback: use Track C score directly if available
+            norm_tag_base = max(0.0, min(1.0, (tag_vector_score - GLOBAL_MIN_VEC) / VEC_RANGE))
+            norm_tag = math.exp(norm_tag_base / TAU) / math.exp(1.0 / TAU)
+            tag_detail = f"track_c={tag_vector_score:.4f} → exp_norm={norm_tag:.4f}"
+
+        tag_multiplier = 1.0 + beta * norm_tag
+        bonus_score = base_score * tag_multiplier
+
+        breakdown.append({
+            "criteria": "layer2_tag_bonus", "label": "L2: Tag Bonus",
+            "raw_score": norm_tag, "weighted_score": bonus_score, "is_filter": False,
+            "reason": f"base × (1 + β={beta:.2f} × tag={norm_tag:.4f}) = {base_score:.4f} × {tag_multiplier:.4f}; {tag_detail}",
+        })
+
+        # ══════════════════════════════════════════════════════════════
+        # Layer 3: Required Tag Boost — +BOOST if has required tag
+        # ══════════════════════════════════════════════════════════════
+        boost = 0.0
+        boost_reason = "no required tags"
+        if required_tags:
+            book_tags = self._normalize_tags(item.get("tags", []))
+            matched_req = [
+                rt for rt in required_tags
+                if any(rt in t or t in rt for t in book_tags)
+            ]
+            if matched_req:
+                boost = boost_constant
+                boost_reason = f"matched: {', '.join(matched_req)} → +{boost_constant}"
+
+        boosted_score = bonus_score + boost
+        breakdown.append({
+            "criteria": "layer3_boost", "label": "L3: Required Tag Boost",
+            "raw_score": boost, "weighted_score": boosted_score, "is_filter": False,
+            "reason": boost_reason,
+        })
+
+        # ══════════════════════════════════════════════════════════════
+        # Layer 0: Penalty & Finalization
+        # ══════════════════════════════════════════════════════════════
+        final_score = boosted_score * penalty_multiplier
+
+        if penalty_multiplier < 1.0:
+            breakdown.append({
+                "criteria": "layer0_penalty", "label": "L0: Penalty",
+                "raw_score": penalty_multiplier, "weighted_score": final_score, "is_filter": False,
+                "reason": f"penalty_multiplier={penalty_multiplier:.3f}",
+            })
+
+        return final_score, breakdown
+
 
     def _compute_attribute_score_for_item(
         self,
@@ -995,12 +1099,73 @@ class HybridEngine:
         return reranked_results
 
     # ── Tri-track Architecture Constants ──
-    SOFT_SCORE_ALPHA = 0.25   # Tag Match Ratio multiplier
+    SOFT_SCORE_ALPHA = 0.25   # Tag Match Ratio multiplier (legacy, kept for _soft_score_candidates)
     FAST_PATH_MIN_RESULTS = 1000
-    FAST_PATH_RETRIEVAL_LIMIT = 500  # Track A (Vector) & B (BM25) each recall this many
+    FAST_PATH_RETRIEVAL_LIMIT = 300  # Track A (Vector) & B (BM25) each recall this many
     TAG_VECTOR_RETRIEVAL_LIMIT = 300  # Track C (Tag Vector) recall limit
-    EXCEPTION_PATH_LIMIT = 5000
-    NEGATIVE_TAG_PENALTY = 0.1
+    EXCEPTION_PATH_LIMIT = 3000
+    NEGATIVE_TAG_PENALTY = 0.1       # Legacy constant, kept for backward compat
+
+    def _run_dat_scout(
+        self,
+        query: str,
+        expanded_terms: str,
+        metadata_filter: Any,
+        model_id: Optional[str] = None,
+    ) -> Tuple[float, Dict[str, Any]]:
+        """DAT Scout Phase: fetch Top-1 from Vector + BM25, ask LLM for α.
+
+        Returns (alpha, dat_info_dict).
+        """
+        from src.core.dat_router import DATRouter
+
+        # Lazy-init the router
+        if self._dat_router is None:
+            self._dat_router = DATRouter(
+                default_alpha=settings.DAT_DEFAULT_ALPHA,
+                timeout_ms=settings.DAT_TIMEOUT_MS,
+                short_query_threshold=settings.DAT_SHORT_QUERY_THRESHOLD,
+                short_query_alpha=settings.DAT_SHORT_QUERY_ALPHA,
+                model_id=settings.DAT_MODEL_ID,
+            )
+
+        default_info = {"enabled": True, "alpha": None, "source": "fallback", "latency_ms": 0.0}
+
+        try:
+            # Scout: Vector Top-1
+            vec_results, _ = self.vs.search(
+                expanded_terms, limit=1, query_filter=metadata_filter, with_payload=True
+            )
+            if not vec_results:
+                print("[DAT:Scout] No vector results, using default α")
+                alpha = settings.DAT_DEFAULT_ALPHA
+                default_info["source"] = "no_vector_results"
+                default_info["alpha"] = alpha
+                return alpha, default_info
+
+            # Scout: BM25 Top-1
+            bm25_results = self.lexical_store.search(expanded_terms, limit=1) if self.lexical_store else []
+            if not bm25_results:
+                print("[DAT:Scout] No BM25 results, using default α")
+                alpha = settings.DAT_DEFAULT_ALPHA
+                default_info["source"] = "no_bm25_results"
+                default_info["alpha"] = alpha
+                return alpha, default_info
+
+            # Call DAT Router
+            alpha, info = self._dat_router.get_dynamic_alpha(
+                query, vec_results[0], bm25_results[0], model_id=model_id
+            )
+            info["alpha"] = alpha
+            return alpha, info
+
+        except Exception as exc:
+            print(f"[DAT:Scout] Error: {exc}, using default α")
+            alpha = settings.DAT_DEFAULT_ALPHA
+            default_info["source"] = "error"
+            default_info["alpha"] = alpha
+            return alpha, default_info
+
 
     def _soft_score_candidates(self, scored_items: List[Dict[str, Any]], positive_tags: List[str]) -> List[Dict[str, Any]]:
         """In-Memory Soft Scoring: Final_Score = Base × (1 + α × MatchRatio)."""
@@ -1019,7 +1184,7 @@ class HybridEngine:
         scored_items.sort(key=lambda x: x["score"], reverse=True)
         return scored_items
 
-    def _run_retrieval_pipeline(self, expanded_terms, metadata_filter, constraint_dict, tag_terms_list, tag_mapping_weights, active_bm25, active_fusion, active_ws, active_wa, active_rrf_k, vector_limit=500, bm25_limit=500, tag_vector_limit=300, positive_tags=None):
+    def _run_retrieval_pipeline(self, expanded_terms, metadata_filter, constraint_dict, tag_terms_list, tag_mapping_weights, active_bm25, active_fusion, active_ws, active_wa, active_rrf_k, active_alpha=0.5, vector_limit=500, bm25_limit=500, tag_vector_limit=300, positive_tags=None):
         """Tri-track retrieval + scoring pipeline.
 
         Track A: Content vector search (semantic similarity)
@@ -1055,7 +1220,7 @@ class HybridEngine:
             bm25_metric_map = self._normalize_bm25_scores(bm25_score_map)
             print(f"[Engine:TrackB] BM25 recall: {len(bm25_results)} hits")
 
-        # ── Track C: Tag Vector Search (NEW - Tri-track) ──
+        # ── Track C: Tag Vector Search (Tri-track) ──
         tag_query_terms = positive_tags or tag_terms_list
         if tag_query_terms and tag_vector_limit > 0:
             try:
@@ -1070,7 +1235,6 @@ class HybridEngine:
                     tag_vector_score_map[bid] = float(hit.get("score", 0.0))
                     hit_payload = hit.get("payload") or {}
                     if bid not in candidates_map:
-                        # Enrich from payload or DB
                         item = hit_payload
                         if not item.get("id"): item["id"] = bid
                         if self._item_violates_hard_constraints(item, constraint_dict): continue
@@ -1106,36 +1270,49 @@ class HybridEngine:
 
         # ── Bottom-score imputation for cross-track gaps ──
         min_vector = min(vector_score_map.values()) if vector_score_map else 0.0
-        min_bm25 = min(bm25_score_map.values()) if bm25_score_map else 0.0
+        min_bm25_score = min(bm25_score_map.values()) if active_bm25 and bm25_score_map else 0.0
+        min_bm25_metric = min(bm25_metric_map.values()) if active_bm25 and bm25_metric_map else 0.0
         min_tag_vec = min(tag_vector_score_map.values()) if tag_vector_score_map else 0.0
 
-        # ── Score candidates ──
+        # ── Score candidates (3+1 Layer Pipeline for weighted, RRF unchanged) ──
         if active_fusion == "rrf":
             scored = self._rrf_fuse(candidates, vector_score_map, bm25_score_map, tag_terms_list, tag_mapping_weights, payload_map)
         else:
-            orig_ws, orig_wa = self.semantic_weight, self.attribute_weight
-            self.semantic_weight, self.attribute_weight = active_ws, active_wa
             scored = []
             for item in candidates:
                 bid = str(item.get("id"))
                 if not bid or bid == "None": continue
-                # Impute missing scores with bottom score
-                vs = vector_score_map.get(bid, min_vector * 0.8)
-                bm = bm25_metric_map.get(bid, 0.0) if active_bm25 else 0.0
-                fs, bd = self.calculate_score(item, vs, tag_terms_list, tag_mapping_weights, bm25_metric=bm)
-
-                # Track C bonus: if this book was found via tag vector, add affinity info
+                vs = vector_score_map.get(bid, min_vector)
+                bm_metric = bm25_metric_map.get(bid, min_bm25_metric) if active_bm25 else 0.0
                 tv_score = tag_vector_score_map.get(bid, 0.0)
-                if tv_score > 0:
-                    bd.append({"criteria": "tag_vector_affinity", "label": "Tag Vector Affinity", "raw_score": tv_score, "weighted_score": 0.0, "is_filter": False, "reason": f"Track C tag vector score={tv_score:.4f}"})
 
-                scored.append({"item": item, "score": float(fs), "vector_score": vs, "bm25_score": bm25_score_map.get(bid, 0.0) if active_bm25 else 0.0, "bm25_metric": bm, "tag_vector_score": tv_score, "breakdown": bd, "payload": payload_map.get(bid, {})})
-            self.semantic_weight, self.attribute_weight = orig_ws, orig_wa
+                fs, bd = self.calculate_score_v2(
+                    item, vs, bm_metric,
+                    tag_terms_list, tag_mapping_weights,
+                    alpha=active_alpha,
+                    tag_vector_score=tv_score,
+                    required_tags=positive_tags,
+                )
+
+                bm_score = bm25_score_map.get(bid, min_bm25_score) if active_bm25 else 0.0
+                scored.append({"item": item, "score": float(fs), "vector_score": vs, "bm25_score": bm_score, "bm25_metric": bm_metric, "tag_vector_score": tv_score, "breakdown": bd, "payload": payload_map.get(bid, {})})
         scored.sort(key=lambda r: r["score"], reverse=True)
         return scored, query_vector, recall_tags
 
-    def _exception_path_triage(self, scored_items, negative_tag_terms, positive_tags, min_results=1000):
-        """Tiered triage: Tier1=filter neg tags; Tier2=soft penalty ×0.1. Returns (items, level)."""
+    def _exception_path_triage(self, scored_items, negative_tag_terms, positive_tags, constraint_dict=None, min_results=1000):
+        """Tiered triage with violation-specific penalties.
+
+        Tier1: Filter out books with negative tags (clean pool).
+        Tier2: If not enough clean results, re-admit rejected books with
+               violation-specific penalty multipliers applied to their scores.
+
+        Penalty multipliers (from config, multiplicative stacking):
+          - blocked_tags:     ×0.1 (死罪)
+          - required_status:  ×0.5 (中罪)
+          - required_tags:    ×0.8 (輕罪)
+
+        Returns (items, level).
+        """
         tier1, rejected = [], []
         for r in scored_items:
             tags = self._normalize_tags(r["item"].get("tags", []))
@@ -1145,12 +1322,56 @@ class HybridEngine:
                 tier1.append(r)
         print(f"[ExceptionPath:Tier1] {len(tier1)} clean, {len(rejected)} rejected")
         if len(tier1) >= min_results:
-            return self._soft_score_candidates(tier1, positive_tags), 1
-        print(f"[ExceptionPath:Tier2] Applying soft penalty to {len(rejected)} items")
+            return tier1, 1
+
+        # ── Tier 2: Re-admit with violation-specific penalties ──
+        print(f"[ExceptionPath:Tier2] Applying tiered penalty to {len(rejected)} items")
+        p_blocked = settings.PENALTY_BLOCKED_TAGS
+        p_status = settings.PENALTY_REQUIRED_STATUS
+        p_tags = settings.PENALTY_REQUIRED_TAGS
+        status_filter = (constraint_dict or {}).get("status_filter")
+        required_tags_list = positive_tags or []
+
         for r in rejected:
-            r["score"] *= self.NEGATIVE_TAG_PENALTY
-            r["breakdown"].append({"criteria": "neg_tag_penalty", "label": "Neg Tag Penalty", "raw_score": self.NEGATIVE_TAG_PENALTY, "weighted_score": r["score"], "is_filter": False, "reason": f"Tier 2: score × {self.NEGATIVE_TAG_PENALTY}"})
-        all_items = self._soft_score_candidates(tier1 + rejected, positive_tags)
+            item = r["item"]
+            penalty = 1.0
+            violations = []
+
+            # Check: blocked tags (always true for rejected items)
+            penalty *= p_blocked
+            violations.append(f"blocked_tags(×{p_blocked})")
+
+            # Check: status violation
+            if status_filter:
+                item_status = self._normalize_status(item.get("publish_status", ""))
+                if item_status and item_status != status_filter:
+                    penalty *= p_status
+                    violations.append(f"required_status(×{p_status})")
+
+            # Check: required tags missing
+            if required_tags_list:
+                book_tags = self._normalize_tags(item.get("tags", []))
+                if not any(any(rt in t or t in rt for t in book_tags) for rt in required_tags_list):
+                    # ── Semantic Immunity (語意免疫動態防護網) ──
+                    # 若語意向量分數極高，視為「良性遺漏」，動態減輕缺標籤的懲罰乘數
+                    vec_score = r.get("vector_score", 0.0)
+                    current_p_tags = p_tags
+                    if vec_score >= 0.85:
+                        current_p_tags = max(p_tags, 0.95)
+                    elif vec_score >= 0.80:
+                        current_p_tags = max(p_tags, 0.90)
+                        
+                    penalty *= current_p_tags
+                    violations.append(f"required_tags(×{current_p_tags})")
+
+            r["score"] *= penalty
+            r["breakdown"].append({
+                "criteria": "violation_penalty", "label": "Violation Penalty",
+                "raw_score": penalty, "weighted_score": r["score"], "is_filter": False,
+                "reason": f"Tier 2: score × {penalty:.4f} [{', '.join(violations)}]",
+            })
+
+        all_items = tier1 + rejected
         all_items.sort(key=lambda r: r["score"], reverse=True)
         return all_items, 2
 
@@ -1204,6 +1425,20 @@ class HybridEngine:
         active_rrf_k = routing.get("rrf_k", self.rrf_k)
         active_bm25 = routing.get("enable_bm25", self.enable_bm25)
 
+        # ── Build Metadata Filter (Hard Constraints) ──
+        metadata_filter = VectorStore.build_metadata_filter(hard_constraint_dict)
+
+        # ── DAT: Dynamic Alpha Tuning ──
+        active_alpha = settings.DAT_DEFAULT_ALPHA
+        dat_info = {"enabled": self.enable_dat, "alpha": None, "source": "static", "latency_ms": 0.0}
+        if self.enable_dat and active_fusion == "weighted":
+            dat_start = time.perf_counter()
+            active_alpha, dat_info = self._run_dat_scout(
+                user_query, expanded_terms, metadata_filter, model_id
+            )
+            dat_info["enabled"] = True
+            print(f"[DAT:Result] α={active_alpha:.3f} (source={dat_info.get('source', 'unknown')})")
+
         # ── Compute tag mappings (once) ──
         tag_mapping_weights: List[Dict[str, float]] = []
         if tag_terms_list:
@@ -1212,17 +1447,16 @@ class HybridEngine:
         # ════════════════════════════════════════════════════════════════
         # ── FAST PATH: Tri-track recall (Vector 500 + BM25 500 + TagVec 300) ──
         # ════════════════════════════════════════════════════════════════
-        metadata_filter = VectorStore.build_metadata_filter(hard_constraint_dict)
         print(f"[FastPath] Tri-track recall (Vec={self.FAST_PATH_RETRIEVAL_LIMIT}, BM25={self.FAST_PATH_RETRIEVAL_LIMIT}, TagVec={self.TAG_VECTOR_RETRIEVAL_LIMIT}, filter={'ON' if metadata_filter else 'OFF'})...")
         scored_items, query_vector, recall_tags = self._run_retrieval_pipeline(
             expanded_terms, metadata_filter, hard_constraint_dict,
             tag_terms_list, tag_mapping_weights,
             active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
+            active_alpha=active_alpha,
             vector_limit=self.FAST_PATH_RETRIEVAL_LIMIT, bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT,
             tag_vector_limit=self.TAG_VECTOR_RETRIEVAL_LIMIT, positive_tags=positive_tags)
         scored_items = self._post_filter(scored_items, hard_constraint_dict)
         scored_items.sort(key=lambda r: r["score"], reverse=True)
-        scored_items = self._soft_score_candidates(scored_items, positive_tags)
 
         degradation_level = 0
         system_message = None
@@ -1235,11 +1469,12 @@ class HybridEngine:
             # ── EXCEPTION PATH: Expanded recall with hard filters ──
             # ════════════════════════════════════════════════════════════
             deficit = self.EXCEPTION_PATH_LIMIT - passed_count
-            vec_extra = int(deficit * 0.7)
-            bm25_extra = int(deficit * 0.3)
+            vec_extra = int(deficit * 0.5)
+            tag_extra = int(deficit * 0.35)
+            bm25_extra = int(deficit * 0.15)
             print(
                 f"[ExceptionPath] ⚠️ {passed_count} < {self.FAST_PATH_MIN_RESULTS}, "
-                f"expanding recall: Vector +{vec_extra}, BM25 +{bm25_extra} (deficit={deficit})..."
+                f"expanding recall: Vector +{vec_extra}, TagVec +{tag_extra}, BM25 +{bm25_extra} (deficit={deficit})..."
             )
 
             # Second retrieval: still WITH hard filters, just wider net
@@ -1247,8 +1482,9 @@ class HybridEngine:
                 expanded_terms, metadata_filter, hard_constraint_dict,
                 tag_terms_list, tag_mapping_weights,
                 active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
+                active_alpha=active_alpha,
                 vector_limit=vec_extra, bm25_limit=bm25_extra,
-                tag_vector_limit=0, positive_tags=positive_tags)  # Skip Track C in expansion (already ran)
+                tag_vector_limit=tag_extra, positive_tags=positive_tags)
             if extra_recall:
                 recall_tags = list(set(recall_tags + extra_recall))
 
@@ -1262,8 +1498,6 @@ class HybridEngine:
                     existing_ids.add(bid)
                     new_count += 1
 
-            # Re-apply soft scoring on the merged pool
-            scored_items = self._soft_score_candidates(scored_items, positive_tags)
             scored_items.sort(key=lambda r: r["score"], reverse=True)
             degradation_level = 1
             system_message = f"擴大檢索範圍：初始 {passed_count} 本 + 補充 {new_count} 本 = {len(scored_items)} 本候選"
@@ -1291,5 +1525,5 @@ class HybridEngine:
             if item.get("intro"): chunks.append(f"Database intro:\n{item['intro']}")
             result["explanation"] = generate_explanation(query=user_query, book_item=item, context_chunks=chunks, score_breakdown=result["breakdown"], runtime_state=state, model_id=model_id)
 
-        return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": {"positive_terms": list(parse_result.tag_intent.positive_terms), "negative_terms": negative_tag_terms}, "hypothetical_intro": parse_result.hypothetical_intro, "related_books": related_books, "reference_tags": recall_tags, "parse_metadata": parse_result.parse_metadata, "query_vector": query_vector, "results": final_results, "engine": "HybridEngine", "degradation_level": degradation_level, "system_message": system_message}
+        return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": {"positive_terms": list(parse_result.tag_intent.positive_terms), "negative_terms": negative_tag_terms}, "hypothetical_intro": parse_result.hypothetical_intro, "related_books": related_books, "reference_tags": recall_tags, "parse_metadata": parse_result.parse_metadata, "query_vector": query_vector, "results": final_results, "engine": "HybridEngine", "degradation_level": degradation_level, "system_message": system_message, "dat_info": dat_info}
 

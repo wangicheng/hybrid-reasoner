@@ -193,6 +193,7 @@ def _dcg(gains: List[float], k: int) -> float:
 def _penalized_ndcg_at_k(
     graded_scores: List[float],
     violations_by_rank: List[List[str]],
+    all_possible_scores: List[float],
     k: int,
     alpha_map: Dict[str, float],
 ) -> float:
@@ -206,6 +207,7 @@ def _penalized_ndcg_at_k(
     Args:
         graded_scores: raw relevance scores (0-3 scale) per rank position.
         violations_by_rank: list of violation strings per rank position.
+        all_possible_scores: all known relevance scores for the query (for ideal DCG).
         k: cutoff depth.
         alpha_map: mapping of violation type to penalty weight (0-1).
     """
@@ -229,8 +231,8 @@ def _penalized_ndcg_at_k(
 
     actual_dcg = _dcg(penalized_gains, k)
 
-    # Ideal: best possible scores sorted descending, no violations
-    ideal_gains = sorted(graded_scores[:k], reverse=True)
+    # Ideal: best possible scores sorted descending from the ENTIRE annotation pool
+    ideal_gains = sorted(all_possible_scores, reverse=True)[:k]
     ideal_dcg = _dcg(ideal_gains, k)
 
     return actual_dcg / ideal_dcg if ideal_dcg > 0 else 0.0
@@ -380,7 +382,13 @@ def evaluate_ir(
 
                 # Advanced metrics per query
                 pndcg_acc[k].append(
-                    _penalized_ndcg_at_k(graded_by_rank, violation_types_by_rank, k, alpha_map=alpha_map)
+                    _penalized_ndcg_at_k(
+                        graded_by_rank, 
+                        violation_types_by_rank, 
+                        list(query_scores.values()),
+                        k, 
+                        alpha_map=alpha_map
+                    )
                 )
                 rbv_acc[k].append(
                     _rbv_at_k(violation_flags_by_rank, k, persistence=rbv_persistence)

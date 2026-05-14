@@ -46,6 +46,25 @@ class Settings(BaseSettings):
     RERANK_CANDIDATE_LIMIT: int = 100
     RERANK_PERMUTATIONS: int = 3
 
+    # DAT (Dynamic Alpha Tuning) + 3+1 Layer Scoring Pipeline
+    ENABLE_DAT: bool = False                # Feature flag — DAT 預設關閉
+    DAT_DEFAULT_ALPHA: float = 0.5          # Plot vs BM25 平衡預設 α
+    DAT_TIMEOUT_MS: int = 2000              # LLM 超時門檻 (ms)
+    DAT_SHORT_QUERY_THRESHOLD: int = 2      # 短 Query 早退門檻 (字元數)
+    DAT_SHORT_QUERY_ALPHA: float = 0.3      # 短 Query 的固定 α (偏向 BM25)
+    DAT_MODEL_ID: str = ""                  # DAT LLM model，空字串 = 使用預設
+
+    # Layer 2: Tag Vector Bonus
+    TAG_BONUS_BETA: float = 0.20            # 標籤乘數 β，建議 0.15~0.30
+
+    # Layer 3: Required Tag Boost
+    REQUIRED_TAG_BOOST: float = 10.0        # 必備標籤霸榜提權常數
+
+    # Layer 0: Violation Penalty Multipliers (連乘積)
+    PENALTY_BLOCKED_TAGS: float = 0.05      # 命中排斥標籤 → 死罪 (從 0.1 壓低，加強雷區隔離)
+    PENALTY_REQUIRED_STATUS: float = 0.5    # 狀態不符 → 中罪 (維持 0.5 高摩擦力)
+    PENALTY_REQUIRED_TAGS: float = 0.85     # 必備標籤缺失 → 輕罪 (從 0.8 放寬，對齊語意免疫機制)
+
     class Config:
         env_file = ".env"
         extra = "ignore"

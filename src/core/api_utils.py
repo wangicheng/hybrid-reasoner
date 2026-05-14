@@ -149,6 +149,7 @@ class APIKeyRotator:
     """
     Thread-safe API Key rotator for handling multiple API keys.
     Automatically switches to the next key when one hits rate limits.
+    Supports exclusive access via acquire/release.
     """
     
     def __init__(self, api_keys: list):
@@ -158,7 +159,9 @@ class APIKeyRotator:
         """
         self.api_keys = api_keys
         self.current_index = 0
-        self._lock = threading.Lock()
+        self._cond = threading.Condition()
+        self.sleep_until = {k: 0.0 for k in api_keys}
+        self.in_use = {k: False for k in api_keys}
         
         if not api_keys:
             raise ValueError("No API keys provided")
@@ -166,24 +169,81 @@ class APIKeyRotator:
         print(f"[APIKeyRotator] Initialized with {len(api_keys)} API key(s)")
     
     def get_current_key(self) -> str:
-        """Get the current API key without rotating."""
-        with self._lock:
+        """Get a valid API key (legacy method, ignores in_use)."""
+        with self._cond:
+            now = time.monotonic()
+            if self.sleep_until[self.api_keys[self.current_index]] <= now:
+                return self.api_keys[self.current_index]
+            for i in range(len(self.api_keys)):
+                idx = (self.current_index + i) % len(self.api_keys)
+                k = self.api_keys[idx]
+                if self.sleep_until[k] <= now:
+                    self.current_index = idx
+                    return k
             return self.api_keys[self.current_index]
-    
+
     def rotate(self) -> str:
-        """
-        Rotate to the next API key.
-        Returns the new current key.
-        """
-        with self._lock:
-            old_index = self.current_index
+        """Rotate to next key (legacy method)."""
+        with self._cond:
             self.current_index = (self.current_index + 1) % len(self.api_keys)
-            new_key = self.api_keys[self.current_index]
-            print(f"[APIKeyRotator] Switched from key {old_index} to key {self.current_index}")
-            return new_key
+            return self.get_current_key()
+            
+    def acquire(self) -> str:
+        """Acquire an exclusive API key that is not sleeping or in use."""
+        with self._cond:
+            while True:
+                now = time.monotonic()
+                start_index = self.current_index
+                
+                # 1. Try to find an available key
+                for offset in range(len(self.api_keys)):
+                    idx = (start_index + offset) % len(self.api_keys)
+                    k = self.api_keys[idx]
+                    if not self.in_use[k] and self.sleep_until[k] <= now:
+                        self.current_index = (idx + 1) % len(self.api_keys)
+                        self.in_use[k] = True
+                        return k
+                
+                # 2. Wait for a key to be released or wake up
+                wait_time = None
+                for k in self.api_keys:
+                    if not self.in_use[k]:
+                        t = self.sleep_until[k] - now
+                        if wait_time is None or t < wait_time:
+                            wait_time = t
+                
+                if wait_time is None:
+                    # All keys in use! Wait for release
+                    self._cond.wait()
+                elif wait_time > 0:
+                    self._cond.wait(timeout=wait_time)
+
+    def release(self, key: str):
+        """Release an exclusively acquired API key."""
+        with self._cond:
+            if key in self.in_use:
+                self.in_use[key] = False
+                self._cond.notify_all()
+                
+    def sleep_key(self, key: str, sleep_seconds: float):
+        """Put a specific key to sleep."""
+        with self._cond:
+            if key in self.sleep_until:
+                self.sleep_until[key] = time.monotonic() + sleep_seconds
+                short_k = f"...{key[-4:]}" if len(key)>4 else key
+                print(f"[APIKeyRotator] Key {short_k} put to sleep for {sleep_seconds:.1f}s")
+                self._cond.notify_all()
+
+    def sleep_current_key(self, sleep_seconds: float):
+        """Legacy method to sleep current key."""
+        with self._cond:
+            k = self.api_keys[self.current_index]
+        self.sleep_key(k, sleep_seconds)
     
-    def on_rate_limit_error(self):
-        """Called when a rate limit error is detected. Rotates to next key."""
+    def on_rate_limit_error(self, sleep_seconds: float = 0.0):
+        """Legacy error handler."""
+        if sleep_seconds > 0:
+            self.sleep_current_key(sleep_seconds)
         return self.rotate()
 
 

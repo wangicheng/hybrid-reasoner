@@ -127,13 +127,6 @@ class LLMJudge:
         _ = attempt, max_delay
         return base_delay
 
-    def _rotate_api_key(self) -> None:
-        _, get_api_key_rotator, _, _, _ = _load_api_utils()
-        rotator = get_api_key_rotator()
-        new_key = rotator.on_rate_limit_error()
-        self.client = genai.Client(api_key=new_key)
-        print(f"  [judge] API key rotated. Current index: {rotator.current_index}")
-
     def judge_single(self, query: str, title: str, tags: str, intro: str) -> Dict[str, Any]:
         if not title or title == "Unknown" or not title.strip():
             return {"score": 0, "reasoning": "作品資訊不足，無法判定與需求相關。"}
@@ -154,9 +147,12 @@ class LLMJudge:
 
     def _call_llm(self, model_id: str, user_prompt: str) -> Dict[str, Any]:
         attempt = 0
-        _is_retryable, _, _, get_rate_limiter, is_rate_limit_error = _load_api_utils()
+        _is_retryable, get_api_key_rotator, _, get_rate_limiter, is_rate_limit_error = _load_api_utils()
+        rotator = get_api_key_rotator()
 
         while True:
+            api_key = rotator.acquire()
+            client = genai.Client(api_key=api_key)
             try:
                 get_rate_limiter().wait()
                 is_gemma = "gemma" in model_id.lower()
@@ -177,12 +173,12 @@ class LLMJudge:
                     contents = user_prompt
 
                 if is_gemma:
-                    response = self.client.models.generate_content(
+                    response = client.models.generate_content(
                         model=model_id,
                         contents=contents,
                     )
                 else:
-                    response = self.client.models.generate_content(
+                    response = client.models.generate_content(
                         model=model_id,
                         contents=contents,
                         config=self.types.GenerateContentConfig(**config_args),
@@ -207,12 +203,16 @@ class LLMJudge:
                     raise
 
                 attempt += 1
-                if attempt >= 5:
-                    raise RuntimeError(f"Max retries (5) exceeded. Last error: {exc}")
 
-                error_text = str(exc)
-                # Rotate key on any retryable error (like 500 INTERNAL) to bypass potential per-project/key issues
-                self._rotate_api_key()
+                error_text = str(exc).upper()
+                sleep_seconds = 0.0
+                if "RESOURCE_EXHAUSTED" in error_text or "429" in error_text:
+                    sleep_seconds = 60.0
+                elif "500" in error_text or "INTERNAL" in error_text or "503" in error_text:
+                    sleep_seconds = 30.0
+
+                if sleep_seconds > 0:
+                    rotator.sleep_key(api_key, sleep_seconds)
 
                 delay = self._retry_delay_seconds(attempt)
                 print(
@@ -220,6 +220,8 @@ class LLMJudge:
                     f"Retrying in {delay:.1f}s (attempt {attempt})..."
                 )
                 time.sleep(delay)
+            finally:
+                rotator.release(api_key)
 
 
 def _make_task_key(row: Dict[str, Any]) -> str:
@@ -382,7 +384,7 @@ def run_judge(
                 save_annotations(tasks, annotation_path)
                 print(f"  Saved progress ({scored_count}/{total})")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         list(executor.map(_process_task, unscored_tasks))
 
     save_annotations(tasks, annotation_path)
