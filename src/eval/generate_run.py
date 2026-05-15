@@ -185,6 +185,8 @@ class RunGenerator:
         routing_weighted_wa: float = 0.65,
         routing_weighted_bm25: bool = True,
         routing_rrf_bm25: bool = False,
+        use_schema_constraint: bool = True,
+        disable_tag_embedding: bool = False,
     ) -> None:
         fusion_label = fusion_strategy or "weighted"
         print(
@@ -197,7 +199,8 @@ class RunGenerator:
             "fixed retrieval path, "
             f"model={normalize_model_id(self.model_id)}, "
             f"parser_variant={DEFAULT_PARSER_VARIANT}, "
-            f"run_suffix={run_suffix or 'none'})"
+            f"run_suffix={run_suffix or 'none'}, "
+            f"schema={use_schema_constraint}, tag_embed_disabled={disable_tag_embedding})"
         )
 
         vs = VectorStore(collection_name="novels")
@@ -218,6 +221,8 @@ class RunGenerator:
             routing_weighted_bm25=routing_weighted_bm25,
             routing_rrf_bm25=routing_rrf_bm25,
             rerank=self.rerank,
+            use_schema_constraint=use_schema_constraint,
+            disable_tag_embedding=disable_tag_embedding,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -316,31 +321,22 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
-    # Allow experiments to run BM25 ON/OFF in a single batch.
-    if args.bm25_mode == "compare":
-        experiments = [
-            {
-                "name": "gemma4_default_parser_bm25_off",
-                "model_id": "gemma-4-31b-it",
-                "enable_bm25": False,
-            },
-            {
-                "name": "gemma4_default_parser_bm25_on",
-                "model_id": "gemma-4-31b-it",
-                "enable_bm25": True,
-                "bm25_weight": 0.1,
-            },
-        ]
-    else:
-        enable_bm25 = args.bm25_mode == "on"
-        experiments = [
-            {
-                "name": f"gemma4_default_parser_bm25_{args.bm25_mode}",
-                "model_id": "gemma-4-31b-it",
-                "enable_bm25": enable_bm25,
-                "bm25_weight": 0.1 if enable_bm25 else args.bm25_weight,
-            }
-        ]
+    experiments = [
+        {
+            "name": "gemma4_direct_generation",
+            "model_id": "gemma-4-31b-it",
+            "disable_tag_embedding": True,
+            "use_schema_constraint": False,
+            "rerank": False,
+        },
+        {
+            "name": "gemma4_schema_constrained",
+            "model_id": "gemma-4-31b-it",
+            "disable_tag_embedding": True,
+            "use_schema_constraint": True,
+            "rerank": False,
+        }
+    ]
 
     repeats = max(1, args.repeats)
     output_root = Path(args.experiment_dir)
@@ -372,6 +368,8 @@ if __name__ == "__main__":
                     run_suffix=run_suffix,
                     enable_bm25=enable_bm25,
                     bm25_weight=bm25_weight,
+                    use_schema_constraint=exp.get("use_schema_constraint", True),
+                    disable_tag_embedding=exp.get("disable_tag_embedding", False),
                 )
             except Exception as exc:
                 print(

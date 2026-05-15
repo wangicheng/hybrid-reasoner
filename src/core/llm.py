@@ -1142,6 +1142,7 @@ def _parse_query_parallel_ctx_v2(
     tag_list: Optional[Tuple[str, ...]] = None,
     reference_book_context: Optional[str] = None,
     sampling_temperature: float = 0.2,
+    use_schema_constraint: bool = True,
 ) -> QueryParseResult:
     shared_context = _build_parallel_context(
         tag_list=tag_list,
@@ -1229,13 +1230,13 @@ Rules:
     # positive_terms and negative_terms.  The Gemini Structured Outputs backend
     # uses this to mask illegal tokens at decode time, so the model physically
     # cannot emit a tag that does not exist in the database.
-    if tag_list:
+    if tag_list and use_schema_constraint:
         tag_enum = list(tag_list)  # tuple → list for JSON serialisation
         tag_item_schema = {"type": "string", "enum": tag_enum}
         print(f"[Parser] Constrained decoding ACTIVE: {len(tag_enum)} legal tags in enum")
     else:
         tag_item_schema = {"type": "string"}
-        print("[Parser] Constrained decoding INACTIVE: no tag_list provided, free-form strings allowed")
+        print(f"[Parser] Constrained decoding INACTIVE: use_schema_constraint={use_schema_constraint}, free-form strings allowed")
 
     tag_projection_schema = {
         "type": "object",
@@ -1528,6 +1529,7 @@ def parse_query(
     tag_list: Optional[Tuple[str, ...]] = None,
     reference_book_context: Optional[str] = None,
     sampling_temperature: float = 0.2,
+    use_schema_constraint: bool = True,
 ) -> QueryParseResult:
     _ = cache_namespace
     return _parse_query_parallel_ctx_v2(
@@ -1536,6 +1538,7 @@ def parse_query(
         tag_list=tag_list,
         reference_book_context=reference_book_context,
         sampling_temperature=sampling_temperature,
+        use_schema_constraint=use_schema_constraint,
     )
 
 

@@ -45,9 +45,13 @@ class HybridEngine:
         routing_weighted_bm25: bool = True,
         routing_rrf_bm25: bool = False,
         rerank: Optional[bool] = None,
+        use_schema_constraint: bool = True,
+        disable_tag_embedding: bool = False,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
+        self.use_schema_constraint = use_schema_constraint
+        self.disable_tag_embedding = disable_tag_embedding
         
         self.fusion_strategy = fusion_strategy or getattr(settings, 'FUSION_STRATEGY', 'auto')
         if self.fusion_strategy not in self.VALID_FUSION_STRATEGIES:
@@ -248,6 +252,10 @@ class HybridEngine:
         for criteria in negative_criteria:
             query_text = self._criteria_params(criteria).get("query_text", "").strip()
             if not query_text:
+                continue
+
+            if getattr(self, "disable_tag_embedding", False):
+                negative_tag_terms.append(query_text)
                 continue
 
             try:
@@ -1446,7 +1454,7 @@ class HybridEngine:
 
         related_books = self.book_matcher.extract_related_books(user_query)
         related_book_context = self.book_matcher.build_related_book_context(related_books)
-        parse_result = parse_query(user_query, model_id=model_id, cache_namespace=cache_namespace, tag_list=self.all_tags_cache, reference_book_context=related_book_context)
+        parse_result = parse_query(user_query, model_id=model_id, cache_namespace=cache_namespace, tag_list=self.all_tags_cache, reference_book_context=related_book_context, use_schema_constraint=self.use_schema_constraint)
 
         # ── Step 2.5: Query Compiler ──
         negative_tag_terms = self._dedupe_terms(list(parse_result.tag_intent.negative_terms)) or self._resolve_negative_tag_terms(parse_result.criteria)
@@ -1500,7 +1508,10 @@ class HybridEngine:
         # ── Compute tag mappings (once) ──
         tag_mapping_weights: List[Dict[str, float]] = []
         if tag_terms_list:
-            tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list, similarity_threshold=0.6)
+            if getattr(self, "disable_tag_embedding", False):
+                tag_mapping_weights = [{tag: 1.0} for tag in tag_terms_list]
+            else:
+                tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list, similarity_threshold=0.6)
 
         # ════════════════════════════════════════════════════════════════
         # ── FAST PATH: Tri-track recall (Vector 500 + BM25 500 + TagVec 300) ──
