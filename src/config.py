@@ -46,26 +46,26 @@ class Settings(BaseSettings):
     RERANK_CANDIDATE_LIMIT: int = 100
     RERANK_PERMUTATIONS: int = 3
 
-    # DAT (Dynamic Alpha Tuning) + 3+1 Layer Scoring Pipeline
-    ENABLE_DAT: bool = False                # Feature flag — DAT 預設關閉
+    
+# DAT (Dynamic Alpha Tuning) + 3+1 Layer Scoring Pipeline
+    ENABLE_DAT: bool = True                 # Feature flag — DAT 預設開啟
     DAT_DEFAULT_ALPHA: float = 0.5          # Plot vs BM25 平衡預設 α
     DAT_TIMEOUT_MS: int = 2000              # LLM 超時門檻 (ms)
     DAT_SHORT_QUERY_THRESHOLD: int = 2      # 短 Query 早退門檻 (字元數)
     DAT_SHORT_QUERY_ALPHA: float = 0.3      # 短 Query 的固定 α (偏向 BM25)
-    DAT_MODEL_ID: str = ""                  # DAT LLM model，空字串 = 使用預設
+    DAT_MODEL_ID: str = "gemma-4-31b-it"                  # DAT LLM model，空字串 = 使用預設
 
     # Layer 2: Tag Vector Bonus
+    DAT_MAX_BETA: float = 0.40              # DAT 動態 β 的上限 (計算公式: β = MAX_BETA * score/5)
     TAG_BONUS_BETA: float = 0.20            # 標籤乘數 β 基準值，tag-heavy 查詢自動提升
     TAG_TAU: float = 0.25                   # Layer 2 標籤向量溫度（比 L1 的 0.1 平緩，避免斷崖效應）
 
     # Layer 3: Required Tag Boost
-    REQUIRED_TAG_BOOST: float = 10.0        # 必備標籤霸榜提權常數 (legacy, kept for reference)
-    REQUIRED_TAG_MULTIPLIER: float = 3.0    # L3 乘法提權倍率（取代 +10 加法，保留排名信號）
-
+    REQUIRED_TAG_MULTIPLIER: float = 5.0    # L3 乘法提權倍率（取代 +10 加法，保留排名信號）
     # Layer 0: Violation Penalty Multipliers (連乘積)
     PENALTY_BLOCKED_TAGS: float = 0.05      # 命中排斥標籤 → 死罪 (從 0.1 壓低，加強雷區隔離)
     PENALTY_REQUIRED_STATUS: float = 0.5    # 狀態不符 → 中罪 (維持 0.5 高摩擦力)
-    PENALTY_REQUIRED_TAGS: float = 0.85     # 必備標籤缺失 → 輕罪 (從 0.8 放寬，對齊語意免疫機制)
+    PENALTY_REQUIRED_TAGS: float = 0.80     # 必備標籤缺失 → 更嚴格 (降低以減少 violation)
 
     class Config:
         env_file = ".env"

@@ -156,7 +156,7 @@ class DATRouter:
         }
 
         # ── Early Exit 1: Short Query ──
-        max_beta = 0.35
+        max_beta = settings.DAT_MAX_BETA
         fallback_beta = settings.TAG_BONUS_BETA
 
         if len(query.strip()) <= self.short_query_threshold:

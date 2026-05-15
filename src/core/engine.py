@@ -1414,9 +1414,9 @@ class HybridEngine:
                     combined_immunity = max(vec_score, tag_vec_score * 0.9)
                     current_p_tags = p_tags
                     if combined_immunity >= 0.85:
-                        current_p_tags = max(p_tags, 0.95)
+                        current_p_tags = min(1.0, p_tags + 0.20)  # +20% 寬容度
                     elif combined_immunity >= 0.80:
-                        current_p_tags = max(p_tags, 0.90)
+                        current_p_tags = min(1.0, p_tags + 0.10)  # +10% 寬容度
                         
                     penalty *= current_p_tags
                     violations.append(f"required_tags(×{current_p_tags}, immunity={combined_immunity:.3f})")
@@ -1604,9 +1604,9 @@ class HybridEngine:
                         combined_immunity = max(vec_score, tv_score * 0.9)
                         effective_p = p_tags
                         if combined_immunity >= 0.85:
-                            effective_p = max(p_tags, 0.95)
+                            effective_p = min(1.0, p_tags + 0.20)
                         elif combined_immunity >= 0.80:
-                            effective_p = max(p_tags, 0.90)
+                            effective_p = min(1.0, p_tags + 0.10)
                         penalty *= effective_p
                         violations.append(f"tags(×{effective_p:.2f}, immunity={combined_immunity:.3f})")
 
