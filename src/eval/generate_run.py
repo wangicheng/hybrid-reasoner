@@ -170,8 +170,6 @@ class RunGenerator:
         queries_config: List[Dict[str, Any]],
         engine_name: str,
         output_dir: Path,
-        semantic_weight: float = 0.3,
-        attribute_weight: float = 0.7,
         run_suffix: str = "",
         enable_bm25: bool = False,
         bm25_weight: float = 0.3,
@@ -189,7 +187,7 @@ class RunGenerator:
         fusion_label = fusion_strategy or "weighted"
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
-            f"(fusion={fusion_label}, W1: {semantic_weight}, W2: {attribute_weight}, "
+            f"(fusion={fusion_label}, "
             f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight} (recall-only), "
             f"BM25 Bonus Max: {bm25_bonus_max}, "
             f"rrf_k={rrf_k}, "
@@ -204,8 +202,6 @@ class RunGenerator:
         engine = HybridEngine(
             db=self.db,
             vs=vs,
-            semantic_weight=semantic_weight,
-            attribute_weight=attribute_weight,
             enable_bm25=enable_bm25,
             bm25_weight=bm25_weight,
             bm25_bonus_max=bm25_bonus_max,
@@ -301,6 +297,13 @@ if __name__ == "__main__":
         help="Legacy BM25 recall setting retained for compatibility",
     )
     parser.add_argument(
+        "--rerank-mode",
+        type=str,
+        choices=["compare", "on", "off"],
+        default="off",
+        help="Compare reranker ON/OFF, or force single variant",
+    )
+    parser.add_argument(
         "--queries",
         type=str,
         default="data/experiments/queries.json",
@@ -316,19 +319,37 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
-    # Allow experiments to run BM25 ON/OFF in a single batch.
-    if args.bm25_mode == "compare":
+    if args.rerank_mode == "compare":
+        experiments = [
+            {
+                "name": "gemma4_dat_reranker_off",
+                "model_id": "gemma-4-31b-it",
+                "enable_bm25": not args.disable_bm25,
+                "bm25_weight": args.bm25_weight,
+                "rerank": False,
+            },
+            {
+                "name": "gemma4_dat_reranker_on",
+                "model_id": "gemma-4-31b-it",
+                "enable_bm25": not args.disable_bm25,
+                "bm25_weight": args.bm25_weight,
+                "rerank": True,
+            },
+        ]
+    elif args.bm25_mode == "compare":
         experiments = [
             {
                 "name": "gemma4_default_parser_bm25_off",
                 "model_id": "gemma-4-31b-it",
                 "enable_bm25": False,
+                "rerank": args.rerank_mode == "on",
             },
             {
                 "name": "gemma4_default_parser_bm25_on",
                 "model_id": "gemma-4-31b-it",
                 "enable_bm25": True,
                 "bm25_weight": 0.1,
+                "rerank": args.rerank_mode == "on",
             },
         ]
     else:
@@ -339,6 +360,7 @@ if __name__ == "__main__":
                 "model_id": "gemma-4-31b-it",
                 "enable_bm25": enable_bm25,
                 "bm25_weight": 0.1 if enable_bm25 else args.bm25_weight,
+                "rerank": args.rerank_mode == "on",
             }
         ]
 
@@ -353,8 +375,6 @@ if __name__ == "__main__":
         print(f"\n=== Trial {repeat_index}/{repeats} ===")
         for exp in experiments:
             model_id = normalize_model_id(exp.get("model_id"))
-            semantic_weight = float(exp.get("semantic_weight", 0.4))
-            attribute_weight = float(exp.get("attribute_weight", 0.6))
             generator = RunGenerator(
                 k_per_engine=10,
                 model_id=model_id,
@@ -367,8 +387,6 @@ if __name__ == "__main__":
                     queries_config=sample_queries,
                     engine_name=exp["name"],
                     output_dir=output_folder,
-                    semantic_weight=semantic_weight,
-                    attribute_weight=attribute_weight,
                     run_suffix=run_suffix,
                     enable_bm25=enable_bm25,
                     bm25_weight=bm25_weight,
