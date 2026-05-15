@@ -1725,9 +1725,38 @@ class HybridEngine:
 
         # ── Optional PermSC Reranking ──
         if self.rerank_enabled:
-            cl = settings.RERANK_CANDIDATE_LIMIT
-            reranked = await self._rerank_results(scored_items[:cl], user_query, limit)
-            scored_items = reranked + scored_items[cl:]
+            candidate_limit = settings.RERANK_CANDIDATE_LIMIT
+            # Only rerank the top N candidates to avoid overwhelming the LLM
+            to_rerank = scored_items[:candidate_limit]
+            print(f"[Engine] Limiting rerank pool from {len(scored_items)} to {len(to_rerank)} candidates.")
+
+            # If a progress_callback is provided (streaming UI usage), avoid
+            # performing multiple PermSC permutations to reduce latency/cost.
+            # Temporarily set the reranker's permutation count to 1, then
+            # restore the original value after reranking.
+            reranker_instance = self._get_reranker()
+            orig_perms = getattr(reranker_instance, "n_permutations", None)
+            if orig_perms is None:
+                orig_perms = None
+            try:
+                if progress_callback:
+                    try:
+                        reranker_instance.n_permutations = 1
+                    except Exception:
+                        # If the reranker implementation does not expose this
+                        # attribute, silently continue (no behavior change).
+                        pass
+
+                reranked = await self._rerank_results(to_rerank, user_query, limit)
+            finally:
+                if orig_perms is not None:
+                    try:
+                        reranker_instance.n_permutations = orig_perms
+                    except Exception:
+                        pass
+
+            # Combine reranked items with the rest of the unranked items
+            scored_items = reranked + scored_items[candidate_limit:]
 
         if progress_callback:
             await progress_callback("rerank", {

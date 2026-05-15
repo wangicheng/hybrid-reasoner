@@ -47,13 +47,18 @@ function App() {
     setTerminalLines([]);
     setResults([]);
     setEngineData(null);
-    setPipelineStep(0);
+    setPipelineStep(1);
     setTags([]);
 
     const url = `http://127.0.0.1:8000/api/search/stream?query=${encodeURIComponent(val)}&model_id=gemma-4-31b-it`;
     const eventSource = new EventSource(url);
 
     setTerminalLines(['> 正在與 Nexus Engine 建立神經連結，準備送出查詢...']);
+    
+    // Simulate transitioning into the Parallel Parsing Layer after initial setup
+    setTimeout(() => {
+      setPipelineStep(2);
+    }, 1500);
 
     eventSource.addEventListener('planner', (e) => {
       const data = JSON.parse(e.data);
@@ -61,37 +66,37 @@ function App() {
       setTerminalLines(prev => [
         ...prev,
         '> 系統連線成功，接收到引擎初步結果...',
-        `> LLM 意圖解析：提取關鍵特徵中...`,
+        `> LLM 意圖解析：並行提取關鍵特徵中...`,
         `> <span style="color: #a855f7">發現標籤：${data.positive_terms.join(', ') || '無明顯標籤'}</span>`
       ]);
       setTags(data.positive_terms);
-      setPipelineStep(2);
+      setPipelineStep(3); // Planner completes steps 2 and 3
     });
 
     eventSource.addEventListener('retrieval', (e) => {
       const data = JSON.parse(e.data);
       setTerminalLines(prev => [
         ...prev,
-        `> 檢索核心：從向量資料庫與屬性資料庫中召回 ${data.candidate_count} 筆候選作品...`
+        `> 外部資料庫篩選：從向量與屬性資料庫召回 ${data.candidate_count} 筆候選作品...`
       ]);
-      setPipelineStep(3);
+      setPipelineStep(4);
     });
 
     eventSource.addEventListener('post_filter', (e) => {
       const data = JSON.parse(e.data);
       setTerminalLines(prev => [
         ...prev,
-        `> 規則過濾層：依據意圖過濾完成，剩餘 ${data.filtered_count} 筆有效候選集...`
+        `> 規則過濾層：依據意圖硬性篩選完成，剩餘 ${data.filtered_count} 筆有效候選集...`
       ]);
     });
 
     eventSource.addEventListener('rerank', (e) => {
       setTerminalLines(prev => [
         ...prev,
-        `> 精準重排序：正在進行全方位交叉評分中...`,
+        `> LLM 精確排序：正在進行全方位深層交互評分中...`,
         `> <span style="color: #22c55e">重排序完成，Top 1: ${e.data.top_results?.[0]?.name || '計算中'}...</span>`
       ]);
-      setPipelineStep(4);
+      setPipelineStep(5);
     });
 
     eventSource.addEventListener('complete', (e) => {
