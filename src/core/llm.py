@@ -934,8 +934,11 @@ def _generate_json_from_contents(
     total_api_keys = len(rotator.api_keys)
 
     while True:
-        api_key = get_current_api_key()
-        key_index = rotator.current_index + 1
+        api_key = rotator.acquire()
+        try:
+            key_index = rotator.api_keys.index(api_key) + 1
+        except ValueError:
+            key_index = 0
         client = genai.Client(api_key=api_key)
 
         try:
@@ -995,8 +998,8 @@ def _generate_json_from_contents(
             }
             _augment_exception_with_call_metadata(exc, call_metadata)
             if _is_retryable(exc):
-                # Rotate key on any retryable error (like 500 INTERNAL) to try another key/project context
-                rotator.rotate()
+                # Put the key to sleep so it is temporarily removed from rotation
+                rotator.sleep_key(api_key, LLM_RETRY_DELAY_SECONDS)
                 
                 print(
                     f"[llm:{task_label}] retryable error; sleeping "
@@ -1005,6 +1008,8 @@ def _generate_json_from_contents(
                 time.sleep(LLM_RETRY_DELAY_SECONDS)
                 continue
             raise
+        finally:
+            rotator.release(api_key)
 
 
 def _generate_text_from_contents(
@@ -1036,8 +1041,11 @@ def _generate_text_from_contents(
     total_api_keys = len(rotator.api_keys)
 
     while True:
-        api_key = get_current_api_key()
-        key_index = rotator.current_index + 1
+        api_key = rotator.acquire()
+        try:
+            key_index = rotator.api_keys.index(api_key) + 1
+        except ValueError:
+            key_index = 0
         client = genai.Client(api_key=api_key)
 
         try:
@@ -1092,8 +1100,8 @@ def _generate_text_from_contents(
             }
             _augment_exception_with_call_metadata(exc, call_metadata)
             if _is_retryable(exc):
-                # Rotate key on any retryable error (like 500 INTERNAL) to try another key/project context
-                rotator.rotate()
+                # Put the key to sleep so it is temporarily removed from rotation
+                rotator.sleep_key(api_key, LLM_RETRY_DELAY_SECONDS)
                 
                 print(
                     f"[llm:{task_label}] retryable error; sleeping "
@@ -1102,6 +1110,8 @@ def _generate_text_from_contents(
                 time.sleep(LLM_RETRY_DELAY_SECONDS)
                 continue
             raise
+        finally:
+            rotator.release(api_key)
 
 
 def _generate_json_task(

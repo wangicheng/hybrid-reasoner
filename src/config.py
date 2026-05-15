@@ -55,10 +55,12 @@ class Settings(BaseSettings):
     DAT_MODEL_ID: str = ""                  # DAT LLM model，空字串 = 使用預設
 
     # Layer 2: Tag Vector Bonus
-    TAG_BONUS_BETA: float = 0.20            # 標籤乘數 β，建議 0.15~0.30
+    TAG_BONUS_BETA: float = 0.20            # 標籤乘數 β 基準值，tag-heavy 查詢自動提升
+    TAG_TAU: float = 0.25                   # Layer 2 標籤向量溫度（比 L1 的 0.1 平緩，避免斷崖效應）
 
     # Layer 3: Required Tag Boost
-    REQUIRED_TAG_BOOST: float = 10.0        # 必備標籤霸榜提權常數
+    REQUIRED_TAG_BOOST: float = 10.0        # 必備標籤霸榜提權常數 (legacy, kept for reference)
+    REQUIRED_TAG_MULTIPLIER: float = 3.0    # L3 乘法提權倍率（取代 +10 加法，保留排名信號）
 
     # Layer 0: Violation Penalty Multipliers (連乘積)
     PENALTY_BLOCKED_TAGS: float = 0.05      # 命中排斥標籤 → 死罪 (從 0.1 壓低，加強雷區隔離)

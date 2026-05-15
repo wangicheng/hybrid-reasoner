@@ -152,21 +152,24 @@ class APIKeyRotator:
     Supports exclusive access via acquire/release.
     """
     
-    def __init__(self, api_keys: list):
+    def __init__(self, api_keys: list, max_concurrent: int = 10):
         """
         Args:
             api_keys: List of API keys to rotate through.
+            max_concurrent: Maximum total concurrent requests allowed across all keys.
         """
         self.api_keys = api_keys
         self.current_index = 0
         self._cond = threading.Condition()
         self.sleep_until = {k: 0.0 for k in api_keys}
         self.in_use = {k: False for k in api_keys}
+        self.max_concurrent = max_concurrent
+        self.current_concurrent = 0
         
         if not api_keys:
             raise ValueError("No API keys provided")
         
-        print(f"[APIKeyRotator] Initialized with {len(api_keys)} API key(s)")
+        print(f"[APIKeyRotator] Initialized with {len(api_keys)} keys, max_concurrent={max_concurrent}")
     
     def get_current_key(self) -> str:
         """Get a valid API key (legacy method, ignores in_use)."""
@@ -189,22 +192,28 @@ class APIKeyRotator:
             return self.get_current_key()
             
     def acquire(self) -> str:
-        """Acquire an exclusive API key that is not sleeping or in use."""
+        """Acquire an exclusive API key that is not sleeping or in use, respecting global concurrency limit."""
         with self._cond:
             while True:
                 now = time.monotonic()
-                start_index = self.current_index
                 
-                # 1. Try to find an available key
+                # 1. Check Global Concurrency Limit
+                if self.current_concurrent >= self.max_concurrent:
+                    self._cond.wait()
+                    continue
+
+                # 2. Try to find an available key (not in use and not sleeping)
+                start_index = self.current_index
                 for offset in range(len(self.api_keys)):
                     idx = (start_index + offset) % len(self.api_keys)
                     k = self.api_keys[idx]
                     if not self.in_use[k] and self.sleep_until[k] <= now:
                         self.current_index = (idx + 1) % len(self.api_keys)
                         self.in_use[k] = True
+                        self.current_concurrent += 1
                         return k
                 
-                # 2. Wait for a key to be released or wake up
+                # 3. Wait for a key to be released or wake up
                 wait_time = None
                 for k in self.api_keys:
                     if not self.in_use[k]:
@@ -213,16 +222,21 @@ class APIKeyRotator:
                             wait_time = t
                 
                 if wait_time is None:
-                    # All keys in use! Wait for release
+                    # All keys physically in use! Wait for release
                     self._cond.wait()
                 elif wait_time > 0:
+                    # Some keys are sleeping, wait for the earliest one
                     self._cond.wait(timeout=wait_time)
+                else:
+                    # Should not happen as loop will restart and find the key
+                    self._cond.wait(timeout=0.1)
 
     def release(self, key: str):
-        """Release an exclusively acquired API key."""
+        """Release an exclusively acquired API key and decrement global concurrency counter."""
         with self._cond:
-            if key in self.in_use:
+            if key in self.in_use and self.in_use[key]:
                 self.in_use[key] = False
+                self.current_concurrent = max(0, self.current_concurrent - 1)
                 self._cond.notify_all()
                 
     def sleep_key(self, key: str, sleep_seconds: float):

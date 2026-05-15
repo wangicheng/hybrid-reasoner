@@ -154,7 +154,7 @@ class LLMJudge:
             api_key = rotator.acquire()
             client = genai.Client(api_key=api_key)
             try:
-                get_rate_limiter().wait()
+                get_rate_limiter().wait(api_key)
                 is_gemma = "gemma" in model_id.lower()
 
                 if is_gemma:

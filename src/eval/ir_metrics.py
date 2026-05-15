@@ -29,6 +29,7 @@ class EngineMetrics:
     zero_result_rate: float
     semantic_recall_at_k: Dict[int, float]
     # --- Advanced metrics ---
+    ndcg_at_k: Dict[int, float]
     penalized_ndcg_at_k: Dict[int, float]
     rbv_at_k: Dict[int, float]
     rc_f1_at_k: Dict[int, float]
@@ -190,6 +191,22 @@ def _dcg(gains: List[float], k: int) -> float:
     return score
 
 
+def _ndcg_at_k(
+    graded_scores: List[float],
+    all_possible_scores: List[float],
+    k: int,
+) -> float:
+    """Standard NDCG@K."""
+    if k <= 0:
+        return 0.0
+
+    actual_dcg = _dcg(graded_scores[:k], k)
+    ideal_gains = sorted(all_possible_scores, reverse=True)[:k]
+    ideal_dcg = _dcg(ideal_gains, k)
+
+    return actual_dcg / ideal_dcg if ideal_dcg > 0 else 0.0
+
+
 def _penalized_ndcg_at_k(
     graded_scores: List[float],
     violations_by_rank: List[List[str]],
@@ -327,6 +344,7 @@ def evaluate_ir(
         ap_acc: Dict[int, List[float]] = {k: [] for k in k_values}
         recall_acc: Dict[int, List[float]] = {k: [] for k in k_values}
         violation_acc: Dict[int, List[float]] = {k: [] for k in k_values}
+        ndcg_acc: Dict[int, List[float]] = {k: [] for k in k_values}
         pndcg_acc: Dict[int, List[float]] = {k: [] for k in k_values}
         rbv_acc: Dict[int, List[float]] = {k: [] for k in k_values}
 
@@ -377,10 +395,17 @@ def evaluate_ir(
                 recall_acc[k].append(_recall_at_k(binary, total_relevant, k))
 
                 top_k_violations = violation_flags_by_rank[:k]
-                has_violation = 1.0 if any(top_k_violations) else 0.0
-                violation_acc[k].append(has_violation)
+                violation_ratio = sum(top_k_violations) / float(k) if k > 0 else 0.0
+                violation_acc[k].append(violation_ratio)
 
                 # Advanced metrics per query
+                ndcg_acc[k].append(
+                    _ndcg_at_k(
+                        graded_by_rank,
+                        list(query_scores.values()),
+                        k
+                    )
+                )
                 pndcg_acc[k].append(
                     _penalized_ndcg_at_k(
                         graded_by_rank, 
@@ -399,6 +424,7 @@ def evaluate_ir(
         recalls = {k: _safe_mean(vals) for k, vals in recall_acc.items()}
         violation_rate = {k: _safe_mean(vals) for k, vals in violation_acc.items()}
         clean_rate = {k: (1.0 - violation_rate[k]) for k in k_values}
+        ndcg = {k: _safe_mean(vals) for k, vals in ndcg_acc.items()}
         pndcg = {k: _safe_mean(vals) for k, vals in pndcg_acc.items()}
         rbv = {k: _safe_mean(vals) for k, vals in rbv_acc.items()}
         rc_f1 = {k: _rc_f1_at_k(precision[k], clean_rate[k]) for k in k_values}
@@ -423,6 +449,7 @@ def evaluate_ir(
             violation_breakdown_rate=violation_breakdown_rate,
             zero_result_rate=(zero_result_queries / len(query_ids) if query_ids else 0.0),
             semantic_recall_at_k=recalls,
+            ndcg_at_k=ndcg,
             penalized_ndcg_at_k=pndcg,
             rbv_at_k=rbv,
             rc_f1_at_k=rc_f1,
@@ -528,12 +555,12 @@ def print_report(
 
     # --- Advanced Metrics Report ---
     print("\n" + "=" * 120)
-    print("Advanced Metrics Report (Primary: pNDCG | Guardrails: RBV, RC-F1)")
+    print("Advanced Metrics Report (Primary: NDCG, pNDCG | Guardrails: RBV, RC-F1)")
     print("=" * 120)
 
     adv_header = ["Engine"]
     for k in k_values:
-        adv_header.extend([f"pNDCG@{k}", f"RBV@{k}", f"RC-F1@{k}"])
+        adv_header.extend([f"NDCG@{k}", f"pNDCG@{k}", f"RBV@{k}", f"RC-F1@{k}"])
     print(" | ".join([
         adv_header[0].ljust(col_width),
         *[col.rjust(9) for col in adv_header[1:]],
@@ -543,6 +570,7 @@ def print_report(
     for engine_name, metric in sorted_engines:
         cells = [engine_name.ljust(col_width)]
         for k in k_values:
+            cells.append(_format_pct(metric.ndcg_at_k[k]).rjust(9))
             cells.append(_format_pct(metric.penalized_ndcg_at_k[k]).rjust(9))
             cells.append(_format_pct(metric.rbv_at_k[k]).rjust(9))
             cells.append(_format_pct(metric.rc_f1_at_k[k]).rjust(9))

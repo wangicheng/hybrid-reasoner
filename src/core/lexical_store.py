@@ -27,14 +27,12 @@ class LexicalStore:
             if not item.get("id"):
                 continue
             
-            # Use title, author, intro, tags for lexical indexing
+            # Use title, author, and tags for lexical indexing (intro removed to reduce noise)
             parts = []
             if item.get("name"):
                 parts.append(str(item["name"]))
             if item.get("author"):
                 parts.append(str(item["author"]))
-            if item.get("intro"):
-                parts.append(str(item["intro"]))
             tags = item.get("tags")
             if isinstance(tags, list):
                 parts.extend(str(t) for t in tags)

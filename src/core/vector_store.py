@@ -26,6 +26,7 @@ class VectorStore:
         self._current_api_key = get_current_api_key()
         self.genai_client = genai.Client(api_key=self._current_api_key)
         self.embedding_model = "gemini-embedding-001"
+        self._tag_embedding_cache: Dict[str, List[float]] = {}  # Cache for tag template embeddings
         self._ensure_collection()
         self._ensure_payload_indexes()
 
@@ -414,6 +415,41 @@ class VectorStore:
         
         raise RuntimeError("Max embed retries exceeded")
 
+    TAG_TEMPLATE_PREFIX = "這部作品的類型偏向"
+
+    def _get_cached_tag_embeddings(
+        self,
+        texts: List[str],
+        task_type: str = "RETRIEVAL_QUERY",
+    ) -> List[List[float]]:
+        """Return embeddings for tag template texts, using cache when available.
+
+        Texts matching the tag template '這部作品的類型偏向{tag}' are cached
+        in memory. Only uncached texts trigger API calls.
+        """
+        results: List[Optional[List[float]]] = [None] * len(texts)
+        uncached_indices: List[int] = []
+        uncached_texts: List[str] = []
+
+        for i, text in enumerate(texts):
+            if text in self._tag_embedding_cache:
+                results[i] = self._tag_embedding_cache[text]
+            else:
+                uncached_indices.append(i)
+                uncached_texts.append(text)
+
+        if uncached_texts:
+            new_embeddings = self._embed_with_retry(uncached_texts, task_type=task_type)
+            if not isinstance(new_embeddings[0], list):
+                new_embeddings = [new_embeddings]
+            for idx, embedding in zip(uncached_indices, new_embeddings):
+                text = texts[idx]
+                if text.startswith(self.TAG_TEMPLATE_PREFIX):
+                    self._tag_embedding_cache[text] = embedding
+                results[idx] = embedding
+
+        return results  # type: ignore[return-value]
+
     def search(
         self,
         query_text: str,
@@ -444,6 +480,7 @@ class VectorStore:
         query_list: List[str],
         limit: int = 10000,
         collection_name: Optional[str] = None,
+        query_filter: Optional[rest.Filter] = None,
     ) -> List[Dict[str, Any]]:
         if not query_list:
             return []
@@ -454,24 +491,36 @@ class VectorStore:
                 f"Qdrant collection '{target_collection}' is missing."
             )
 
-        query_vectors = self._embed_with_retry(query_list, task_type="RETRIEVAL_QUERY")
+        query_vectors = self._get_cached_tag_embeddings(query_list, task_type="RETRIEVAL_QUERY")
 
         aggregated_scores: Dict[Any, float] = {}
+        hit_counts: Dict[Any, int] = {}
         payload_cache: Dict[Any, Any] = {}
+        total_queries = len(query_vectors)
         for vector in query_vectors:
             response = self.client.query_points(
                 collection_name=target_collection,
                 query=vector,
                 limit=limit * 2,
                 with_payload=True,
+                query_filter=query_filter,
             )
             for point in response.points:
                 point_id = point.id
                 score = float(point.score)
-                if point_id not in aggregated_scores or score > aggregated_scores[point_id]:
-                    aggregated_scores[point_id] = score
-                    if point.payload:
-                        payload_cache[point_id] = point.payload
+                hit_counts[point_id] = hit_counts.get(point_id, 0) + 1
+                aggregated_scores[point_id] = aggregated_scores.get(point_id, 0.0) + score
+                if point.payload:
+                    payload_cache[point_id] = point.payload
+
+        # Multi-tag intersection bonus: books hit by multiple tag queries
+        # get a boost proportional to overlap ratio.
+        # Use mean over ALL queries so missing hits are implicitly penalized as 0.
+        if total_queries > 0:
+            for point_id in aggregated_scores:
+                mean_score = aggregated_scores[point_id] / total_queries
+                overlap_ratio = hit_counts.get(point_id, 1) / total_queries
+                aggregated_scores[point_id] = mean_score * (1.0 + 0.15 * overlap_ratio)
 
         sorted_results = sorted(
             aggregated_scores.items(),
@@ -557,7 +606,7 @@ class VectorStore:
         try:
             # We use the same query vector for both searches as it's the same template: 
             # "這部作品的類型偏向{tag}"
-            query_vectors = self._embed_with_retry(
+            query_vectors = self._get_cached_tag_embeddings(
                 [f"這部作品的類型偏向{tag}" for tag in target_tags],
                 task_type="RETRIEVAL_QUERY",
             )
