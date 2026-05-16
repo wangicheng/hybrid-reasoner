@@ -149,6 +149,7 @@ class RunGenerator:
                 "parsed_criteria": parsed_criteria,
                 "tag_intent": response.get("tag_intent"),
                 "reference_tags": response.get("reference_tags", []),
+                "tag_mapping": response.get("tag_mapping", []),
                 "results": extracted_results,
             }
         except Exception as query_err:
@@ -162,6 +163,7 @@ class RunGenerator:
                 "parsed_criteria": [],
                 "parse_metadata": getattr(query_err, "parser_metadata", {}),
                 "results": [],
+                "tag_mapping": [],
                 "error": str(query_err),
             }
 
@@ -187,6 +189,7 @@ class RunGenerator:
         routing_rrf_bm25: bool = False,
         use_schema_constraint: bool = True,
         disable_tag_embedding: bool = False,
+        max_tags_per_term: int = 3,
     ) -> None:
         fusion_label = fusion_strategy or "weighted"
         print(
@@ -200,7 +203,8 @@ class RunGenerator:
             f"model={normalize_model_id(self.model_id)}, "
             f"parser_variant={DEFAULT_PARSER_VARIANT}, "
             f"run_suffix={run_suffix or 'none'}, "
-            f"schema={use_schema_constraint}, tag_embed_disabled={disable_tag_embedding})"
+            f"schema={use_schema_constraint}, tag_embed_disabled={disable_tag_embedding}, "
+            f"max_tags_per_term={max_tags_per_term})"
         )
 
         vs = VectorStore(collection_name="novels")
@@ -223,6 +227,7 @@ class RunGenerator:
             rerank=self.rerank,
             use_schema_constraint=use_schema_constraint,
             disable_tag_embedding=disable_tag_embedding,
+            max_tags_per_term=max_tags_per_term,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -327,14 +332,30 @@ if __name__ == "__main__":
             "model_id": "gemma-4-31b-it",
             "disable_tag_embedding": True,
             "use_schema_constraint": False,
-            "rerank": False,
+            "rerank": True,
         },
         {
             "name": "gemma4_schema_constrained",
             "model_id": "gemma-4-31b-it",
             "disable_tag_embedding": True,
             "use_schema_constraint": True,
-            "rerank": False,
+            "rerank": True,
+        },
+        {
+            "name": "gemma4_dual_track",
+            "model_id": "gemma-4-31b-it",
+            "disable_tag_embedding": False,
+            "use_schema_constraint": True,
+            "rerank": True,
+            "max_tags_per_term": 3,
+        },
+        {
+            "name": "gemma4_dual_track_k1",
+            "model_id": "gemma-4-31b-it",
+            "disable_tag_embedding": False,
+            "use_schema_constraint": True,
+            "rerank": True,
+            "max_tags_per_term": 1,
         }
     ]
 
@@ -370,6 +391,7 @@ if __name__ == "__main__":
                     bm25_weight=bm25_weight,
                     use_schema_constraint=exp.get("use_schema_constraint", True),
                     disable_tag_embedding=exp.get("disable_tag_embedding", False),
+                    max_tags_per_term=exp.get("max_tags_per_term", 3),
                 )
             except Exception as exc:
                 print(

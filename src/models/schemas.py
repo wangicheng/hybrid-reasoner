@@ -6,8 +6,10 @@ class TagIntent(BaseModel):
     Dedicated positive/negative tag extraction result.
     """
     search_terms: str = Field(default="", description="Primary retrieval phrase for the tag-intent task.")
-    positive_terms: List[str] = Field(default_factory=list, description="Positive tag-like concepts extracted from the query.")
-    negative_terms: List[str] = Field(default_factory=list, description="Negative tag-like concepts explicitly rejected by the user.")
+    positive_terms: List[str] = Field(default_factory=list, description="Positive tag-like concepts extracted from the query (strictly from whitelist).")
+    negative_terms: List[str] = Field(default_factory=list, description="Negative tag-like concepts explicitly rejected by the user (strictly from whitelist).")
+    fuzzy_positive_terms: List[str] = Field(default_factory=list, description="Free-form positive tag-like concepts extracted from the query.")
+    fuzzy_negative_terms: List[str] = Field(default_factory=list, description="Free-form negative tag-like concepts explicitly rejected by the user.")
 
 class ScoringParameters(BaseModel):
     field: Optional[str] = Field(None, description="Field to specific match on (e.g. tags, classification)")

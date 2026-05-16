@@ -47,11 +47,13 @@ class HybridEngine:
         rerank: Optional[bool] = None,
         use_schema_constraint: bool = True,
         disable_tag_embedding: bool = False,
+        max_tags_per_term: int = 3,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
         self.use_schema_constraint = use_schema_constraint
         self.disable_tag_embedding = disable_tag_embedding
+        self.max_tags_per_term = max_tags_per_term
         
         self.fusion_strategy = fusion_strategy or getattr(settings, 'FUSION_STRATEGY', 'auto')
         if self.fusion_strategy not in self.VALID_FUSION_STRATEGIES:
@@ -94,7 +96,6 @@ class HybridEngine:
         )
         self.rerank_enabled = rerank if rerank is not None else settings.RERANK_ENABLED
         self._reranker = None
-        self.max_tags_per_term = 3
 
         # DAT (Dynamic Alpha Tuning)
         self.enable_dat = settings.ENABLE_DAT
@@ -1244,7 +1245,26 @@ class HybridEngine:
         scored_items.sort(key=lambda x: x["score"], reverse=True)
         return scored_items
 
-    def _run_retrieval_pipeline(self, expanded_terms, metadata_filter, constraint_dict, tag_terms_list, tag_mapping_weights, active_bm25, active_fusion, active_ws, active_wa, active_rrf_k, active_alpha=0.5, vector_limit=500, bm25_limit=500, tag_vector_limit=300, positive_tags=None, active_beta=None):
+    def _run_retrieval_pipeline(
+        self,
+        expanded_terms,
+        metadata_filter,
+        constraint_dict,
+        tag_terms_list,
+        tag_mapping_weights,
+        active_bm25,
+        active_fusion,
+        active_ws,
+        active_wa,
+        active_rrf_k,
+        active_alpha=0.5,
+        vector_limit=500,
+        bm25_limit=500,
+        tag_vector_limit=300,
+        positive_tags=None,
+        active_beta=None,
+        recall_tags_override: Optional[List[str]] = None,
+    ):
         """Tri-track retrieval + scoring pipeline.
 
         Track A: Content vector search (semantic similarity)
@@ -1307,15 +1327,19 @@ class HybridEngine:
                 print(f"[Engine:TrackC] Tag vector search failed, skipping: {exc}")
 
         # ── Tag-based exact recall (legacy augmentation) ──
-        recall_tags = []
-        if tag_terms_list and tag_mapping_weights:
+        recall_tags = recall_tags_override or []
+        if not recall_tags and tag_terms_list and tag_mapping_weights:
             recall_tags = self._extract_recall_tags(tag_mapping_weights)
-            if recall_tags:
-                for item in self.db.search_by_tags_any(recall_tags, limit=vector_limit):
-                    bid = str(item.get("id", "")).strip()
-                    if not bid or bid in candidates_map: continue
-                    if self._item_violates_hard_constraints(item, constraint_dict): continue
-                    candidates_map[bid] = item; payload_map[bid] = item; vector_score_map[bid] = 0.0
+        if recall_tags:
+            for item in self.db.search_by_tags_any(recall_tags, limit=vector_limit):
+                bid = str(item.get("id", "")).strip()
+                if not bid or bid in candidates_map:
+                    continue
+                if self._item_violates_hard_constraints(item, constraint_dict):
+                    continue
+                candidates_map[bid] = item
+                payload_map[bid] = item
+                vector_score_map[bid] = 0.0
 
         # ── Enrich & validate candidates ──
         candidates = []
@@ -1457,8 +1481,26 @@ class HybridEngine:
         parse_result = parse_query(user_query, model_id=model_id, cache_namespace=cache_namespace, tag_list=self.all_tags_cache, reference_book_context=related_book_context, use_schema_constraint=self.use_schema_constraint)
 
         # ── Step 2.5: Query Compiler ──
-        negative_tag_terms = self._dedupe_terms(list(parse_result.tag_intent.negative_terms)) or self._resolve_negative_tag_terms(parse_result.criteria)
-        compiled = compile_query(parse_result, negative_tag_terms)
+        exact_neg_terms = self._dedupe_terms(list(parse_result.tag_intent.negative_terms)) if hasattr(parse_result, "tag_intent") else []
+        fuzzy_neg_terms = self._dedupe_terms(list(parse_result.tag_intent.fuzzy_negative_terms)) if hasattr(parse_result, "tag_intent") else []
+        
+        # We need to map fuzzy_neg_terms to real tags via Vector Mapping, since Qdrant filter only works with exact tags.
+        mapped_fuzzy_neg = []
+        if not getattr(self, "disable_tag_embedding", False):
+            for term in fuzzy_neg_terms:
+                try:
+                    mapped = self.vs.search_tags(
+                        f"這部作品的類型偏向{term}",
+                        limit=1,
+                        similarity_threshold=0.7,
+                    )
+                    if mapped:
+                        mapped_fuzzy_neg.extend(result["tag"] for result in mapped)
+                except Exception as exc:
+                    print(f"[Engine] Warning: fuzzy_negative tag mapping failed: {exc}")
+
+        combined_negative_terms = self._dedupe_terms(exact_neg_terms + mapped_fuzzy_neg) or self._resolve_negative_tag_terms(parse_result.criteria)
+        compiled = compile_query(parse_result, combined_negative_terms)
         hard_constraint_dict = compiled.hard_filters.to_constraint_dict()
         tag_terms_list = compiled.soft_factors.tag_terms_list
         positive_tags = compiled.soft_factors.positive_tags
@@ -1511,7 +1553,49 @@ class HybridEngine:
             if getattr(self, "disable_tag_embedding", False):
                 tag_mapping_weights = [{tag: 1.0} for tag in tag_terms_list]
             else:
-                tag_mapping_weights = self.vs.batch_map_tags(tag_terms_list, similarity_threshold=0.6)
+                tag_mapping_weights = []
+                tag_mapping_info: List[Dict[str, Any]] = []
+                for tag in tag_terms_list:
+                    # Dual-track scoring strategy:
+                    # If the tag is an exact tag from the schema constrained output, it gets weight 1.0 directly.
+                    # If it's a fuzzy tag (freely generated), run it through batch mapping, and reduce its weight to 0.4.
+                    is_exact_tag = tag in parse_result.tag_intent.positive_terms if hasattr(parse_result, "tag_intent") else False
+
+                    if is_exact_tag:
+                        tag_mapping_weights.append({tag: 1.0})
+                        tag_mapping_info.append({"term": tag, "is_exact": True, "mappings": [{"tag": tag, "raw_score": 1.0, "scaled_score": 1.0}]})
+                    else:
+                        try:
+                            raw_map = self.vs.batch_map_tags([tag], similarity_threshold=0.6)[0]
+                        except Exception as exc:
+                            print(f"[Engine] Warning: tag batch mapping failed for '{tag}': {exc}")
+                            raw_map = {}
+
+                        # Scale down fuzzy mappings for scoring
+                        fuzzy_mapped = {k: v * 0.4 for k, v in raw_map.items()}
+                        tag_mapping_weights.append(fuzzy_mapped)
+
+                        mappings = []
+                        for mt, raw_score in raw_map.items():
+                            mappings.append({"tag": mt, "raw_score": raw_score, "scaled_score": raw_score * 0.4})
+                        tag_mapping_info.append({"term": tag, "is_exact": False, "mappings": mappings})
+        else:
+            tag_mapping_info = []
+
+        # Build raw tag mapping weights for recall selection (use raw_score cutoff = 0.7)
+        raw_tag_mapping_weights: List[Dict[str, float]] = []
+        if tag_mapping_info:
+            for entry in tag_mapping_info:
+                if entry.get("is_exact"):
+                    raw_tag_mapping_weights.append({entry.get("term"): 1.0})
+                else:
+                    mapping_map = {m.get("tag"): m.get("raw_score") for m in entry.get("mappings", [])}
+                    raw_tag_mapping_weights.append(mapping_map)
+        else:
+            raw_tag_mapping_weights = []
+
+        # Select recall tags using raw mapping scores (>= 0.7)
+        recall_tags_override = self._extract_recall_tags(raw_tag_mapping_weights, min_score=0.7) if raw_tag_mapping_weights else []
 
         # ════════════════════════════════════════════════════════════════
         # ── FAST PATH: Tri-track recall (Vector 500 + BM25 500 + TagVec 300) ──
@@ -1524,7 +1608,9 @@ class HybridEngine:
             active_alpha=active_alpha,
             vector_limit=self.FAST_PATH_RETRIEVAL_LIMIT, bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT,
             tag_vector_limit=self.TAG_VECTOR_RETRIEVAL_LIMIT, positive_tags=positive_tags,
-            active_beta=active_beta)
+            active_beta=active_beta,
+            recall_tags_override=recall_tags_override,
+        )
         scored_items = self._post_filter(scored_items, hard_constraint_dict)
         scored_items.sort(key=lambda r: r["score"], reverse=True)
 
@@ -1566,7 +1652,9 @@ class HybridEngine:
                 bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT,
                 tag_vector_limit=self.TAG_VECTOR_RETRIEVAL_LIMIT,
                 positive_tags=positive_tags,
-                active_beta=active_beta)
+                active_beta=active_beta,
+                recall_tags_override=recall_tags_override,
+            )
             if l2_recall:
                 recall_tags = list(set(recall_tags + l2_recall))
 
@@ -1675,5 +1763,5 @@ class HybridEngine:
             if item.get("intro"): chunks.append(f"Database intro:\n{item['intro']}")
             result["explanation"] = generate_explanation(query=user_query, book_item=item, context_chunks=chunks, score_breakdown=result["breakdown"], runtime_state=state, model_id=model_id)
 
-        return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": {"positive_terms": list(parse_result.tag_intent.positive_terms), "negative_terms": negative_tag_terms}, "hypothetical_intro": parse_result.hypothetical_intro, "related_books": related_books, "reference_tags": recall_tags, "parse_metadata": parse_result.parse_metadata, "query_vector": query_vector, "results": final_results, "engine": "HybridEngine", "degradation_level": degradation_level, "system_message": system_message, "dat_info": dat_info}
+        return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": {"positive_terms": list(parse_result.tag_intent.positive_terms), "negative_terms": combined_negative_terms}, "tag_mapping": tag_mapping_info, "hypothetical_intro": parse_result.hypothetical_intro, "related_books": related_books, "reference_tags": recall_tags, "parse_metadata": parse_result.parse_metadata, "query_vector": query_vector, "results": final_results, "engine": "HybridEngine", "degradation_level": degradation_level, "system_message": system_message, "dat_info": dat_info}
 

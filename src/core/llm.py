@@ -520,10 +520,14 @@ def _normalize_tag_projection(parsed: Any) -> Dict[str, Any]:
             or normalized.get("negative_tags")
         )
     )
+    fuzzy_positive_terms = _dedupe_terms(_coerce_string_list(normalized.get("fuzzy_positive_terms")))
+    fuzzy_negative_terms = _dedupe_terms(_coerce_string_list(normalized.get("fuzzy_negative_terms")))
 
     return {
         "positive_terms": positive_terms,
         "negative_terms": negative_terms,
+        "fuzzy_positive_terms": fuzzy_positive_terms,
+        "fuzzy_negative_terms": fuzzy_negative_terms,
     }
 
 
@@ -534,24 +538,31 @@ def _build_tag_intent_from_projection(
 ) -> TagIntent:
     positive_terms = list(tag_projection.get("positive_terms") or [])
     negative_terms = list(tag_projection.get("negative_terms") or [])
+    fuzzy_positive_terms = list(tag_projection.get("fuzzy_positive_terms") or [])
+    fuzzy_negative_terms = list(tag_projection.get("fuzzy_negative_terms") or [])
 
-    if not positive_terms:
+    if not positive_terms and not fuzzy_positive_terms:
         positive_terms = list(semantic_understanding.get("positive_concepts") or [])
-    if not negative_terms:
+    if not negative_terms and not fuzzy_negative_terms:
         negative_terms = list(semantic_understanding.get("negative_concepts") or [])
 
     deduped_positive_terms = _dedupe_terms([str(term).strip() for term in positive_terms])
     deduped_negative_terms = _dedupe_terms([str(term).strip() for term in negative_terms])
+    deduped_fuzzy_positive = _dedupe_terms([str(term).strip() for term in fuzzy_positive_terms])
+    deduped_fuzzy_negative = _dedupe_terms([str(term).strip() for term in fuzzy_negative_terms])
+
     search_terms = _compose_retrieval_search_terms(
         user_query=user_query,
         semantic_query_text=str(semantic_understanding.get("semantic_query_text") or ""),
-        positive_terms=deduped_positive_terms,
+        positive_terms=deduped_positive_terms + deduped_fuzzy_positive,
     )
 
     return TagIntent(
         search_terms=search_terms,
         positive_terms=deduped_positive_terms,
         negative_terms=deduped_negative_terms,
+        fuzzy_positive_terms=deduped_fuzzy_positive,
+        fuzzy_negative_terms=deduped_fuzzy_negative,
     )
 
 
@@ -1249,8 +1260,16 @@ Rules:
                 "type": "array",
                 "items": tag_item_schema,
             },
+            "fuzzy_positive_terms": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "fuzzy_negative_terms": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
         },
-        "required": ["positive_terms", "negative_terms"],
+        "required": ["positive_terms", "negative_terms", "fuzzy_positive_terms", "fuzzy_negative_terms"],
     }
 
     string_candidate_schema = {
@@ -1297,20 +1316,23 @@ You are the tag projection pass.
     Return JSON with:
     - positive_terms
     - negative_terms
+    - fuzzy_positive_terms
+    - fuzzy_negative_terms
 
     Rules:
     - The input includes the original query and a compact semantic understanding summary.
     - Project only the strongest retrieval anchors into short tag-like terms.
-    - Prefer exact tag names from AVAILABLE TAGS whenever possible.
-    - Be conservative for positive_terms. Omit weak, optional, or example-derived concepts.
-    - `positive_terms` should contain 3-6 high-confidence terms only.
-    - `negative_terms` should contain 0-8 explicit exclusions.
+    - `positive_terms` and `negative_terms` must ONLY contain EXACT tag names from AVAILABLE TAGS.
+    - `fuzzy_positive_terms` and `fuzzy_negative_terms` can contain your own free-form strings for concepts not explicitly listed in AVAILABLE TAGS.
+    - Be conservative for positive terms. Omit weak, optional, or example-derived concepts.
+    - `positive_terms` + `fuzzy_positive_terms` should contain 3-6 high-confidence terms only.
+    - `negative_terms` + `fuzzy_negative_terms` should contain 0-8 explicit exclusions.
     - CRITICAL for `negative_terms`: 
       1. MUST capture ALL genres or elements explicitly rejected by the user.
       2. PROACTIVE EXPANSION: When a user rejects a concept (e.g., "不要奇幻"), you MUST also add all closely related tags from the list to `negative_terms` (e.g., add "魔法", "異世界"). Do not just stop at one tag.
       3. INFER GENRE CLASHES: If the user requests pure, peaceful, or wholesome genres (like "日常", "溫馨", "治癒", "純戀愛"), you MUST proactively add highly toxic/clashing tags like "NTR", "黑暗", "獵奇", "病嬌" to `negative_terms`, even if the user didn't explicitly mention them.
-    - Each rejected concept should map to the closest AVAILABLE TAG name.
-    - Return only these two keys. Do not emit helper fields, explanations, or notes.
+    - Each rejected concept should map to the closest AVAILABLE TAG name in `negative_terms` or failing that, be stored in `fuzzy_negative_terms`.
+    - Return exactly these four keys. Do not emit helper fields, explanations, or notes.
 """.strip()
 
     structured_instruction = f"""
