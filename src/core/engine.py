@@ -45,6 +45,7 @@ class HybridEngine:
         routing_weighted_bm25: bool = True,
         routing_rrf_bm25: bool = False,
         rerank: Optional[bool] = None,
+        parser_variant: Optional[str] = None,
     ):
         self.db = db if db is not None else Database()
         self.vs = vs if vs is not None else VectorStore(collection_name="novels")
@@ -89,6 +90,7 @@ class HybridEngine:
             else settings.ATTRIBUTE_WEIGHT
         )
         self.rerank_enabled = rerank if rerank is not None else settings.RERANK_ENABLED
+        self.parser_variant = parser_variant
         self._reranker = None
         self.max_tags_per_term = 3
 
@@ -1446,7 +1448,14 @@ class HybridEngine:
 
         related_books = self.book_matcher.extract_related_books(user_query)
         related_book_context = self.book_matcher.build_related_book_context(related_books)
-        parse_result = parse_query(user_query, model_id=model_id, cache_namespace=cache_namespace, tag_list=self.all_tags_cache, reference_book_context=related_book_context)
+        parse_result = parse_query(
+            user_query,
+            model_id=model_id,
+            cache_namespace=cache_namespace,
+            tag_list=self.all_tags_cache,
+            reference_book_context=related_book_context,
+            parser_variant=self.parser_variant
+        )
 
         # ── Step 2.5: Query Compiler ──
         exact_neg_terms = self._dedupe_terms(list(parse_result.tag_intent.negative_terms)) if hasattr(parse_result, "tag_intent") else []

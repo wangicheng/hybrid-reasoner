@@ -14,8 +14,13 @@ from src.core.api_utils import is_rate_limit_error
 
 # ??????謘?(???????制??謅???????剜???蹇?????
 DEFAULT_PARSER_MODEL = "gemma-4-31b-it"
+
+PARSER_VARIANT_JOINT = "joint"
+PARSER_VARIANT_PARALLEL = "parallel"
+PARSER_VARIANT_PARALLEL_CTX = "parallel_ctx"
+
 PARSER_VARIANT_SEMANTIC_SECTIONS_V3_TAGLITE = "semantic_sections_v3_taglite"
-DEFAULT_PARSER_VARIANT = PARSER_VARIANT_SEMANTIC_SECTIONS_V3_TAGLITE
+DEFAULT_PARSER_VARIANT = PARSER_VARIANT_PARALLEL_CTX
 
 
 def _load_llm_timeout_seconds() -> Optional[float]:
@@ -1147,12 +1152,155 @@ def _generate_json_task(
 
 
 
+def _parse_query_parallel_v2(
+    user_query: str,
+    model_id: Optional[str] = None,
+    tag_list: Optional[Tuple[str, ...]] = None,
+    reference_book_context: Optional[str] = None,
+    sampling_temperature: float = 0.2,
+) -> QueryParseResult:
+    """Parallel parsing without context passing (no-ctx)."""
+    # This variant is identical to ctx_v2 except branches don't receive semantic output
+    return _parse_query_parallel_ctx_v2(
+        user_query,
+        model_id=model_id,
+        tag_list=tag_list,
+        reference_book_context=reference_book_context,
+        sampling_temperature=sampling_temperature,
+        use_context=False
+    )
+
+
+def _parse_query_joint_v2(
+    user_query: str,
+    model_id: Optional[str] = None,
+    tag_list: Optional[Tuple[str, ...]] = None,
+    reference_book_context: Optional[str] = None,
+    sampling_temperature: float = 0.2,
+) -> QueryParseResult:
+    """Single-call joint parsing (baseline)."""
+    started_at = time.perf_counter()
+    shared_context = _build_parallel_context(
+        tag_list=tag_list,
+        reference_book_context=reference_book_context,
+        response_contract="json",
+    )
+
+    if tag_list:
+        tag_enum = list(tag_list)
+        tag_item_schema = {"type": "string", "enum": tag_enum}
+    else:
+        tag_item_schema = {"type": "string"}
+
+    string_candidate_schema = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "string"},
+            "evidence": {"type": "string"},
+            "is_explicit": {"type": "boolean"},
+        },
+        "required": ["value", "evidence", "is_explicit"],
+    }
+
+    number_candidate_schema = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "number"},
+            "evidence": {"type": "string"},
+            "is_explicit": {"type": "boolean"},
+        },
+        "required": ["value", "evidence", "is_explicit"],
+    }
+
+    joint_schema = {
+        "type": "object",
+        "properties": {
+            "semantic_query_text": {"type": "string"},
+            "intent_summary": {"type": "string"},
+            "positive_concepts": {"type": "array", "items": {"type": "string"}},
+            "negative_concepts": {"type": "array", "items": {"type": "string"}},
+            "positive_terms": {"type": "array", "items": tag_item_schema},
+            "negative_terms": {"type": "array", "items": tag_item_schema},
+            "fuzzy_positive_terms": {"type": "array", "items": {"type": "string"}},
+            "fuzzy_negative_terms": {"type": "array", "items": {"type": "string"}},
+            "target_status_candidate": string_candidate_schema,
+            "author_name_candidate": string_candidate_schema,
+            "words_min_candidate": number_candidate_schema,
+            "words_max_candidate": number_candidate_schema,
+        },
+        "required": [
+            "semantic_query_text", "intent_summary", "positive_concepts", "negative_concepts",
+            "positive_terms", "negative_terms", "fuzzy_positive_terms", "fuzzy_negative_terms",
+            "target_status_candidate", "author_name_candidate", "words_min_candidate", "words_max_candidate"
+        ],
+    }
+
+    instruction = f"""
+{shared_context}
+
+You are a web novel query parser. Your task is to analyze the user query and extract semantic intent, tags, and structured constraints in a single JSON response.
+
+1. SEMANTIC UNDERSTANDING:
+   - `semantic_query_text`: A compact retrieval query (8-16 words).
+   - `intent_summary`: A short sentence (under 35 Chinese chars).
+   - `positive_concepts`/`negative_concepts`: High-confidence retrieval anchors (max 6/8 items).
+
+2. TAG PROJECTION:
+   - `positive_terms`/`negative_terms`: EXACT tag names from AVAILABLE TAGS.
+   - `fuzzy_positive_terms`/`fuzzy_negative_terms`: Free-form strings for concepts not in whitelist.
+
+3. STRUCTURED CONSTRAINTS:
+   - Identify hard constraints: target_status, author_name, words_min, words_max.
+   - For each, provide value, verbatim evidence from query, and is_explicit (true only if directly stated).
+   - If absent, use standard empty candidates.
+
+Return strict JSON only.
+""".strip()
+
+    raw_result, call_metadata = _generate_json_task(
+        user_query=user_query,
+        task_label="joint",
+        system_instruction=instruction,
+        response_schema=joint_schema,
+        model_id=model_id,
+        sampling_temperature=sampling_temperature,
+        enforce_rate_limit=False,
+    )
+
+    semantic_understanding = _normalize_semantic_understanding(raw_result, user_query)
+    tag_projection = _normalize_tag_projection(raw_result)
+    tag_intent = _build_tag_intent_from_projection(
+        user_query=user_query,
+        semantic_understanding=semantic_understanding,
+        tag_projection=tag_projection,
+    )
+    structured_candidates = _normalize_structured_draft(raw_result)
+    structured_slots = _apply_structured_draft_guards(
+        user_query,
+        _structured_candidates_to_slots(structured_candidates),
+        structured_candidates,
+    )
+    structured_slots = _merge_structured_slots(structured_slots)
+
+    total_latency_ms = (time.perf_counter() - started_at) * 1000
+    branch_metrics = {"joint": call_metadata}
+
+    return _merge_query_parse_results(
+        user_query=user_query,
+        tag_intent=tag_intent,
+        structured_slots=structured_slots,
+        total_latency_ms=total_latency_ms,
+        branch_metrics=branch_metrics,
+    )
+
+
 def _parse_query_parallel_ctx_v2(
     user_query: str,
     model_id: Optional[str] = None,
     tag_list: Optional[Tuple[str, ...]] = None,
     reference_book_context: Optional[str] = None,
     sampling_temperature: float = 0.2,
+    use_context: bool = True,
 ) -> QueryParseResult:
     shared_context = _build_parallel_context(
         tag_list=tag_list,
@@ -1478,12 +1626,15 @@ Rules:
     except ParserBranchError as exc:
         raise _attach_parser_metadata(exc)
 
-    tag_projection_context = _build_tag_projection_compact_context(semantic_understanding)
-    tag_projection_label = "Compact Semantic Understanding"
-    tag_projection_contents = (
-        f"Original Query:\n{user_query}\n\n"
-        f"{tag_projection_label}:\n{tag_projection_context}"
-    )
+    if use_context:
+        tag_projection_context = _build_tag_projection_compact_context(semantic_understanding)
+        tag_projection_label = "Compact Semantic Understanding"
+        tag_projection_contents = (
+            f"Original Query:\n{user_query}\n\n"
+            f"{tag_projection_label}:\n{tag_projection_context}"
+        )
+    else:
+        tag_projection_contents = f"Original Query:\n{user_query}"
     try:
         tag_projection, branch_metadata = _run_schema_task(
             "tag_projection",
@@ -1501,14 +1652,17 @@ Rules:
         semantic_understanding=semantic_understanding,
         tag_projection=tag_projection,
     )
-    structured_context = _build_structured_context_from_semantic_understanding(
-        semantic_understanding,
-        tag_projection=tag_projection,
-    )
-    structured_contents = (
-        f"Original Query:\n{user_query}\n\n"
-        f"{structured_context}"
-    )
+    if use_context:
+        structured_context = _build_structured_context_from_semantic_understanding(
+            semantic_understanding,
+            tag_projection=tag_projection,
+        )
+        structured_contents = (
+            f"Original Query:\n{user_query}\n\n"
+            f"{structured_context}"
+        )
+    else:
+        structured_contents = f"Original Query:\n{user_query}"
     try:
         structured_candidates, branch_metadata = _run_schema_task(
             "structured",
@@ -1550,15 +1704,35 @@ def parse_query(
     tag_list: Optional[Tuple[str, ...]] = None,
     reference_book_context: Optional[str] = None,
     sampling_temperature: float = 0.2,
+    parser_variant: Optional[str] = None,
 ) -> QueryParseResult:
     _ = cache_namespace
-    return _parse_query_parallel_ctx_v2(
-        user_query,
-        model_id=model_id,
-        tag_list=tag_list,
-        reference_book_context=reference_book_context,
-        sampling_temperature=sampling_temperature,
-    )
+    variant = parser_variant or DEFAULT_PARSER_VARIANT
+
+    if variant == PARSER_VARIANT_JOINT:
+        return _parse_query_joint_v2(
+            user_query,
+            model_id=model_id,
+            tag_list=tag_list,
+            reference_book_context=reference_book_context,
+            sampling_temperature=sampling_temperature,
+        )
+    elif variant == PARSER_VARIANT_PARALLEL:
+        return _parse_query_parallel_v2(
+            user_query,
+            model_id=model_id,
+            tag_list=tag_list,
+            reference_book_context=reference_book_context,
+            sampling_temperature=sampling_temperature,
+        )
+    else:
+        return _parse_query_parallel_ctx_v2(
+            user_query,
+            model_id=model_id,
+            tag_list=tag_list,
+            reference_book_context=reference_book_context,
+            sampling_temperature=sampling_temperature,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════

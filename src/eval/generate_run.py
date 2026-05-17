@@ -31,10 +31,12 @@ class RunGenerator:
         k_per_engine: int = 10,
         model_id: Optional[str] = None,
         rerank: Optional[bool] = None,
+        parser_variant: Optional[str] = None,
     ) -> None:
         self.k = k_per_engine
         self.model_id = model_id
         self.rerank = rerank
+        self.parser_variant = parser_variant
         self.db = Database()
 
     async def _search_once(
@@ -143,7 +145,7 @@ class RunGenerator:
                 "query_id": q_id,
                 "query": query,
                 "model_id": normalize_model_id(self.model_id),
-                "parser_variant": DEFAULT_PARSER_VARIANT,
+                "parser_variant": self.parser_variant or DEFAULT_PARSER_VARIANT,
                 "execution_metadata": execution_metadata,
                 "parse_metadata": parse_metadata,
                 "parsed_criteria": parsed_criteria,
@@ -157,7 +159,7 @@ class RunGenerator:
                 "query_id": q_id,
                 "query": query,
                 "model_id": normalize_model_id(self.model_id),
-                "parser_variant": DEFAULT_PARSER_VARIANT,
+                "parser_variant": self.parser_variant or DEFAULT_PARSER_VARIANT,
                 "execution_metadata": getattr(query_err, "query_execution_metadata", {}),
                 "parsed_criteria": [],
                 "parse_metadata": getattr(query_err, "parser_metadata", {}),
@@ -196,7 +198,7 @@ class RunGenerator:
             f"engine=HybridEngine, "
             "fixed retrieval path, "
             f"model={normalize_model_id(self.model_id)}, "
-            f"parser_variant={DEFAULT_PARSER_VARIANT}, "
+            f"parser_variant={self.parser_variant or DEFAULT_PARSER_VARIANT}, "
             f"run_suffix={run_suffix or 'none'})"
         )
 
@@ -218,6 +220,7 @@ class RunGenerator:
             routing_weighted_bm25=routing_weighted_bm25,
             routing_rrf_bm25=routing_rrf_bm25,
             rerank=self.rerank,
+            parser_variant=self.parser_variant,
         )
 
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -288,13 +291,6 @@ if __name__ == "__main__":
         help="Disable BM25 retrieval in HybridEngine",
     )
     parser.add_argument(
-        "--bm25-mode",
-        type=str,
-        choices=["compare", "on", "off"],
-        default="compare",
-        help="Run both BM25 OFF/ON in one batch, or force a single variant",
-    )
-    parser.add_argument(
         "--bm25-weight",
         type=float,
         default=0.3,
@@ -306,6 +302,13 @@ if __name__ == "__main__":
         default="data/experiments/queries.json",
         help="Path to queries JSON file",
     )
+    parser.add_argument(
+        "--parser-variant",
+        type=str,
+        choices=["joint", "parallel", "parallel_ctx"],
+        default=None,
+        help="LLM parser workflow variant",
+    )
     args = parser.parse_args()
 
     queries_path = Path(args.queries)
@@ -316,31 +319,27 @@ if __name__ == "__main__":
     with open(queries_path, "r", encoding="utf-8") as f:
         sample_queries = json.load(f)
 
-    # Allow experiments to run BM25 ON/OFF in a single batch.
-    if args.bm25_mode == "compare":
-        experiments = [
-            {
-                "name": "gemma4_default_parser_bm25_off",
-                "model_id": "gemma-4-31b-it",
-                "enable_bm25": False,
-            },
-            {
-                "name": "gemma4_default_parser_bm25_on",
-                "model_id": "gemma-4-31b-it",
-                "enable_bm25": True,
-                "bm25_weight": 0.1,
-            },
-        ]
-    else:
-        enable_bm25 = args.bm25_mode == "on"
-        experiments = [
-            {
-                "name": f"gemma4_default_parser_bm25_{args.bm25_mode}",
-                "model_id": "gemma-4-31b-it",
-                "enable_bm25": enable_bm25,
-                "bm25_weight": 0.1 if enable_bm25 else args.bm25_weight,
-            }
-        ]
+    # Standard experiment set for parser variant comparison (all with BM25 ON)
+    experiments = [
+        {
+            "name": "gemma4_joint_parser",
+            "model_id": "gemma-4-31b-it",
+            "enable_bm25": True,
+            "parser_variant": "joint",
+        },
+        {
+            "name": "gemma4_parallel_parser",
+            "model_id": "gemma-4-31b-it",
+            "enable_bm25": True,
+            "parser_variant": "parallel",
+        },
+        {
+            "name": "gemma4_parallel_ctx_parser",
+            "model_id": "gemma-4-31b-it",
+            "enable_bm25": True,
+            "parser_variant": "parallel_ctx",
+        },
+    ]
 
     repeats = max(1, args.repeats)
     output_root = Path(args.experiment_dir)
@@ -359,6 +358,7 @@ if __name__ == "__main__":
                 k_per_engine=10,
                 model_id=model_id,
                 rerank=exp.get("rerank", None),
+                parser_variant=exp.get("parser_variant", args.parser_variant),
             )
             enable_bm25 = exp.get("enable_bm25", not args.disable_bm25)
             bm25_weight = exp.get("bm25_weight", args.bm25_weight)
