@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 
 try:
     from dotenv import load_dotenv
@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     RERANK_MODEL_ID: str = "gemma-4-31b-it"
     RERANK_CANDIDATE_LIMIT: int = 100
     RERANK_PERMUTATIONS: int = 5
+    RERANK_MAX_ATTEMPTS_PER_PERM: int = 5
+    RERANK_SHUFFLE_SEED: Optional[int] = 42
 
     # DAT (Dynamic Alpha Tuning) + 3+1 Layer Scoring Pipeline
     ENABLE_DAT: bool = False                # Feature flag — DAT 預設關閉

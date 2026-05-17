@@ -13,6 +13,7 @@ from src.core.api_utils import _is_retryable
 from src.core.llm import DEFAULT_PARSER_VARIANT
 from src.core.model_catalog import normalize_model_id
 from src.core.vector_store import VectorStore
+from src.config import settings
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -31,10 +32,12 @@ class RunGenerator:
         k_per_engine: int = 10,
         model_id: Optional[str] = None,
         rerank: Optional[bool] = None,
+        cache_namespace: Optional[str] = None,
     ) -> None:
         self.k = k_per_engine
         self.model_id = model_id
         self.rerank = rerank
+        self.cache_namespace = cache_namespace
         self.db = Database()
 
     async def _search_once(
@@ -107,12 +110,13 @@ class RunGenerator:
 
         print(f"   - Processing query: {query[:30]}...")
 
+        cache_namespace = self.cache_namespace or run_suffix or engine_name
         try:
             response, execution_metadata = self._search_with_retry(
                 engine,
                 query,
                 q_id,
-                cache_namespace=run_suffix or engine_name,
+                cache_namespace=cache_namespace,
             )
             results = response.get("results", [])
             parsed_criteria = response.get("parsed_criteria", [])
@@ -185,7 +189,13 @@ class RunGenerator:
         routing_weighted_wa: float = 0.65,
         routing_weighted_bm25: bool = True,
         routing_rrf_bm25: bool = False,
+        rerank_candidate_limit: Optional[int] = None,
+        rerank_shuffle_seed: Optional[int] = None,
     ) -> None:
+        if rerank_candidate_limit is not None:
+            settings.RERANK_CANDIDATE_LIMIT = int(rerank_candidate_limit)
+        if rerank_shuffle_seed is not None:
+            settings.RERANK_SHUFFLE_SEED = int(rerank_shuffle_seed)
         fusion_label = fusion_strategy or "weighted"
         print(
             f"\n[Batch] Starting Experiment: {engine_name} "
@@ -193,6 +203,9 @@ class RunGenerator:
             f"BM25 Enabled: {enable_bm25}, BM25 Weight: {bm25_weight} (recall-only), "
             f"BM25 Bonus Max: {bm25_bonus_max}, "
             f"rrf_k={rrf_k}, "
+            f"rerank_candidates={settings.RERANK_CANDIDATE_LIMIT}, "
+            f"rerank_permutations={settings.RERANK_PERMUTATIONS}, "
+            f"rerank_shuffle_seed={getattr(settings, 'RERANK_SHUFFLE_SEED', None)}, "
             f"engine=HybridEngine, "
             "fixed retrieval path, "
             f"model={normalize_model_id(self.model_id)}, "
@@ -244,7 +257,7 @@ class RunGenerator:
         try:
             pending_queries = [q for q in queries_config if q["id"] not in processed_query_ids]
             
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 futures = {
                     executor.submit(self._process_single_query, q_conf, engine, engine_name, run_suffix): q_conf
                     for q_conf in pending_queries
@@ -252,9 +265,8 @@ class RunGenerator:
                 
                 for future in concurrent.futures.as_completed(futures):
                     run_data.append(future.result())
-
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(run_data, f, ensure_ascii=False, indent=2)
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        json.dump(run_data, f, ensure_ascii=False, indent=2)
 
             print(f"[{engine_name}] Run complete! Saved to {output_path}")
         finally:
@@ -301,6 +313,24 @@ if __name__ == "__main__":
         help="Legacy BM25 recall setting retained for compatibility",
     )
     parser.add_argument(
+        "--rerank-candidate-limits",
+        type=str,
+        default="",
+        help="Comma-separated rerank candidate limits (e.g. 30,50,200)",
+    )
+    parser.add_argument(
+        "--cache-namespace",
+        type=str,
+        default="",
+        help="Optional cache namespace shared across runs",
+    )
+    parser.add_argument(
+        "--rerank-shuffle-seed",
+        type=int,
+        default=None,
+        help="Seed for deterministic reranker shuffles",
+    )
+    parser.add_argument(
         "--queries",
         type=str,
         default="data/experiments/queries.json",
@@ -318,7 +348,7 @@ if __name__ == "__main__":
 
     # Allow experiments to run BM25 ON/OFF in a single batch.
     if args.bm25_mode == "compare":
-        experiments = [
+        base_experiments = [
             {
                 "name": "gemma4_default_parser_bm25_off",
                 "model_id": "gemma-4-31b-it",
@@ -333,7 +363,7 @@ if __name__ == "__main__":
         ]
     else:
         enable_bm25 = args.bm25_mode == "on"
-        experiments = [
+        base_experiments = [
             {
                 "name": f"gemma4_default_parser_bm25_{args.bm25_mode}",
                 "model_id": "gemma-4-31b-it",
@@ -341,6 +371,24 @@ if __name__ == "__main__":
                 "bm25_weight": 0.1 if enable_bm25 else args.bm25_weight,
             }
         ]
+
+    if args.rerank_shuffle_seed is not None:
+        settings.RERANK_SHUFFLE_SEED = args.rerank_shuffle_seed
+    settings.RERANK_MODEL_ID = "gemma-4-31b-it"
+
+    raw_limits = [s.strip() for s in args.rerank_candidate_limits.split(",") if s.strip()]
+    candidate_limits = [int(value) for value in raw_limits] if raw_limits else [settings.RERANK_CANDIDATE_LIMIT]
+    experiments = []
+    for exp in base_experiments:
+        for cl in candidate_limits:
+            exp_name = exp["name"]
+            if len(candidate_limits) > 1:
+                exp_name = f"{exp_name}_cl{cl}"
+            experiments.append({
+                **exp,
+                "name": exp_name,
+                "rerank_candidate_limit": cl,
+            })
 
     repeats = max(1, args.repeats)
     output_root = Path(args.experiment_dir)
@@ -359,6 +407,7 @@ if __name__ == "__main__":
                 k_per_engine=10,
                 model_id=model_id,
                 rerank=exp.get("rerank", None),
+                cache_namespace=args.cache_namespace or None,
             )
             enable_bm25 = exp.get("enable_bm25", not args.disable_bm25)
             bm25_weight = exp.get("bm25_weight", args.bm25_weight)
@@ -372,6 +421,8 @@ if __name__ == "__main__":
                     run_suffix=run_suffix,
                     enable_bm25=enable_bm25,
                     bm25_weight=bm25_weight,
+                    rerank_candidate_limit=exp.get("rerank_candidate_limit"),
+                    rerank_shuffle_seed=settings.RERANK_SHUFFLE_SEED,
                 )
             except Exception as exc:
                 print(

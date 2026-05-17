@@ -14,6 +14,7 @@ import asyncio
 import json
 import random
 import time
+import zlib
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
@@ -48,10 +49,14 @@ class PermSCReranker:
         model_id: str = "gemma-4-31b-it",
         n_permutations: int = 5,
         kemeny_time_budget_seconds: float = 10.0,
+        shuffle_seed: Optional[int] = None,
+        max_attempts_per_permutation: int = 5,
     ) -> None:
         self.model_id = model_id
         self.n_permutations = n_permutations
         self.kemeny_time_budget_seconds = max(0.1, float(kemeny_time_budget_seconds))
+        self.shuffle_seed = shuffle_seed
+        self.max_attempts_per_permutation = max(1, int(max_attempts_per_permutation))
         self.rotator = get_api_key_rotator()
         self.rate_limiter = get_rate_limiter()
 
@@ -97,7 +102,7 @@ Format:
 Do not output anything else.
 """
         attempt = 0
-        max_attempts = 5
+        max_attempts = self.max_attempts_per_permutation
         key_pool = list(self.rotator.api_keys or [])
         if not key_pool:
             key_pool = [api_key]
@@ -129,20 +134,25 @@ Do not output anything else.
                 ranked_ids = parsed.get("ranked_ids", [])
                 if not isinstance(ranked_ids, list):
                     raise ValueError("Invalid ranked_ids payload")
-                if len(ranked_ids) != candidate_count:
-                    raise ValueError("Ranking length mismatch")
 
                 seen = set()
                 ranked_book_ids = []
                 for idx in ranked_ids:
                     if not isinstance(idx, int):
-                        raise ValueError("Ranking index must be int")
+                        continue
                     if idx < 0 or idx >= candidate_count:
-                        raise ValueError("Ranking index out of range")
+                        continue
                     if idx in seen:
-                        raise ValueError("Ranking contains duplicates")
+                        continue
                     seen.add(idx)
                     ranked_book_ids.append(candidates[idx]["book_id"])
+
+                # Salvage missing items (due to LLM truncation/skipping)
+                if len(ranked_book_ids) < candidate_count:
+                    for i, c in enumerate(candidates):
+                        if i not in seen:
+                            ranked_book_ids.append(c["book_id"])
+                            seen.add(i)
 
                 return ranked_book_ids
 
@@ -154,16 +164,20 @@ Do not output anything else.
                     continue
                 if not _is_retryable(exc):
                     print(f"  [Reranker] Non-retryable error: {exc}")
+
+                if attempt >= max_attempts:
                     break
 
-                error_text = str(exc)
-                # Rotate key on any retryable error (like 500 INTERNAL) to try another key/project context
+                # Rotate key on any error to try another key/project context.
                 if len(key_pool) > 1:
                     key_index = (key_index + 1) % len(key_pool)
                 else:
                     self._rotate_api_key()
                 await asyncio.sleep(2.0)
 
+        print(
+            f"  [Reranker] Exhausted {max_attempts} attempts for one permutation; skipping."
+        )
         return []
 
     def _collect_ranked_ids(self, rankings: List[List[str]]) -> List[str]:
@@ -260,15 +274,22 @@ Do not output anything else.
             return candidates
 
         tasks = []
+        query_seed = None
+        if self.shuffle_seed is not None:
+            query_seed = zlib.adler32(query.encode("utf-8"))
         for i in range(self.n_permutations):
             shuffled = list(candidates)
-            random.shuffle(shuffled)
+            if self.shuffle_seed is None:
+                random.shuffle(shuffled)
+            else:
+                seed = int(self.shuffle_seed) + int(query_seed or 0) + i
+                rng = random.Random(seed)
+                rng.shuffle(shuffled)
             api_key = self._pick_api_key(i)
             tasks.append(self._get_single_ranking(query, shuffled, api_key))
 
         rankings = await asyncio.gather(*tasks)
-        expected_len = len(candidates)
-        rankings = [ranking for ranking in rankings if len(ranking) == expected_len]
+        rankings = [ranking for ranking in rankings if len(ranking) > 0]
         if not rankings:
             return candidates
 

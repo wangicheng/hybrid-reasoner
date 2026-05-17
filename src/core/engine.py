@@ -1094,6 +1094,8 @@ class HybridEngine:
             self._reranker = PermSCReranker(
                 model_id=settings.RERANK_MODEL_ID,
                 n_permutations=settings.RERANK_PERMUTATIONS,
+                shuffle_seed=getattr(settings, "RERANK_SHUFFLE_SEED", None),
+                max_attempts_per_permutation=getattr(settings, "RERANK_MAX_ATTEMPTS_PER_PERM", 5),
             )
         return self._reranker
 
