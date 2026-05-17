@@ -41,6 +41,17 @@ function App() {
   const [pendingResults, setPendingResults] = useState([]);
   const [engineData, setEngineData] = useState(null);
   const eventSourceRef = useRef(null);
+  const targetStepRef = useRef(0);
+  const pendingResultsRef = useRef([]);
+
+  // Sync state with refs for the interval loop
+  useEffect(() => {
+    targetStepRef.current = targetStep;
+  }, [targetStep]);
+
+  useEffect(() => {
+    pendingResultsRef.current = pendingResults;
+  }, [pendingResults]);
 
   // Clean up streaming connection when component unmounts
   useEffect(() => {
@@ -53,20 +64,24 @@ function App() {
 
   // Progressive smooth transition logic for pipeline steps
   useEffect(() => {
-    if (pipelineStep < targetStep) {
-      const timer = setTimeout(() => {
-        setPipelineStep(prev => {
+    if (searchState === 'idle') return;
+
+    const interval = setInterval(() => {
+      setPipelineStep(prev => {
+        if (prev < targetStepRef.current) {
           const next = prev + 1;
-          if (next === 7 && pendingResults.length > 0) {
-            setResults(pendingResults);
+          if (next === 7 && pendingResultsRef.current.length > 0) {
+            setResults(pendingResultsRef.current);
             setSearchState('results');
           }
           return next;
-        });
-      }, 600);
-      return () => clearTimeout(timer);
-    }
-  }, [pipelineStep, targetStep, pendingResults]);
+        }
+        return prev;
+      });
+    }, 600);
+
+    return () => clearInterval(interval);
+  }, [searchState]);
 
   const handleSearch = (val) => {
     if (!val) return;
@@ -79,6 +94,8 @@ function App() {
     setSearchState('fetching');
     setResults([]);
     setPendingResults([]);
+    targetStepRef.current = 2;
+    pendingResultsRef.current = [];
     setEngineData({ query: val });
     setPipelineStep(1);
     setTargetStep(2); // Start parsing phase transition immediately
@@ -87,6 +104,28 @@ function App() {
     const url = `http://127.0.0.1:8000/api/search/stream?query=${encodeURIComponent(val)}&model_id=gemma-4-31b-it`;
     const eventSource = new EventSource(url);
     eventSourceRef.current = eventSource;
+
+    eventSource.addEventListener('semantic_understanding', (e) => {
+      const data = JSON.parse(e.data);
+      setEngineData(prev => ({
+        ...prev,
+        search_terms: data.semantic_query_text,
+        intent_summary: data.intent_summary,
+        parsed_criteria: [
+          ...(data.positive_concepts || []).map(concept => ({
+            name: "semantic_similarity",
+            is_negative: false,
+            parameters: { query_text: concept }
+          })),
+          ...(data.negative_concepts || []).map(concept => ({
+            name: "semantic_similarity",
+            is_negative: true,
+            parameters: { query_text: concept }
+          }))
+        ]
+      }));
+      setTargetStep(3); // Progress to step 3 (Structure & Tag branch)
+    });
 
     eventSource.addEventListener('planner', (e) => {
       const data = JSON.parse(e.data);
@@ -120,6 +159,7 @@ function App() {
         ...prev,
         results: data.results || prev?.results || []
       }));
+      setTargetStep(6); // Enter reranker phase (LLM Rerank)
     });
 
     eventSource.addEventListener('rerank', (e) => {
@@ -152,7 +192,10 @@ function App() {
       });
 
       setPendingResults(realResults);
+      setResults(realResults);
+      setPipelineStep(7);
       setTargetStep(7); // Trigger final step 7 (Holographic Results presentation)
+      setSearchState('results');
     });
 
     eventSource.onerror = (err) => {

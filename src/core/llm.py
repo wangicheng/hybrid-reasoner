@@ -39,6 +39,23 @@ LLM_RETRY_DELAY_SECONDS = 10.0
 DEBUG_LLM_OUTPUT = True
 _T = TypeVar("_T")
 
+# Active progress callbacks registry to support real-time pipeline events
+# while bypassing functools.lru_cache signature limitations.
+_active_callbacks: Dict[str, Callable[[str, Any], None]] = {}
+_callbacks_lock = threading.Lock()
+
+def register_parser_callback(query: str, callback: Callable[[str, Any], None]) -> None:
+    with _callbacks_lock:
+        _active_callbacks[query] = callback
+
+def unregister_parser_callback(query: str) -> None:
+    with _callbacks_lock:
+        _active_callbacks.pop(query, None)
+
+def get_parser_callback(query: str) -> Optional[Callable[[str, Any], None]]:
+    with _callbacks_lock:
+        return _active_callbacks.get(query)
+
 
 class ParserBranchError(RuntimeError):
     def __init__(
@@ -1475,6 +1492,19 @@ Rules:
             use_marked_sections=True,
         )
         branch_metrics["semantic_understanding"] = branch_metadata
+        
+        # Notify progress callback for real-time pipeline visualization in UI
+        callback = get_parser_callback(user_query)
+        if callback:
+            try:
+                callback("semantic_understanding", {
+                    "semantic_query_text": semantic_understanding.get("semantic_query_text"),
+                    "intent_summary": semantic_understanding.get("intent_summary"),
+                    "positive_concepts": semantic_understanding.get("positive_concepts") or [],
+                    "negative_concepts": semantic_understanding.get("negative_concepts") or []
+                })
+            except Exception as cb_exc:
+                print(f"[Parser] semantic_understanding progress callback failed: {cb_exc}")
     except ParserBranchError as exc:
         raise _attach_parser_metadata(exc)
 

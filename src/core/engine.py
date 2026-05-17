@@ -1448,7 +1448,29 @@ class HybridEngine:
 
         related_books = self.book_matcher.extract_related_books(user_query)
         related_book_context = self.book_matcher.build_related_book_context(related_books)
-        parse_result = parse_query(user_query, model_id=model_id, cache_namespace=cache_namespace, tag_list=self.all_tags_cache, reference_book_context=related_book_context)
+        
+        # Define a thread-safe sync wrapper for progress_callback to emit events to the main event loop
+        loop = asyncio.get_running_loop()
+        def sync_progress_callback(step: str, data: Any):
+            if progress_callback:
+                asyncio.run_coroutine_threadsafe(
+                    progress_callback(step, data),
+                    loop
+                )
+
+        from src.core.llm import register_parser_callback, unregister_parser_callback
+        register_parser_callback(user_query, sync_progress_callback)
+        try:
+            parse_result = await asyncio.to_thread(
+                parse_query,
+                user_query,
+                model_id=model_id,
+                cache_namespace=cache_namespace,
+                tag_list=self.all_tags_cache,
+                reference_book_context=related_book_context
+            )
+        finally:
+            unregister_parser_callback(user_query)
 
         # ── Step 2.5: Query Compiler ──
         exact_neg_terms = self._dedupe_terms(list(parse_result.tag_intent.negative_terms)) if hasattr(parse_result, "tag_intent") else []
@@ -1581,6 +1603,7 @@ class HybridEngine:
             recall_tags_override=recall_tags_override,
         )
         if progress_callback:
+            await asyncio.sleep(0.8)  # Cinematic pacing: allow UI to render previous stage smoothly
             await progress_callback("retrieval", {
                 "candidate_count": len(scored_items),
                 "recall_tags": recall_tags if 'recall_tags' in locals() else []
@@ -1716,6 +1739,7 @@ class HybridEngine:
             )
 
         if progress_callback:
+            await asyncio.sleep(0.8)  # Cinematic pacing: allow UI to render Rule Filter & Scoring Fusion stage smoothly
             await progress_callback("post_filter", {
                 "filtered_count": len(scored_items)
             })

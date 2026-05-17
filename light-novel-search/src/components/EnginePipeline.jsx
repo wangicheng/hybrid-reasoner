@@ -17,13 +17,13 @@ export function EnginePipeline({ currentStep, engineData, results }) {
 
   // Auto-select the current active step as it progresses
   useEffect(() => {
-    if (currentStep > 0 && currentStep <= 7) {
+    if (!isCollapsed && currentStep > 0 && currentStep <= 7) {
       setSelectedStep(currentStep);
       if (currentStep === 2) {
         setSelectedBranch("semantic");
       }
     }
-  }, [currentStep]);
+  }, [currentStep, isCollapsed]);
 
   // Responsive Scaling logic using ResizeObserver
   useEffect(() => {
