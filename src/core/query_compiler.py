@@ -151,7 +151,13 @@ def compile_query(
 
     # ── 2. Extract soft factors ──
     positive_tags = list(parse_result.tag_intent.positive_terms) if hasattr(parse_result, "tag_intent") else []
-    tag_keywords = positive_tags or list(parse_result.generated_keywords)
+    fuzzy_positive_tags = list(parse_result.tag_intent.fuzzy_positive_terms) if hasattr(parse_result, "tag_intent") else []
+
+    # We store the combined exact + fuzzy terms in tag_terms_list
+    tag_keywords = positive_tags + fuzzy_positive_tags
+    if not tag_keywords:
+        tag_keywords = list(parse_result.generated_keywords)
+
     tag_terms_list = _dedupe_terms(tag_keywords)
 
     soft_factors = SoftFactors(
