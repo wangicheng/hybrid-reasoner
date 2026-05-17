@@ -1766,8 +1766,31 @@ class HybridEngine:
                 ]
             })
 
-        final_results = scored_items[:limit]
+        # Return all scored items so that the front-end can display the rest behind the top 10
+        final_results = scored_items
         for result in final_results:
             result["explanation"] = None
 
-        return {"query": user_query, "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria], "search_terms": parse_result.search_terms, "generated_keywords": parse_result.generated_keywords, "tag_intent": {"positive_terms": list(parse_result.tag_intent.positive_terms), "negative_terms": combined_negative_terms}, "tag_mapping": tag_mapping_info, "hypothetical_intro": parse_result.hypothetical_intro, "related_books": related_books, "reference_tags": recall_tags, "parse_metadata": parse_result.parse_metadata, "query_vector": query_vector, "results": final_results, "engine": "HybridEngine", "degradation_level": degradation_level, "system_message": system_message, "dat_info": dat_info}
+        return {
+            "query": user_query,
+            "parsed_criteria": [self._criteria_to_dict(c) for c in parse_result.criteria],
+            "search_terms": parse_result.search_terms,
+            "generated_keywords": parse_result.generated_keywords,
+            "tag_intent": {
+                "positive_terms": list(parse_result.tag_intent.positive_terms),
+                "negative_terms": combined_negative_terms,
+                "fuzzy_positive_terms": list(parse_result.tag_intent.fuzzy_positive_terms) if hasattr(parse_result.tag_intent, "fuzzy_positive_terms") else [],
+                "fuzzy_negative_terms": list(parse_result.tag_intent.fuzzy_negative_terms) if hasattr(parse_result.tag_intent, "fuzzy_negative_terms") else [],
+            },
+            "tag_mapping": tag_mapping_info,
+            "hypothetical_intro": parse_result.hypothetical_intro,
+            "related_books": related_books,
+            "reference_tags": recall_tags,
+            "parse_metadata": parse_result.parse_metadata,
+            "query_vector": query_vector,
+            "results": final_results,
+            "engine": "HybridEngine",
+            "degradation_level": degradation_level,
+            "system_message": system_message,
+            "dat_info": dat_info
+        }
