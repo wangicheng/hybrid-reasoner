@@ -28,7 +28,7 @@ export function VanishInput({
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    
+
     // Scale for high DPI
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -41,7 +41,7 @@ export function VanishInput({
     ctx.font = `${inputStyle.fontWeight} ${inputStyle.fontSize} ${inputStyle.fontFamily}`;
     ctx.fillStyle = inputStyle.color;
     ctx.textBaseline = "middle";
-    
+
     // Get padding to match text position
     const paddingLeft = parseFloat(inputStyle.paddingLeft);
     ctx.fillText(text, paddingLeft, rect.height / 2);
@@ -59,7 +59,7 @@ export function VanishInput({
       for (let x = 0; x < width; x += 2) {
         const i = (y * width + x) * 4;
         const alpha = data[i + 3];
-        
+
         if (alpha > 128) { // If pixel is mostly opaque
           particles.push({
             x: x / dpr,
@@ -69,7 +69,7 @@ export function VanishInput({
             size: Math.random() * 2 + 1,
             life: 1,
             decay: Math.random() * 0.02 + 0.02,
-            color: `rgba(${data[i]}, ${data[i+1]}, ${data[i+2]}, 1)`
+            color: `rgba(${data[i]}, ${data[i + 1]}, ${data[i + 2]}, 1)`
           });
         }
       }
@@ -85,7 +85,7 @@ export function VanishInput({
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
-    
+
     // Get text pixels
     const imageData = drawTextOnCanvas(value);
     if (!imageData) {
@@ -94,14 +94,11 @@ export function VanishInput({
     }
 
     let particles = createParticles(imageData, rect);
-    
-    // Hide actual text
-    setValue("");
 
     // Animate particles
     const animate = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
+
       let alive = false;
       particles.forEach(p => {
         if (p.life > 0) {
@@ -109,7 +106,7 @@ export function VanishInput({
           p.x += p.vx;
           p.y += p.vy;
           p.life -= p.decay;
-          
+
           ctx.globalAlpha = Math.max(0, p.life);
           ctx.fillStyle = "#00f0ff"; // Glow color override or use p.color
           ctx.beginPath();
@@ -131,20 +128,12 @@ export function VanishInput({
 
   const finishSubmit = (e) => {
     setIsVanishing(false);
-    if (onSubmit) onSubmit(value); // Note: we cleared value, but we need the original.
+    if (onSubmit) onSubmit(value);
   };
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
-      // Need to capture the value before it gets cleared
-      const valToSubmit = value;
       triggerVanish(e);
-      
-      // We'll call onSubmit with a small delay or after animation in a real robust version.
-      // For now, let's call it after a short timeout so the animation can play out visually.
-      setTimeout(() => {
-        if (onSubmit) onSubmit(valToSubmit);
-      }, 800); 
     }
   };
 
@@ -170,7 +159,7 @@ export function VanishInput({
           isVanishing && "text-transparent"
         )}
       />
-      
+
       {!value && !isVanishing && (
         <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
           <span className="text-zinc-500 text-lg font-medium animate-pulse">

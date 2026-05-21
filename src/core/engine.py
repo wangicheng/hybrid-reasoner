@@ -1591,16 +1591,22 @@ class HybridEngine:
         # ════════════════════════════════════════════════════════════════
         # ── FAST PATH: Tri-track recall (Vector 500 + BM25 500 + TagVec 300) ──
         # ════════════════════════════════════════════════════════════════
+        # Yield control to the event loop so queued SSE events (e.g. planner)
+        # are flushed to the client before we block on the heavy retrieval pipeline.
+        if progress_callback:
+            await asyncio.sleep(0)
+
         print(f"[FastPath] Tri-track recall (Vec={self.FAST_PATH_RETRIEVAL_LIMIT}, BM25={self.FAST_PATH_RETRIEVAL_LIMIT}, TagVec={self.TAG_VECTOR_RETRIEVAL_LIMIT}, filter={'ON' if metadata_filter else 'OFF'})...")
-        scored_items, query_vector, recall_tags = self._run_retrieval_pipeline(
+        scored_items, query_vector, recall_tags = await asyncio.to_thread(
+            self._run_retrieval_pipeline,
             expanded_terms, metadata_filter, hard_constraint_dict,
             tag_terms_list, tag_mapping_weights,
             active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
-            active_alpha=active_alpha,
-            vector_limit=self.FAST_PATH_RETRIEVAL_LIMIT, bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT,
-            tag_vector_limit=self.TAG_VECTOR_RETRIEVAL_LIMIT, positive_tags=positive_tags,
-            active_beta=active_beta,
-            recall_tags_override=recall_tags_override,
+            active_alpha,
+            self.FAST_PATH_RETRIEVAL_LIMIT, self.FAST_PATH_RETRIEVAL_LIMIT,
+            self.TAG_VECTOR_RETRIEVAL_LIMIT, positive_tags,
+            active_beta,
+            recall_tags_override,
         )
         if progress_callback:
             await asyncio.sleep(0.8)  # Cinematic pacing: allow UI to render previous stage smoothly
@@ -1640,17 +1646,18 @@ class HybridEngine:
             }
             relaxed_filter = VectorStore.build_metadata_filter(relaxed_constraints)
 
-            l2_scored, _, l2_recall = self._run_retrieval_pipeline(
+            l2_scored, _, l2_recall = await asyncio.to_thread(
+                self._run_retrieval_pipeline,
                 expanded_terms, relaxed_filter, relaxed_constraints,
                 tag_terms_list, tag_mapping_weights,
                 active_bm25, active_fusion, active_ws, active_wa, active_rrf_k,
-                active_alpha=active_alpha,
-                vector_limit=self.FAST_PATH_RETRIEVAL_LIMIT,
-                bm25_limit=self.FAST_PATH_RETRIEVAL_LIMIT,
-                tag_vector_limit=self.TAG_VECTOR_RETRIEVAL_LIMIT,
-                positive_tags=positive_tags,
-                active_beta=active_beta,
-                recall_tags_override=recall_tags_override,
+                active_alpha,
+                self.FAST_PATH_RETRIEVAL_LIMIT,
+                self.FAST_PATH_RETRIEVAL_LIMIT,
+                self.TAG_VECTOR_RETRIEVAL_LIMIT,
+                positive_tags,
+                active_beta,
+                recall_tags_override,
             )
             if l2_recall:
                 recall_tags = list(set(recall_tags + l2_recall))

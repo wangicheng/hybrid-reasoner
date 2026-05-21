@@ -43,15 +43,19 @@ function App() {
   const eventSourceRef = useRef(null);
   const targetStepRef = useRef(0);
   const pendingResultsRef = useRef([]);
+  const intervalActiveRef = useRef(false);
 
-  // Sync state with refs for the interval loop
-  useEffect(() => {
-    targetStepRef.current = targetStep;
-  }, [targetStep]);
+  // Helper: update targetStep state AND ref synchronously to avoid stale reads
+  const advanceTargetStep = (step) => {
+    targetStepRef.current = step;
+    setTargetStep(step);
+  };
 
-  useEffect(() => {
-    pendingResultsRef.current = pendingResults;
-  }, [pendingResults]);
+  // Helper: update pendingResults state AND ref synchronously
+  const updatePendingResults = (results) => {
+    pendingResultsRef.current = results;
+    setPendingResults(results);
+  };
 
   // Clean up streaming connection when component unmounts
   useEffect(() => {
@@ -63,14 +67,22 @@ function App() {
   }, []);
 
   // Progressive smooth transition logic for pipeline steps
+  // Uses a ref flag instead of searchState dependency to avoid interval restarts
   useEffect(() => {
-    if (searchState === 'idle') return;
-
     const interval = setInterval(() => {
+      if (!intervalActiveRef.current) return;
+
       setPipelineStep(prev => {
-        if (prev < targetStepRef.current) {
+        const target = targetStepRef.current;
+        if (prev < target) {
           const next = prev + 1;
-          if (next === 7 && pendingResultsRef.current.length > 0) {
+          if (next === 4 && target >= 5) {
+            // Smoothly and quickly transition to step 5 (150ms visual flash of the merge node)
+            setTimeout(() => {
+              setPipelineStep(p => p === 4 ? 5 : p);
+            }, 150);
+          }
+          if (next === 7) {
             setResults(pendingResultsRef.current);
             setSearchState('results');
           }
@@ -81,7 +93,7 @@ function App() {
     }, 600);
 
     return () => clearInterval(interval);
-  }, [searchState]);
+  }, []); // Empty deps: interval runs forever, activation controlled by ref
 
   const handleSearch = (val) => {
     if (!val) return;
@@ -93,13 +105,12 @@ function App() {
 
     setSearchState('fetching');
     setResults([]);
-    setPendingResults([]);
-    targetStepRef.current = 2;
-    pendingResultsRef.current = [];
+    updatePendingResults([]);
     setEngineData({ query: val });
     setPipelineStep(1);
-    setTargetStep(2); // Start parsing phase transition immediately
+    advanceTargetStep(2); // Start parsing phase transition immediately
     setTags([]);
+    intervalActiveRef.current = true;
 
     const url = `http://127.0.0.1:8000/api/search/stream?query=${encodeURIComponent(val)}&model_id=gemma-4-31b-it`;
     const eventSource = new EventSource(url);
@@ -107,6 +118,7 @@ function App() {
 
     eventSource.addEventListener('semantic_understanding', (e) => {
       const data = JSON.parse(e.data);
+      console.log(">>> [SSE Event] semantic_understanding:", data);
       setEngineData(prev => ({
         ...prev,
         search_terms: data.semantic_query_text,
@@ -124,11 +136,12 @@ function App() {
           }))
         ]
       }));
-      setTargetStep(3); // Progress to step 3 (Structure & Tag branch)
+      advanceTargetStep(3); // Progress to step 3 (Structure & Tag branch)
     });
 
     eventSource.addEventListener('planner', (e) => {
       const data = JSON.parse(e.data);
+      console.log(">>> [SSE Event] planner:", data);
       setSearchState('typing');
       setTags(data.positive_terms);
       setEngineData(prev => ({
@@ -141,72 +154,95 @@ function App() {
           fuzzy_negative_terms: data.fuzzy_negative_terms || []
         }
       }));
-      setTargetStep(4); // Trigger progressive steps: 2 -> 3 (Structure/Tag) -> 4 (Merge)
+      advanceTargetStep(5); // Progress directly to step 5 (Retrieval) as Requirement Merging completes instantly
     });
 
     eventSource.addEventListener('retrieval', (e) => {
       const data = JSON.parse(e.data);
+      console.log(">>> [SSE Event] retrieval:", data);
       setEngineData(prev => ({
         ...prev,
-        results: data.results || []
+        candidate_count: data.candidate_count,
+        recall_tags: data.recall_tags
       }));
-      setTargetStep(5); // Progress to step 5 (Retrieval)
+      advanceTargetStep(5); // Progress to step 5 (Retrieval)
     });
 
     eventSource.addEventListener('post_filter', (e) => {
       const data = JSON.parse(e.data);
+      console.log(">>> [SSE Event] post_filter:", data);
       setEngineData(prev => ({
         ...prev,
-        results: data.results || prev?.results || []
+        filtered_count: data.filtered_count
       }));
-      setTargetStep(6); // Enter reranker phase (LLM Rerank)
+      advanceTargetStep(6); // Enter reranker phase (LLM Rerank)
     });
 
     eventSource.addEventListener('rerank', (e) => {
+      const data = JSON.parse(e.data);
+      console.log(">>> [SSE Event] rerank:", data);
       setEngineData(prev => ({
         ...prev,
-        top_results: e.data.top_results
+        top_results: data.top_results
       }));
-      setTargetStep(6); // Progress to step 6 (Rerank)
+      advanceTargetStep(6); // Progress to step 6 (Rerank)
     });
 
     eventSource.addEventListener('complete', (e) => {
+      const data = JSON.parse(e.data);
+      console.log(">>> [SSE Event] complete:", data);
       // Close EventSource immediately to avoid connection reset/drop errors from server teardown
       eventSource.close();
       if (eventSourceRef.current === eventSource) {
         eventSourceRef.current = null;
       }
       
-      const data = JSON.parse(e.data);
-      setEngineData(data);
+      setEngineData(prev => ({
+        ...prev,
+        ...data
+      }));
       
       const realResults = (data.results || []).map((r) => {
-        const coverUrl = r.item?.cover ? `https://czbooks.net${r.item.cover}` : "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=400&auto=format&fit=crop";
+        const coverUrl = (() => {
+          const rawCover = r.item?.cover_url || r.item?.cover;
+          if (!rawCover) {
+            return "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=400&auto=format&fit=crop";
+          }
+          if (rawCover.startsWith("http")) {
+            return rawCover;
+          }
+          return `https://czbooks.net${rawCover}`;
+        })();
         return {
           id: r.item?.id || Math.random(),
           title: r.item?.name || "未知書名",
           cover: coverUrl,
           score: Math.round(r.score * 100),
-          tags: (r.item?.tags || []).slice(0, 4)
+          vector_score: r.vector_score,
+          bm25_score: r.bm25_score,
+          tag_vector_score: r.tag_vector_score,
+          tags: r.item?.tags || [],
+          author: r.item?.author || "未知作者",
+          status: r.item?.publish_status || r.item?.status || "未知狀態",
+          words_total: r.item?.words_total || 0,
+          intro: r.item?.intro || "暫無小說簡介。",
+          explanation: r.explanation || ""
         };
       });
 
-      setPendingResults(realResults);
-      setResults(realResults);
-      setPipelineStep(7);
-      setTargetStep(7); // Trigger final step 7 (Holographic Results presentation)
-      setSearchState('results');
+      updatePendingResults(realResults);
+      advanceTargetStep(7); // Trigger final step 7 (Holographic Results presentation)
     });
 
     eventSource.onerror = (err) => {
       console.error("EventSource failed:", err);
-      if (eventSource.readyState !== EventSource.CONNECTING) {
-        // Fatal disconnect (readyState === EventSource.CLOSED)
-        eventSource.close();
-        if (eventSourceRef.current === eventSource) {
-          eventSourceRef.current = null;
-        }
+      // 伺服器斷線或連線錯誤時，直接關閉 EventSource，不進行自動重連
+      eventSource.close();
+      if (eventSourceRef.current === eventSource) {
+        eventSourceRef.current = null;
       }
+      intervalActiveRef.current = false;
+      setSearchState('idle');
     };
   };
 
