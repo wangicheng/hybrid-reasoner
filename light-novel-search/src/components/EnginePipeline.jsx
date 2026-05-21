@@ -3,6 +3,26 @@ import { cn } from "../lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import Tilt from "react-parallax-tilt";
 
+const dedupeDisplayTerms = (terms = [], excludeTerms = []) => {
+  const seen = new Set(
+    excludeTerms
+      .map(term => String(term || "").replace(/\s+/g, "").trim())
+      .filter(Boolean)
+  );
+
+  return terms.reduce((acc, term) => {
+    const value = String(term || "").trim();
+    const normalised = value.replace(/\s+/g, "");
+    if (!normalised || seen.has(normalised)) {
+      return acc;
+    }
+
+    seen.add(normalised);
+    acc.push(value);
+    return acc;
+  }, []);
+};
+
 export function EnginePipeline({ currentStep, engineData, results }) {
   const [selectedStep, setSelectedStep] = useState(1);
   const [selectedBranch, setSelectedBranch] = useState("semantic"); // "semantic" | "structure" | "tag"
@@ -61,6 +81,18 @@ export function EnginePipeline({ currentStep, engineData, results }) {
   const getDetails = (stepId) => {
     if (!engineData) return { input: "等待引擎回應中...", output: "處理中..." };
 
+    const semanticConcepts = dedupeDisplayTerms(
+      engineData.parsed_criteria
+        ?.filter(c => c.name === "semantic_similarity")
+        ?.map(c => c.parameters?.query_text) || [],
+      [engineData.search_terms]
+    );
+    const positiveTerms = dedupeDisplayTerms(engineData.tag_intent?.positive_terms || []);
+    const negativeTerms = dedupeDisplayTerms(engineData.tag_intent?.negative_terms || []);
+    const fuzzyPositiveTerms = dedupeDisplayTerms(engineData.tag_intent?.fuzzy_positive_terms || []);
+    const fuzzyNegativeTerms = dedupeDisplayTerms(engineData.tag_intent?.fuzzy_negative_terms || []);
+    const displaySearchTerms = dedupeDisplayTerms(String(engineData.search_terms || "").split(/\s+/g)).join(" ");
+
     // 💡 前置擋板：如果當前引擎還沒執行到該步驟，顯示等待中的專業提示，防止點擊時顯示「0筆」等不準確資訊
     if (currentStep < stepId) {
       switch (stepId) {
@@ -106,14 +138,13 @@ export function EnginePipeline({ currentStep, engineData, results }) {
         return {
           input: `> 語意理解分支任務 (Semantic Understanding Pass)：\n使用大型語言模型分析查詢的核心語意，提取高階概念與意圖，並排除非關鍵的修飾詞，生成精煉的檢索語意文本。\n\n> 任務狀態：已完成\n> 輸入查詢：\n「${engineData.query || ""}」`,
           output: JSON.stringify({
-            semantic_query_text: engineData.search_terms || "",
-            positive_concepts: engineData.parsed_criteria
-              ?.filter(c => c.name === "semantic_similarity" && !c.is_negative)
-              ?.map(c => c.parameters?.query_text)
-              ?.filter(t => t !== engineData.search_terms) || [],
-            negative_concepts: engineData.parsed_criteria
-              ?.filter(c => c.name === "semantic_similarity" && c.is_negative)
-              ?.map(c => c.parameters?.query_text) || []
+            semantic_query_text: displaySearchTerms || engineData.search_terms || "",
+            positive_concepts: semanticConcepts,
+            negative_concepts: dedupeDisplayTerms(
+              engineData.parsed_criteria
+                ?.filter(c => c.name === "semantic_similarity" && c.is_negative)
+                ?.map(c => c.parameters?.query_text) || []
+            )
           }, null, 2)
         };
       case 3:
@@ -125,7 +156,7 @@ export function EnginePipeline({ currentStep, engineData, results }) {
         }
         if (selectedBranch === "structure") {
           return {
-            input: `> 結構過濾分支任務 (Structured Constraints Pass)：\n分析查詢中的硬性約束條件（完結狀態、作者名稱、字數區間等），將其轉化為精確的資料庫屬性過濾欄位。\n\n> 任務狀態：已完成\n> 輸入資料：\n- 原始查詢：\n  「${engineData.query}」\n- 語意理解輸出 (引導輸入)：\n  * 精煉語意："${engineData.search_terms || "讀取中"}"\n  * 正向特徵概念：[${(engineData.parsed_criteria?.filter(c => c.name === "semantic_similarity" && !c.is_negative)?.map(c => c.parameters?.query_text)?.filter(t => t !== engineData.search_terms) || []).join(", ")}]`,
+            input: `> 結構過濾分支任務 (Structured Constraints Pass)：\n分析查詢中的硬性約束條件（完結狀態、作者名稱、字數區間等），將其轉化為精確的資料庫屬性過濾欄位。\n\n> 任務狀態：已完成\n> 輸入資料：\n- 原始查詢：\n  「${engineData.query}」\n- 語意理解輸出 (引導輸入)：\n  * 精煉語意："${engineData.search_terms || "讀取中"}"\n  * 正向特徵概念：[${semanticConcepts.join(", ")}]`,
             output: JSON.stringify({
               status_filter: engineData.parsed_criteria?.find(c => c.name === "status_check")?.parameters?.target_status || "無限制",
               author_filter: engineData.parsed_criteria?.find(c => c.name === "author_match")?.parameters?.author_name || "無限制",
@@ -141,12 +172,12 @@ export function EnginePipeline({ currentStep, engineData, results }) {
           };
         } else {
           return {
-            input: `> 標籤投影分支任務 (Tag Projection Pass)：\n將查詢中提及的主題特徵、流派、元素等，映射至標準 Whitelist 小說標籤庫，並決定是否以 Exact 或 Fuzzy 進行匹配。\n\n> 任務狀態：已完成\n> 輸入資料：\n- 原始查詢：\n  「${engineData.query}」\n- 語意理解輸出 (引導輸入)：\n  * 精煉語意："${engineData.search_terms || "讀取中"}"\n  * 正向特徵概念：[${(engineData.parsed_criteria?.filter(c => c.name === "semantic_similarity" && !c.is_negative)?.map(c => c.parameters?.query_text)?.filter(t => t !== engineData.search_terms) || []).join(", ")}]`,
+            input: `> 標籤投影分支任務 (Tag Projection Pass)：\n將查詢中提及的主題特徵、流派、元素等，映射至標準 Whitelist 小說標籤庫，並決定是否以 Exact 或 Fuzzy 進行匹配。\n\n> 任務狀態：已完成\n> 輸入資料：\n- 原始查詢：\n  「${engineData.query}」\n- 語意理解輸出 (引導輸入)：\n  * 精煉語意："${engineData.search_terms || "讀取中"}"\n  * 正向特徵概念：[${semanticConcepts.join(", ")}]`,
             output: JSON.stringify({
-              positive_terms: engineData.tag_intent?.positive_terms || [],
-              negative_terms: engineData.tag_intent?.negative_terms || [],
-              fuzzy_positive_terms: engineData.tag_intent?.fuzzy_positive_terms || [],
-              fuzzy_negative_terms: engineData.tag_intent?.fuzzy_negative_terms || [],
+              positive_terms: positiveTerms,
+              negative_terms: negativeTerms,
+              fuzzy_positive_terms: fuzzyPositiveTerms,
+              fuzzy_negative_terms: fuzzyNegativeTerms,
               tag_mappings: engineData.tag_mapping?.map(m => ({
                 term: m.term,
                 is_exact: m.is_exact,
@@ -168,15 +199,15 @@ export function EnginePipeline({ currentStep, engineData, results }) {
         return {
           input: `> 準備彙整下列分支結果：\n1. 語意脈絡\n2. 結構化限制\n3. 目標標籤集合`,
           output: `> 統一檢索需求 (Merged Retrieval Query)：\n` + JSON.stringify({
-            search_terms: engineData.search_terms,
+            search_terms: displaySearchTerms || engineData.search_terms,
             generated_keywords: engineData.generated_keywords || [],
-            tags: engineData.tag_intent?.positive_terms || [],
-            negative_tags: engineData.tag_intent?.negative_terms || []
+            tags: positiveTerms,
+            negative_tags: negativeTerms
           }, null, 2)
         };
       case 5:
         return {
-          input: `> 雙路徑檢索與規則過濾 (Retrieval & Filtering):\n[ 語意嵌入轉換: "${engineData.search_terms || "語意載入中"}" ]\n> 強制過濾標籤: [${(engineData.tag_intent?.positive_terms || []).join(", ")}]\n> 排除過濾標籤: [${(engineData.tag_intent?.negative_terms || []).join(", ")}]`,
+          input: `> 雙路徑檢索與規則過濾 (Retrieval & Filtering):\n[ 語意嵌入轉換: "${displaySearchTerms || "語意載入中"}" ]\n> 強制過濾標籤: [${positiveTerms.join(", ")}]\n> 排除過濾標籤: [${negativeTerms.join(", ")}]`,
           output: `> 檢索結果：\n已從 Qdrant 向量資料庫與 SQLite 召回 ${engineData.candidate_count || 0} 筆原始候選作品。` +
             (engineData.filtered_count !== undefined
               ? `\n\n> 評分融合與規則過濾完成：\n經雙軌融合與硬過濾判定，篩選出 ${engineData.filtered_count} 筆符合條件作品準備進行重排。`
