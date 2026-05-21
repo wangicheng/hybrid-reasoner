@@ -485,7 +485,7 @@ export function EnginePipeline({ currentStep, engineData, results }) {
       )}
 
       {/* Details Panel */}
-      <div className={cn("mt-8 max-w-5xl mx-auto relative transition-all duration-500 pb-12", selectedStep === 7 ? "min-h-[380px] h-auto" : "h-48")}>
+      <div className={cn("mt-8 max-w-5xl mx-auto relative transition-all duration-500 pb-12", [6, 7].includes(selectedStep) ? "min-h-[380px] h-auto" : "h-48")}>
         <AnimatePresence mode="wait">
           <motion.div
             key={selectedStep + "-" + selectedBranch}
@@ -493,7 +493,7 @@ export function EnginePipeline({ currentStep, engineData, results }) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.3 }}
-            className={cn("w-full", selectedStep === 7 ? "relative" : "absolute inset-0")}
+            className={cn("w-full", [6, 7].includes(selectedStep) ? "relative" : "absolute inset-0")}
           >
             {steps.map(s => {
               if (s.id !== selectedStep) return null;
@@ -596,6 +596,55 @@ export function EnginePipeline({ currentStep, engineData, results }) {
                         &gt; 正在進行最後檢索與重排序，請稍候...
                       </div>
                     )}
+                  </div>
+                );
+              }
+
+              if (s.id === 6) {
+                const details = getDetails(s.id);
+                return (
+                  <div key={s.id} className="flex flex-col h-full space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 shrink-0">
+                      <div className="glass-strong rounded-lg p-5 border-l-4 border-l-cyan-500 flex flex-col bg-zinc-900/60 shadow-lg">
+                        <h5 className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-2">{s.title} - Input / Task</h5>
+                        <pre className="font-mono text-[11px] text-zinc-300 whitespace-pre-wrap overflow-auto h-24 custom-scrollbar leading-relaxed">{details.input}</pre>
+                      </div>
+                      <div className="glass-strong rounded-lg p-5 border-l-4 border-l-purple-500 flex flex-col bg-zinc-900/60 shadow-lg">
+                        <h5 className="text-xs font-bold text-purple-400 uppercase tracking-wider mb-2">{s.desc} - Output / Result</h5>
+                        <pre className="font-mono text-[11px] text-zinc-300 whitespace-pre-wrap overflow-auto h-24 custom-scrollbar leading-relaxed">{details.output}</pre>
+                      </div>
+                    </div>
+                    {/* Pre-Rerank Candidates Grid */}
+                    <div className="flex-1 overflow-auto custom-scrollbar pt-2 pb-4 px-2">
+                      <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 font-mono flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-yellow-500/70 animate-ping"></span>
+                        正在等待大語言模型進行交叉重排序... (準備排序的候選池)
+                      </h4>
+                      {engineData.pre_rerank_candidates && engineData.pre_rerank_candidates.length > 0 ? (
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                          {engineData.pre_rerank_candidates.map((book, idx) => (
+                            <div 
+                              key={book.id || idx}
+                              className="relative overflow-hidden rounded-xl border border-zinc-700/50 bg-zinc-900 overflow-hidden group grayscale opacity-70 animate-pulse aspect-[3/4]"
+                            >
+                              <img src={book.cover} alt={book.title || "未知"} className="w-full h-full object-cover opacity-40 bg-zinc-800" />
+                              <div className="absolute inset-0 border-2 border-transparent transition-all duration-1000 group-hover:border-yellow-500/30"></div>
+                              {/* Scanner Line */}
+                              <div className="absolute left-0 right-0 h-1 bg-yellow-500/50 shadow-[0_0_8px_rgba(234,179,8,0.8)] filter blur-[1px] animate-scan"></div>
+                              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black via-black/80 to-transparent p-2 pt-6">
+                                <p className="text-[10px] text-zinc-300 font-bold line-clamp-2 leading-tight">
+                                  {book.title}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center text-zinc-600 font-mono text-sm py-8 border border-dashed border-zinc-800 rounded-lg">
+                          尚未收到候選池資料...
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               }

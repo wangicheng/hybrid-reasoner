@@ -13,6 +13,15 @@
   --color-glass-border: rgba(255, 255, 255, 0.1);
   --font-family-display: "Outfit", "Inter", system-ui, sans-serif;
   --font-family-mono: "JetBrains Mono", "Fira Code", monospace;
+
+  --animate-scan: scan 2s ease-in-out infinite;
+
+  @keyframes scan {
+    0% { top: 0%; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+  }
 }
 
 @layer base {

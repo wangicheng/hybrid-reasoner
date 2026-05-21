@@ -1748,7 +1748,14 @@ class HybridEngine:
         if progress_callback:
             await asyncio.sleep(0.8)  # Cinematic pacing: allow UI to render Rule Filter & Scoring Fusion stage smoothly
             await progress_callback("post_filter", {
-                "filtered_count": len(scored_items)
+                "filtered_count": len(scored_items),
+                "pre_rerank_candidates": [
+                    {
+                        "id": r["item"].get("id", "none"),
+                        "name": r["item"].get("name", "未知"),
+                        "cover": r["item"].get("cover_url") or r["item"].get("cover")
+                    } for r in scored_items[:40]  # 配合 Rerank 數量顯示前40名候選
+                ]
             })
 
         if not scored_items:

@@ -171,9 +171,29 @@ function App() {
     eventSource.addEventListener('post_filter', (e) => {
       const data = JSON.parse(e.data);
       console.log(">>> [SSE Event] post_filter:", data);
+      
+      const preRerankCandidates = (data.pre_rerank_candidates || []).map((r) => {
+        const coverUrl = (() => {
+          const rawCover = r.cover;
+          if (!rawCover) {
+            return "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=400&auto=format&fit=crop";
+          }
+          if (rawCover.startsWith("http")) {
+            return rawCover;
+          }
+          return `https://czbooks.net${rawCover}`;
+        })();
+        return {
+          id: r.id,
+          title: r.name,
+          cover: coverUrl,
+        };
+      });
+
       setEngineData(prev => ({
         ...prev,
-        filtered_count: data.filtered_count
+        filtered_count: data.filtered_count,
+        pre_rerank_candidates: preRerankCandidates
       }));
       advanceTargetStep(6); // Enter reranker phase (LLM Rerank)
     });
