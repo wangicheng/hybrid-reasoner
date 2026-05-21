@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # Reranker (PermSC Listwise Reranking)
     RERANK_ENABLED: bool = True
     RERANK_MODEL_ID: str = "gemma-4-31b-it"
-    RERANK_CANDIDATE_LIMIT: int = 100
+    RERANK_CANDIDATE_LIMIT: int = 40
     RERANK_PERMUTATIONS: int = 5
     RERANK_MAX_ATTEMPTS_PER_PERM: int = 5
     RERANK_SHUFFLE_SEED: Optional[int] = 42
