@@ -5,6 +5,7 @@ import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
+from collections import defaultdict
 
 from src.eval.paths import resolve_annotation_path
 from src.eval.pool_data import load_queries, load_runs
@@ -308,7 +309,7 @@ def evaluate_ir(
     penalty_alpha_tag: float = 0.4,
     penalty_alpha_other: float = 0.5,
     rbv_persistence: float = 0.8,
-) -> Dict[str, EngineMetrics]:
+) -> Tuple[Dict[str, EngineMetrics], Dict[str, List[Dict[str, Any]]]]:
     k_values = sorted(set(k for k in ks if k > 0))
     if not k_values:
         raise ValueError("At least one positive K value is required.")
@@ -335,6 +336,9 @@ def evaluate_ir(
         if str(q.get("id", "")).strip()
     }
     max_k = max(k_values)
+
+    # New: Accumulator for per-query metrics
+    per_query_metrics_by_engine: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
     results_by_engine: Dict[str, EngineMetrics] = {}
     for engine_name, run_items in runs.items():
@@ -383,42 +387,56 @@ def evaluate_ir(
                     violation_breakdown_counts[reason] = violation_breakdown_counts.get(reason, 0) + 1
 
             for k in k_values:
-                p_acc[k].append(_precision_at_k(binary, k))
-                ap_acc[k].append(
-                    _ap_at_k(
-                        binary_relevance=binary,
-                        total_relevant=total_relevant,
-                        k=k,
-                        denominator_mode=denominator_mode,
-                    )
+                precision_k = _precision_at_k(binary, k)
+                ap_k = _ap_at_k(
+                    binary_relevance=binary,
+                    total_relevant=total_relevant,
+                    k=k,
+                    denominator_mode=denominator_mode,
                 )
-                recall_acc[k].append(_recall_at_k(binary, total_relevant, k))
-
+                recall_k = _recall_at_k(binary, total_relevant, k)
+                
                 top_k_violations = violation_flags_by_rank[:k]
                 violation_ratio = sum(top_k_violations) / float(k) if k > 0 else 0.0
+                
+                ndcg_k = _ndcg_at_k(
+                    graded_by_rank,
+                    list(query_scores.values()),
+                    k
+                )
+                pndcg_k = _penalized_ndcg_at_k(
+                    graded_by_rank, 
+                    violation_types_by_rank, 
+                    list(query_scores.values()),
+                    k, 
+                    alpha_map=alpha_map
+                )
+                rbv_k = _rbv_at_k(violation_flags_by_rank, k, persistence=rbv_persistence)
+                clean_k = 1.0 - violation_ratio
+                rc_f1_k = _rc_f1_at_k(precision_k, clean_k)
+
+                p_acc[k].append(precision_k)
+                ap_acc[k].append(ap_k)
+                recall_acc[k].append(recall_k)
                 violation_acc[k].append(violation_ratio)
+                ndcg_acc[k].append(ndcg_k)
+                pndcg_acc[k].append(pndcg_k)
+                rbv_acc[k].append(rbv_k)
 
-                # Advanced metrics per query
-                ndcg_acc[k].append(
-                    _ndcg_at_k(
-                        graded_by_rank,
-                        list(query_scores.values()),
-                        k
-                    )
-                )
-                pndcg_acc[k].append(
-                    _penalized_ndcg_at_k(
-                        graded_by_rank, 
-                        violation_types_by_rank, 
-                        list(query_scores.values()),
-                        k, 
-                        alpha_map=alpha_map
-                    )
-                )
-                rbv_acc[k].append(
-                    _rbv_at_k(violation_flags_by_rank, k, persistence=rbv_persistence)
-                )
+                # New: Store per-query, per-k metrics
+                current_query_metrics: Dict[str, Any] = {"query_id": query_id}
 
+                current_query_metrics[f"precision_at_{k}"] = precision_k
+                current_query_metrics[f"recall_at_{k}"] = recall_k
+                current_query_metrics[f"f1_at_{k}"] = _rc_f1_at_k(precision_k, 1.0) # F1 of just precision and recall
+                current_query_metrics[f"ndcg_at_{k}"] = ndcg_k
+                current_query_metrics[f"penalized_ndcg_at_{k}"] = pndcg_k
+                current_query_metrics[f"violation_rate_at_{k}"] = violation_ratio
+                current_query_metrics[f"rc_f1_at_{k}"] = rc_f1_k
+                current_query_metrics[f"rbv_at_{k}"] = rbv_k
+
+                per_query_metrics_by_engine[engine_name].append(current_query_metrics)
+        
         precision = {k: _safe_mean(vals) for k, vals in p_acc.items()}
         map_scores = {k: _safe_mean(vals) for k, vals in ap_acc.items()}
         recalls = {k: _safe_mean(vals) for k, vals in recall_acc.items()}
@@ -455,7 +473,7 @@ def evaluate_ir(
             rc_f1_at_k=rc_f1,
         )
 
-    return results_by_engine
+    return results_by_engine, per_query_metrics_by_engine
 
 
 def _format_pct(v: float) -> str:
@@ -690,9 +708,16 @@ def main() -> None:
         default=None,
         help="Optional file path to save metric report as JSON",
     )
+    # New argument
+    parser.add_argument(
+        "--output-per-query-json",
+        type=str,
+        default=None,
+        help="Optional file path to save per-query metrics as JSON for statistical analysis",
+    )
     args = parser.parse_args()
 
-    metrics_by_engine = evaluate_ir(
+    metrics_by_engine, per_query_metrics = evaluate_ir(
         experiment_dir=args.experiment_dir,
         annotations_dir=args.annotations_dir,
         queries_path=args.queries,
@@ -713,6 +738,14 @@ def main() -> None:
         with output_path.open("w", encoding="utf-8") as f:
             json.dump(_to_json_serializable(metrics_by_engine), f, ensure_ascii=False, indent=2)
         print(f"\nSaved JSON report to: {output_path}")
+
+    # New: Save per-query metrics if path is provided
+    if args.output_per_query_json:
+        output_path = Path(args.output_per_query_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(per_query_metrics, f, ensure_ascii=False, indent=2)
+        print(f"\nSaved per-query metrics to: {output_path}")
 
 
 if __name__ == "__main__":
